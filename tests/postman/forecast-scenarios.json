@@ -1,0 +1,38 @@
+{
+  "info": {
+    "name": "Forecast Scenarios",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Forecast Scenarios - Standard Tier",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{jwt}}"},
+          {"key": "Idempotency-Key", "value": "idem_{{timestamp}}"}
+        ],
+        "url": {"raw": "{{kernel}}/forecast/scenarios", "host": ["{{kernel}}"], "path": ["forecast", "scenarios"]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"tenant_std\",\n  \"tier\": \"standard\",\n  \"skus\": [\"SKU1\", \"SKU2\"],\n  \"horizon\": 4,\n  \"num_scenarios\": 40,\n  \"seed\": 2025\n}"
+        }
+      }
+    },
+    {
+      "name": "Forecast Scenarios - Pro Tier",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{jwt}}"},
+          {"key": "Idempotency-Key", "value": "idem_{{timestamp}}"}
+        ],
+        "url": {"raw": "{{kernel}}/forecast/scenarios", "host": ["{{kernel}}"], "path": ["forecast", "scenarios"]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"tenant_pro\",\n  \"tier\": \"pro\",\n  \"skus\": [\"SKU-A\", \"SKU-B\", \"SKU-C\"],\n  \"horizon\": 6,\n  \"num_scenarios\": 80,\n  \"model\": \"auto\",\n  \"seed\": 8080\n}"
+        }
+      }
+    }
+  ]
+}

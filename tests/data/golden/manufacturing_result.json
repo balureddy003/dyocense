@@ -1,0 +1,10 @@
+{
+  "kpis": {
+    "total_cost": 3715.362,
+    "service_level": 1.0,
+    "co2": 183.56
+  },
+  "binding_constraints": ["budget_month", "capacity_relaxed"],
+  "worst_case_service": 0.8922,
+  "setup_runs": 5
+}

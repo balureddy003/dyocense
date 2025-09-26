@@ -1,0 +1,65 @@
+{
+  "info": {
+    "name": "Optimizer Solve",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Solve Base Model",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{jwt}}"},
+          {"key": "Idempotency-Key", "value": "idem_{{timestamp}}"}
+        ],
+        "url": {
+          "raw": "{{kernel}}/optimizer/solve",
+          "host": ["{{kernel}}"],
+          "path": ["optimizer", "solve"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"tenant_std\",\n  \"tier\": \"standard\",\n  \"optimodel\": {{optimodel_payload}},\n  \"seed\": 3030\n}"
+        }
+      }
+    },
+    {
+      "name": "Solve Reduced + Stress",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{jwt}}"},
+          {"key": "Idempotency-Key", "value": "idem_{{timestamp}}"}
+        ],
+        "url": {
+          "raw": "{{kernel}}/optimizer/solve",
+          "host": ["{{kernel}}"],
+          "path": ["optimizer", "solve"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"tenant_pro\",\n  \"tier\": \"pro\",\n  \"optimodel\": {{optimodel_payload_dro}},\n  \"scenario_reduction\": {\"k\": 20},\n  \"lns_iterations\": {\"iterations\": 3}\n}"
+        }
+      }
+    },
+    {
+      "name": "Delta Solve",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{jwt}}"},
+          {"key": "Idempotency-Key", "value": "idem_{{timestamp}}"}
+        ],
+        "url": {
+          "raw": "{{kernel}}/optimizer/solve",
+          "host": ["{{kernel}}"],
+          "path": ["optimizer", "solve"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"tenant_pro\",\n  \"tier\": \"pro\",\n  \"optimodel\": {{optimodel_payload_with_hint}},\n  \"warm_start\": {{warm_start_payload}}\n}"
+        }
+      }
+    }
+  ]
+}

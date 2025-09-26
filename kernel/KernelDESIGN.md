@@ -590,3 +590,256 @@ CREATE TABLE forecast_cache (
 ## 18) Security Notes
 - Every endpoint enforces `tenant_id` from JWT; body `tenant_id` must match.
 - Evidence snapshots redact PII; store only hashes and pointers for sensitive artifacts.
+
+---
+
+## 19) Functional Use Cases (Cross‑Industry) — With Acceptance Criteria & API Examples
+
+The kernel use cases below apply across retail, manufacturing, healthcare, logistics, hospitality, and services. Each includes **Acceptance Criteria (AC)** and **sample API calls** bound to our multi‑tenant contracts.
+
+### UC‑KER‑001 — Goal → Plan (End‑to‑End)
+**Actors:** User, Plan API, OptiGuide, Forecast, Optimizer, Evidence.  
+**Preconditions:** `tenant_id` valid; SKU/supplier/price data present; policies loaded.  
+**Flow:** GoalDSL → `/forecast/scenarios` → `/optiguide/compile` → `/optimizer/solve` → `/evidence/write` → return plan.
+
+**AC:**
+- AC‑1: Response includes `steps[]`, `kpis`, `evidence_ref`, `status ∈ {OPTIMAL, FEASIBLE}` within configured `time_limit_sec`.
+- AC‑2: Replaying with same inputs + `seed` yields same KPIs ± solver tolerance.
+- AC‑3: Binding constraints reported when `status ≠ INFEASIBLE`.
+
+**Sample (curl)**
+```bash
+curl -X POST $KERNEL/forecast/scenarios \
+  -H 'Authorization: Bearer $JWT' -H 'Idempotency-Key: idem_123' \
+  -d '{"tenant_id":"t1","tier":"pro","skus":["MILK-1L"],"horizon":4,"num_scenarios":50}'
+
+curl -X POST $KERNEL/optiguide/compile \
+  -H 'Authorization: Bearer $JWT' -H 'Idempotency-Key: idem_124' \
+  -d '{"tenant_id":"t1","tier":"pro","goal_dsl":{...},"context":{...},"scenarios":{...}}'
+
+curl -X POST $KERNEL/optimizer/solve \
+  -H 'Authorization: Bearer $JWT' -H 'Idempotency-Key: idem_125' \
+  -d '{"tenant_id":"t1","tier":"pro","optimodel":{...},"time_limit_sec":20,"mip_gap":0.02}'
+
+curl -X POST $KERNEL/evidence/write \
+  -H 'Authorization: Bearer $JWT' -H 'Idempotency-Key: idem_126' \
+  -d '{"tenant_id":"t1","plan_id":"p123","solution":{...}}'
+```
+
+---
+
+### UC‑KER‑002 — Generate Forecast Scenarios
+**Actors:** OptiGuide, Forecast.  
+**AC:**
+- AC‑1: For each SKU, returns `num_scenarios` within quota; includes `stats.mean, stats.sigma, stats.p95`.
+- AC‑2: With insufficient history, falls back to naive model and widens σ; logs `model=fallback`.
+- AC‑3: Cache hit ratio ≥ target when inputs unchanged (by hash).
+
+**API:** `/forecast/scenarios` (POST) — see Section 14.
+
+---
+
+### UC‑KER‑003 — Compile GoalDSL → OptiModel (with Policies & Robustness)
+**Actors:** OptiGuide, OPA.  
+**AC:**
+- AC‑1: Rejects models violating policies with remediation hints.  
+- AC‑2: Supports `robust.mode ∈ {p95, dro_wasserstein, conformal}`.  
+- AC‑3: Emits `ExplainabilityHints.track[]` for `budget, moq, balance, lead_time` by default.
+
+**API:** `/optiguide/compile` (POST) — see Section 14.
+
+---
+
+### UC‑KER‑004 — Solve Optimization (Reduction + Stress + LNS)
+**Actors:** Optimizer.  
+**AC:**
+- AC‑1: If `reduction.k` set, uses scenario reduction and reports reweighting.
+- AC‑2: Returns `status`, `gap ≤ mip_gap`, KPIs, binding constraints.
+- AC‑3: When `lns.iterations>0`, KPI improves ≥ threshold or early‑stop triggers.
+- AC‑4: Stress test KPIs reported when full scenario set provided.
+
+**API:** `/optimizer/solve` (POST).
+
+---
+
+### UC‑KER‑005 — Persist Evidence & Provenance
+**Actors:** Evidence Graph.  
+**AC:**
+- AC‑1: Returns `evidence_ref` and `snapshot_hash` within SLA; write‑behind queue drains < threshold.
+- AC‑2: Graph contains nodes: Goal, Constraint, Scenario, SolverRun, Plan, Step, KPI.
+- AC‑3: If Evidence unavailable, request queued and plan marked `evidence_pending=true`.
+
+**API:** `/evidence/write` (POST).
+
+---
+
+### UC‑KER‑006 — Multi‑Plan Variants (Cost / Balanced / Service)
+**Actors:** Plan API, OptiGuide, Optimizer.  
+**AC:**
+- AC‑1: Produces three variants with objective mixes; deltas shown for cost/service/CO₂.
+- AC‑2: Evidence links each variant to objective weights/ε‑constraints.
+
+**Implementation Hint:** run `/optiguide/compile` and `/optimizer/solve` with different `objective_mode`.
+
+---
+
+### UC‑KER‑007 — What‑If / Delta‑Solve
+**Actors:** User, Plan API, Optimizer.  
+**AC:**
+- AC‑1: Accepts param diffs (budget, MOQ, supplier set); re‑solves with warm start.
+- AC‑2: Returns KPI deltas vs baseline; solve time ≤ `time_limit_delta` when change scope small.
+
+**API:** `/optimizer/solve` with `warm_start` and delta config.
+
+---
+
+### UC‑KER‑008 — Infeasibility Diagnosis & Auto‑Relax
+**Actors:** Optimizer, OptiGuide, Evidence.  
+**AC:**
+- AC‑1: Returns minimal relax set (elasticized constraints); plan becomes FEASIBLE after relax.
+- AC‑2: Evidence records `RELAXED_BY` edges and remediation suggestions.
+
+**API:** `/optimizer/solve` (response includes `diagnostics.relaxations`).
+
+---
+
+### UC‑KER‑009 — Multi‑Tenant Scheduling & Budgets
+**Actors:** Queue Manager, Kernel workers, LLM Router.  
+**AC:**
+- AC‑1: WFQ ensures no tenant exceeds `max_parallel_solves`; rate limits enforced.
+- AC‑2: Budgets (`solver_sec`, `gpu_sec`, `llm_tokens`) decremented; 402 on exhaustion with guidance.
+- AC‑3: Per‑tenant dashboards show latency, usage vs budget.
+
+**APIs:** Internal to queue/router; kernel APIs carry `tenant_id`, `tier`, `Idempotency-Key`.
+
+---
+
+### UC‑KER‑010 — Evidence Query & Explainability
+**Actors:** Dashboard, Evidence.  
+**AC:**
+- AC‑1: “Why Supplier X?” query returns path from Step → Constraint/Objective → DataSource.
+- AC‑2: Counterfactuals present: minimal changes to select an alternative supplier.
+
+**Query Template:** See Evidence section (new edges/nodes for RiskKPI/FrontierPoint).
+
+---
+
+### UC‑KER‑011 — Feedback → Learning
+**Actors:** Feedback API, Forecast, Evidence.  
+**AC:**
+- AC‑1: Actuals validate against Great Expectations; anomalies quarantined.
+- AC‑2: Forecast residuals updated; supplier reliability score revised.
+- AC‑3: Next run reflects updated priors; Evidence captures learning event.
+
+---
+
+## 20) Vertical Adaptation Patterns
+
+| Domain | Additional Constraints | Objective Tweaks | Special Forecasting |
+|---|---|---|---|
+| Retail/Grocery | Shelf life, promo lifts | Waste penalty, price elasticity | Promotion calendar, holiday effects |
+| Manufacturing | BOM, capacity, changeovers | Setup/min run costs | Intermittent spares; lead‑time reliability |
+| Healthcare | Staff rostering, expiry | Service levels per shift | Appointment calendars, demand spikes |
+| Logistics | Routing, truck capacity | CO₂ costs, time windows | Weather/traffic impacts |
+| Hospitality | Menu cycles, prep labor | Freshness score | Day‑of‑week seasonality |
+
+**Mechanism:** swap **context** + **GoalDSL** and reuse kernel. OptiGuide compiles domain constraints; Optimizer solves; Evidence explains trade‑offs.
+
+---
+
+## 21) Test Data Packs & Golden Runs
+- **Small/Medium/Large** seeded datasets per domain; public synthetic versions for CI.
+- Store golden `optimodel_sha`, `solution` KPIs; regression asserts ≤ tolerance.
+- CLI utility: `dyocense-kernel replay --run RUN_ID` to reproduce and diff.
+
+---
+
+## 22) Production Readiness Checklist
+
+| Area | Check | Status |
+|---|---|---|
+| Contracts | Schemas versioned (`GoalDSL`, `ScenarioSet`, `OptiModel`, `Solution`, `EvidenceRef`) | ☐ |
+| Reproducibility | `seed`, `optimodel_sha`, `plan_dna` stored per run | ☐ |
+| Multi‑tenant | WFQ, rate limits, budgets, quotas enforced | ☐ |
+| Forecast | Backtests per SKU class; conformal intervals on | ☐ |
+| Optimization | Scenario reduction default; LNS enabled for hot sets | ☐ |
+| Evidence | Write‑behind + GC; PII redaction verified | ☐ |
+| Security | JWT→tenant match; OPA snapshot logged; secrets via External Secrets | ☐ |
+| Observability | OTel traces; Grafana dashboards; alerts configured | ☐ |
+| DR/Backups | PITR Postgres; MinIO replication; Neo4j dumps | ☐ |
+| Runbooks | Infeasibility, policy denial, evidence backlog, queue saturation | ☐ |
+
+---
+
+## 23) Postman/HTTPie Collection (Outline)
+- `forecast-scenarios.json` — POST `/forecast/scenarios` examples by tier.
+- `optiguide-compile.json` — compile samples (weighted, ε‑constraint, DRO modes).
+- `optimizer-solve.json` — base, reduced+stress, LNS, delta‑solve.
+- `evidence-write.json` — complete write payload with constraints/diagnostics.
+
+```
+# httpie sample
+http POST $KERNEL/optimizer/solve Authorization:"Bearer $JWT" Idempotency-Key:idem_999 \
+  tenant_id=t1 tier=pro optimodel:='{"vars":{},"obj":{},"constraints":[]}' time_limit_sec:=20 mip_gap:=0.02
+```
+
+---
+
+## 24) Domain Adaptation Guide
+
+The Dyocense kernel is **industry-agnostic at its core**. Domain-specific behavior is injected via GoalDSL extensions, constraint templates, and forecasting features. This guide shows how to adapt it to new business domains with minimal change.
+
+### 24.1 Adaptation Dimensions
+- **GoalDSL Extensions**: introduce new goal primitives relevant to the domain (e.g., `staff_utilization`, `shelf_life_days`, `truck_capacity`).
+- **Constraint Libraries**: add domain constraint templates to OptiGuide (BOM, staff rostering, route time windows, cold-chain requirements).
+- **Forecast Features**: enrich historical data with domain signals (holidays/promotions for retail, machine utilization for manufacturing, patient inflow for healthcare).
+- **Objective Tweaks**: adjust KPI weights or add new objectives (waste, labor cost, CO₂, freshness, reliability).
+- **Evidence Ontology**: extend graph schema with new node/edge types (e.g., `StaffShift`, `Machine`, `RouteSegment`).
+
+### 24.2 Domain Plug-In Examples
+- **Retail/Grocery**
+  - GoalDSL: `waste <= 5%`, `service >= 0.97`.
+  - Constraints: shelf life, promo lift factors.
+  - Forecast: seasonality, holiday demand spikes.
+  - Objectives: minimize spoilage cost.
+
+- **Manufacturing**
+  - GoalDSL: `lead_time <= 10d`, `co2 <= 500`.
+  - Constraints: BOM dependencies, machine capacity, changeovers.
+  - Forecast: intermittent spare parts demand, reliability of suppliers.
+  - Objectives: minimize setup costs, balance utilization.
+
+- **Healthcare**
+  - GoalDSL: `staff_coverage >= 95%`, `expiry_waste <= 2%`.
+  - Constraints: rostering rules, drug expiry, patient safety policies.
+  - Forecast: patient inflows, seasonal illness patterns.
+  - Objectives: maximize service levels, minimize overtime.
+
+- **Logistics**
+  - GoalDSL: `on_time >= 98%`, `co2 <= 300`.
+  - Constraints: routing, vehicle capacity, time windows.
+  - Forecast: traffic, weather impact.
+  - Objectives: minimize CO₂ per mile, maximize load factor.
+
+- **Hospitality**
+  - GoalDSL: `menu_freshness >= 90%`.
+  - Constraints: prep labor, menu cycles, supplier variability.
+  - Forecast: day-of-week demand swings.
+  - Objectives: balance cost, freshness, and labor efficiency.
+
+### 24.3 Adaptation Workflow
+1. **Model Context**: Extend GoalDSL schema for new primitives.
+2. **Constraint Templates**: Add reusable constraints to OptiGuide.
+3. **Forecast Feature Engineering**: Connect new data sources; adjust pipeline.
+4. **Objective Functions**: Calibrate KPI weights or add new ones.
+5. **Evidence Extensions**: Define new node/edge types; update query templates.
+6. **Regression Tests**: Seed golden datasets per domain; validate end-to-end runs.
+
+### 24.4 Reuse vs. Extend
+- **Reuse**: Core compile/solve/evidence pipeline remains unchanged.
+- **Extend**: Only domain-specific GoalDSL/constraints/forecast features need to be swapped.
+
+**Result:** rapid onboarding of new industries without redesigning the kernel.
+```
+
+```

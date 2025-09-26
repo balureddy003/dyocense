@@ -1,0 +1,31 @@
+{
+  "goal": {
+    "objective": {"cost": 1.0, "setup_cost": 50.0},
+    "constraints": {"budget_month": 11000, "lead_time_cap": 10},
+    "policies": {}
+  },
+  "context": {
+    "horizon": 2,
+    "periods": ["2025-09-01", "2025-09-02"],
+    "locations": ["plant"],
+    "skus": [
+      {
+        "sku": "PUMP-A",
+        "demand_baseline": {"2025-09-01": 40, "2025-09-02": 55},
+        "supplier_options": [
+          {"supplier_id": "MFG1", "price": 15.0, "moq": 5, "lead_time_days": 12, "co2_per_unit": 0.8, "capacity": 60},
+          {"supplier_id": "MFG2", "price": 16.5, "moq": 5, "lead_time_days": 8, "co2_per_unit": 0.75, "capacity": 70}
+        ]
+      },
+      {
+        "sku": "MOTOR-B",
+        "demand_baseline": {"2025-09-01": 30, "2025-09-02": 35},
+        "supplier_options": [
+          {"supplier_id": "MFG3", "price": 18.0, "moq": 5, "lead_time_days": 9, "co2_per_unit": 0.9, "capacity": 50}
+        ]
+      }
+    ]
+  },
+  "seed": 4040,
+  "domain": "manufacturing"
+}

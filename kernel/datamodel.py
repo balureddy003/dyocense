@@ -5,8 +5,8 @@ and the per-module design documents.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -217,4 +217,137 @@ __all__ = [
     "PolicyDecision",
     "KernelResult",
     "KernelConfig",
+    "scenario_set_to_dict",
+    "scenario_set_from_dict",
+    "optimodel_to_dict",
+    "optimodel_from_dict",
+    "solution_to_dict",
+    "solution_from_dict",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+
+def scenario_set_to_dict(scenario_set: ScenarioSet) -> Dict[str, Any]:
+    """Convert ScenarioSet dataclass into a JSON-serializable dict."""
+
+    data = asdict(scenario_set)
+    return data
+
+
+def scenario_set_from_dict(payload: Dict[str, Any]) -> ScenarioSet:
+    """Reconstruct a ScenarioSet dataclass from a dictionary payload."""
+
+    scenarios = [Scenario(**scenario) for scenario in payload.get("scenarios", [])]
+    return ScenarioSet(
+        horizon=payload["horizon"],
+        num_scenarios=payload["num_scenarios"],
+        skus=list(payload.get("skus", [])),
+        scenarios=scenarios,
+        stats=dict(payload.get("stats", {})),
+    )
+
+
+def optimodel_to_dict(model: OptiModel) -> Dict[str, Any]:
+    """Convert OptiModel dataclass to a dictionary representation."""
+
+    def _variable(defn: VariableDef) -> Dict[str, Any]:
+        data = {
+            "name": defn.name,
+            "vartype": defn.vartype,
+            "lower_bound": defn.lower_bound,
+        }
+        if defn.upper_bound is not None:
+            data["upper_bound"] = defn.upper_bound
+        return data
+
+    model_dict = {
+        "vars": {name: _variable(defn) for name, defn in model.vars.items()},
+        "objective_sense": model.objective_sense,
+        "objective_terms": [
+            {
+                "name": term.name,
+                "weight": term.weight,
+                "expression": term.expression,
+            }
+            for term in model.objective_terms
+        ],
+        "constraints": [
+            {
+                "name": constraint.name,
+                "expression": constraint.expression,
+            }
+            for constraint in model.constraints
+        ],
+    }
+    if model.robust is not None:
+        model_dict["robust"] = {
+            "scenarios": model.robust.scenarios,
+            "aggregation": model.robust.aggregation,
+        }
+    return model_dict
+
+
+def optimodel_from_dict(payload: Dict[str, Any]) -> OptiModel:
+    """Reconstruct OptiModel from dictionary representation."""
+
+    vars_dict = {
+        name: VariableDef(
+            name=value.get("name", name),
+            vartype=value["vartype"],
+            lower_bound=value.get("lower_bound", 0.0),
+            upper_bound=value.get("upper_bound"),
+        )
+        for name, value in payload.get("vars", {}).items()
+    }
+    objective_terms = [
+        ObjectiveTerm(
+            name=item["name"],
+            weight=item["weight"],
+            expression=item["expression"],
+        )
+        for item in payload.get("objective_terms", [])
+    ]
+    constraints = [
+        ConstraintDef(name=item["name"], expression=item["expression"])
+        for item in payload.get("constraints", [])
+    ]
+    robust_payload = payload.get("robust")
+    robust = None
+    if robust_payload:
+        robust = RobustConfig(
+            scenarios=robust_payload["scenarios"],
+            aggregation=robust_payload["aggregation"],
+        )
+    return OptiModel(
+        vars=vars_dict,
+        objective_sense=payload.get("objective_sense", "min"),
+        objective_terms=objective_terms,
+        constraints=constraints,
+        robust=robust,
+    )
+
+
+def solution_to_dict(solution: Solution) -> Dict[str, Any]:
+    """Convert Solution dataclass to dictionary."""
+
+    data = asdict(solution)
+    return data
+
+
+def solution_from_dict(payload: Dict[str, Any]) -> Solution:
+    """Reconstruct Solution dataclass from dictionary payload."""
+
+    steps = [PlanStep(**step) for step in payload.get("steps", [])]
+    return Solution(
+        status=payload["status"],
+        gap=payload.get("gap", 0.0),
+        kpis=dict(payload.get("kpis", {})),
+        steps=steps,
+        binding_constraints=list(payload.get("binding_constraints", [])),
+        activities=dict(payload.get("activities", {})),
+        shadow_prices=dict(payload.get("shadow_prices", {})),
+    )

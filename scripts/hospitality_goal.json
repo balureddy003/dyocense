@@ -1,0 +1,11 @@
+{
+  "objective": { "cost": 0.5, "freshness": 0.3, "co2": 0.2 },
+  "constraints": {
+    "budget_week": 2500,
+    "prep_labor_max": 480,
+    "service_min": 0.95
+  },
+  "policies": {
+    "vendor_blocklist": ["MEAT-SUPP-B"]
+  }
+}
