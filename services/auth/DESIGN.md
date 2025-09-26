@@ -7,7 +7,7 @@ OIDC integration, token introspection helpers, tenancy guards.
 - GET /.well-known/openid-configuration (proxied)
 - POST /auth/introspect (internal)
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: tenant, user, role_assignment
 
 ### Example Schema (SQLModel)

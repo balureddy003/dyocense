@@ -8,7 +8,7 @@ LiteLLM config, budgets, per-tenant routing & eval hooks.
 - POST /llm/route/test
 - GET  /llm/metrics
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: model_budget, route_policy, llm_metric
 
 ### Example Schema (SQLModel)

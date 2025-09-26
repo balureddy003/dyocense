@@ -1,6 +1,6 @@
 # OptiGuide — DESIGN (Detailed)
 
-OptiGuide is a **declarative compiler** that transforms `GoalDSL` into a solver‑ready mathematical program. It assembles objectives, constraints, variables, and bounds; emits a normalized model (JSON) for the Optimizer; and produces **Explainability Hints** (constraint activity, duals request) consumed by the Evidence Graph.
+OptiGuide is a **declarative compiler** that transforms `GoalDSL` into a solver‑ready mathematical program. It assembles objectives, constraints, variables, and bounds, consults the **Policy Guard** for governance checks, emits a normalized model (JSON) for the Optimizer, and produces **Explainability Hints** (constraint activity, duals request) plus a `PolicySnapshot` consumed by the pipeline & Evidence Graph.
 
 ---
 
@@ -10,18 +10,21 @@ OptiGuide is a **declarative compiler** that transforms `GoalDSL` into a solver�
 - Compile **objectives** (cost, service, CO₂, risk) with weights.
 - Compile **constraints** (budget, MOQ, capacity, lead time, vendor allow/deny, stock balance).
 - Generate **robust terms** (p95 service, CVaR) via scenario expansion from Forecast.
-- Emit **Model IR** (`OptiModel`) and **Explainability Hints**.
+- Evaluate governance policies via `PolicyGuardService` (deny rules, tier caps, supplier conflicts).
+- Emit **Model IR** (`OptiModel`), **Explainability Hints**, and **Policy Snapshot**.
 
 ## 2) Inputs & Outputs
 **Inputs**
 - `GoalDSL` (user intent + weights + policies)
 - `Context` (SKUs, suppliers, prices, MOQs, lead times, capacities)
 - `Scenarios` (from Forecast: demand, lead time samples)
+- `Tenant` metadata (tier, quotas) forwarded to Policy Guard
 - `Policies` (OPA-evaluated allow/deny, spend caps)
 
 **Outputs**
 - `OptiModel` (JSON) → Optimizer
 - `ExplainabilityHints` (what duals/activities to log) → Evidence
+- `PolicySnapshot` (allow, reasons, warnings, controls) → Pipeline/Evidence
 
 ### 2.1 GoalDSL (excerpt)
 ```json
@@ -87,8 +90,10 @@ sequenceDiagram
   API->>OG: POST /compile {GoalDSL, Context}
   OG->>FC: GET /scenarios {skus, periods}
   FC-->>OG: scenarios[]
+  OG->>PG: PolicyGuard.evaluate(goal, context, scenarios, tenant)
+  PG-->>OG: PolicySnapshot (allow|deny + controls)
   OG->>OG: build vars/objectives/constraints
-  OG-->>API: OptiModel + Hints
+  OG-->>API: OptiModel + Hints + PolicySnapshot
   API->>OP: POST /solve {OptiModel}
   OP-->>EG: duals/activities (after solve)
 ```
@@ -103,24 +108,34 @@ sequenceDiagram
 | `objective.co2` | `sum(co2_factor* x)` | Emission per unit per supplier |
 | `constraints.budget_month` | inequality | Monthly cap aggregated over periods |
 | `constraints.service_min` | service constraint | Fill‑rate ≥ threshold |
-| `policies.vendor_blocklist` | fix var | Force `y[v]=0` for blocked vendors |
+| `policies.vendor_blocklist` | fix var | Force `y[v]=0` for blocked vendors; guard warns if supplier still present in context |
+| `policies.caps.max_budget` | policy guard | Deny/warn when requested budget exceeds tier cap |
 | `moq_overrides` | linking | `x ≥ MOQ * y` per SKU/vendor |
 
 ---
 
-## 5) Robust Optimization
-- **Scenario expansion:** replicate balance constraints per scenario; aggregate objective with `p95` or CVaR.
-- **Safety stock:** `inv[t] ≥ z * σ_demand` (computed from Forecast).  
+## 5) Governance Integration
+- `PolicyGuardService` runs inside `OptiGuideService.compile(...)` before model building. It computes scenario/budget caps from tenant tier, applies explicit policy overrides, and returns a `PolicySnapshot`.
+- If `allow=False`, OptiGuide raises a `ValueError("Policy denied", details)` immediately; no solver resources consumed.
+- Warnings (near-cap usage, supplier blocklist conflicts) are passed through to the snapshot for UI surfacing.
+- The snapshot is embedded in compile metadata so the pipeline and Evidence Graph can persist compliance decisions alongside the plan.
 
 ---
 
-## 6) Explainability Hints (for Evidence)
+## 6) Robust Optimization
+- **Scenario expansion:** replicate balance constraints per scenario; aggregate objective with `p95`, CVaR, or conformal interval modes.
+- **Safety stock:** `inv[t] ≥ z * σ_demand` (computed from Forecast).
+- **Conformal mode:** when GoalDSL requests `constraints.robust.mode = "conformal"`, OptiGuide consumes forecast-provided quantile bands to enforce lower/upper stock buffers instead of scalar σ factors.
+
+---
+
+## 7) Explainability Hints (for Evidence)
 - Track activity of `budget`, `moq`, `balance`, `lead_time`.
 - Request duals for binding constraints; return sensitivity ranges for prices and MOQs.
 
 ---
 
-## 7) Pseudocode
+## 8) Pseudocode
 ```python
 def compile(goal_dsl, ctx, scenarios):
     m = OptiModel()

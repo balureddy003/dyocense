@@ -8,7 +8,7 @@ Supplier price compare; catalog ingest & normalization.
 - POST /market/ingest/catalog
 - GET  /market/suppliers
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: supplier, price, offer
 
 ### Example Schema (SQLModel)

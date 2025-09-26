@@ -7,7 +7,7 @@ Draft supplier emails/talking points using context & BATNA.
 - POST /negotiation/draft {supplier, context}
 - GET  /negotiation/templates
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: negotiation_template, negotiation_log
 
 ### Example Schema (SQLModel)

@@ -9,21 +9,25 @@ Orchestrate OptiGuide+Optimizer; produce plans with KPIs & steps.
 - GET /plans/{id}/steps
 - GET /plans/{id}/evidence
 
-## Data Ownership (Postgres)
-Tables: plan, plan_step, plan_metric
+## Data Ownership (MongoDB)
+Collection: `plans`
 
-### Example Schema (SQLModel)
-```python
-from sqlmodel import SQLModel, Field, JSON
-class TenantScoped(SQLModel):
-    tenant_id: str = Field(index=True)
-
-class Goal(SQLModel, table=True):
-    id: str = Field(primary_key=True)
-    tenant_id: str = Field(index=True)
-    text: str
-    goal_dsl: JSON | None = None
-    status: str = "new"
+Document shape (simplified):
+```json
+{
+  "plan_id": "uuid",
+  "tenant_id": "tenant_demo",
+  "goal_id": "goal-123",
+  "variant": "baseline",
+  "request_payload": {...},
+  "result": {
+    "evidence_ref": "evidence://...",
+    "solution": {"status": "FEASIBLE", "steps": [...]},
+    "diagnostics": {"simulation": {...}, "robust_eval": {...}},
+    "policy": {"allow": true, "policy_id": "policy.guard.v1"}
+  },
+  "created_at": "2024-08-12T19:32:11.123Z"
+}
 ```
 ## Sequences
 - On create: validate JWT→OPA allow→persist→emit domain event→trace span.

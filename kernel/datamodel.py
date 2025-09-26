@@ -167,6 +167,8 @@ class PolicySnapshot:
     allow: bool
     policy_id: str
     reasons: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    controls: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

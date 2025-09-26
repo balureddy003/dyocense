@@ -1,13 +1,13 @@
 """End-to-end pipeline orchestrating Forecast → OptiGuide → Optimizer → EvidenceGraph."""
 from __future__ import annotations
 
-import importlib.util
 import copy
+import importlib.util
 import hashlib
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 
 from kernel.datamodel import (
@@ -24,6 +24,8 @@ from kernel.multitenant.scheduler import CostEstimate, TenantScheduler
 from kernel.forecast.service import ForecastService
 from kernel.optiguide.service import OptiGuideService
 from kernel.optimizer.service import OptimizerService
+from kernel.simulation.service import SimulationService
+from kernel.policy.service import PolicyGuardService
 
 # Dynamically import evidence-graph/service.py to avoid circular imports
 evidence_graph_path = os.path.join(os.path.dirname(__file__), "evidence-graph", "service.py")
@@ -49,12 +51,24 @@ class KernelPipeline:
         optiguide: OptiGuideService | None = None,
         optimizer: OptimizerService | None = None,
         evidence: EvidenceGraphService | None = None,
+        simulation: SimulationService | None = None,
+        policy_guard: PolicyGuardService | None = None,
         domain_adapter: DomainAdapter | None = None,
         scheduler: TenantScheduler | None = None,
     ) -> None:
         self.forecast = forecast or ForecastService()
-        self.optiguide = optiguide or OptiGuideService()
+        resolved_policy_guard = policy_guard
+        if optiguide is not None:
+            resolved_policy_guard = policy_guard or getattr(optiguide, "policy_guard", None)
+        self.optiguide = optiguide or OptiGuideService(policy_guard=resolved_policy_guard)
+        self.policy_guard = resolved_policy_guard or getattr(self.optiguide, "policy_guard", PolicyGuardService())
+        if policy_guard is not None and getattr(self.optiguide, "policy_guard", None) is not policy_guard:
+            self.optiguide.policy_guard = policy_guard
+            self.policy_guard = policy_guard
+        if getattr(self.optiguide, "policy_guard", None) is not self.policy_guard:
+            self.optiguide.policy_guard = self.policy_guard
         self.optimizer = optimizer or OptimizerService()
+        self.simulation = simulation or SimulationService()
         self.evidence = evidence or EvidenceGraphService()
         self.domain_adapter = domain_adapter
         self.scheduler = scheduler
@@ -76,10 +90,17 @@ class KernelPipeline:
         plan_dna = self._fingerprint_plan_inputs(adapted_goal, adapted_context)
         lease = None
         cost_estimate = self._estimate_cost(adapted_context, scenario_set)
+        policy_snapshot = None
         try:
             if self.scheduler and tenant:
                 lease = self.scheduler.acquire(tenant.tenant_id, tenant.tier, cost_estimate)
-            optiguide_result = self.optiguide.compile(adapted_goal, adapted_context, scenario_set)
+            optiguide_result = self.optiguide.compile(
+                adapted_goal,
+                adapted_context,
+                scenario_set,
+                tenant=tenant,
+            )
+            policy_snapshot = optiguide_result.get("policy_snapshot")
             optimizer_result = self.optimizer.solve(
                 optiguide_result["optimodel"],
                 optiguide_result["compiled_inputs"],
@@ -105,6 +126,29 @@ class KernelPipeline:
         )
         optimizer_result["diagnostics"]["robust_eval"] = robust_eval
 
+        simulation_summary = self.simulation.simulate(
+            adapted_context,
+            optimizer_result["solution"],
+            scenario_set,
+            compiled_inputs=optiguide_result.get("compiled_inputs", {}),
+            seed=seed,
+        )
+        optimizer_result["diagnostics"]["simulation"] = simulation_summary
+
+        if policy_snapshot is None:
+            policy_snapshot = PolicySnapshot(
+                allow=True,
+                policy_id="policy.guard.v1",
+                reasons=[],
+                warnings=[],
+                controls={},
+            )
+        policy_snapshot = self.policy_guard.evaluate_solution(
+            policy_snapshot,
+            optimizer_result["solution"],
+            optimizer_result.get("diagnostics", {}),
+        )
+
         evidence_ref = self.evidence.persist(
             optimodel=optiguide_result["optimodel"],
             solution=optimizer_result["solution"],
@@ -119,17 +163,15 @@ class KernelPipeline:
                 "optimodel_sha": optimodel_sha,
                 "plan_dna": plan_dna,
                 "robust_eval": robust_eval,
+                "simulation": simulation_summary,
+                "policy_snapshot": asdict(policy_snapshot),
             },
         )
 
         kernel_result = KernelResult(
             solution=optimizer_result["solution"],
             evidence=evidence_ref,
-            policy=PolicySnapshot(
-                allow=True,
-                policy_id="policy-guard-not-integrated",
-                reasons=["Policy guard evaluation pending implementation"],
-            ),
+            policy=policy_snapshot,
         )
 
         result_payload = {
@@ -144,6 +186,8 @@ class KernelPipeline:
             "optimodel_sha": optimodel_sha,
             "plan_dna": plan_dna,
             "robust_eval": robust_eval,
+            "simulation": simulation_summary,
+            "policy": asdict(policy_snapshot),
         }
         if self.domain_adapter:
             result_payload = self.domain_adapter.postprocess_solution(result_payload)

@@ -7,7 +7,7 @@ Persist & serve Evidence Graph references and artifacts.
 - GET /evidence/{id}
 - POST /evidence/snapshot -> store hash/artifacts
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: evidence, evidence_artifact
 
 ### Example Schema (SQLModel)

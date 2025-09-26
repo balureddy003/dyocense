@@ -8,7 +8,7 @@ Ingest actuals; compute deltas vs plan; feed learning loop.
 - GET /feedback/actuals?plan_id=
 - GET /feedback/variance?plan_id=
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: actual, variance
 
 ### Example Schema (SQLModel)

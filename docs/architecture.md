@@ -52,10 +52,10 @@
 
 ### Data Layer
 
-- Postgres (OLTP goals/plans)
+- MongoDB (operational plans/goals, service persistence)
 - Redis (cache/queue)
 - MinIO (files/artifacts)
-- Mongo/Chroma/Qdrant (RAG, embeddings)
+- Chroma/Qdrant (RAG, embeddings)
 - Neo4j (Evidence Graph)
 
 ### Integrations
@@ -116,10 +116,10 @@ flowchart LR
   end
 
   subgraph Data
-    PG[(Postgres)]
+    MongoCore[(MongoDB)]
     Redis[(Redis)]
     MinIO[(MinIO)]
-    Mongo[(Mongo/Chroma/Qdrant)]
+    VectorDB[(Chroma/Qdrant)]
     Neo4j[(Neo4j/a1facts)]
   end
 
@@ -154,12 +154,12 @@ flowchart LR
 ## 4) Technology Stack
 
 - **Frontend:** Next.js, Tailwind, ShadCN/UI, Recharts, Framer Motion
-- **Backend:** FastAPI, SQLModel/SQLAlchemy, Pydantic v2, Uvicorn, Celery/RQ
+- **Backend:** FastAPI, Pydantic v2, Motor/PyMongo, Uvicorn, Celery/RQ
 - **Agents:** LangGraph, AutoGen, AgentScope
 - **LLM Serving:** LiteLLM router, vLLM, TGI, Ollama, HuggingFace
 - **Optimization:** OptiGuide, OR‑Tools, Pyomo, PuLP
 - **Forecasting:** Darts, Prophet, NumPy Monte Carlo
-- **Data Stores:** Postgres, Redis, MinIO, Neo4j, Chroma/Qdrant, Mongo
+- **Data Stores:** MongoDB, Redis, MinIO, Neo4j, Chroma/Qdrant
 - **Policy & IAM:** Keycloak, OPA/OPAL, Permit.io future
 - **DevOps:** Docker Compose, Helm, ArgoCD, GitHub Actions, OpenTelemetry, Prometheus/Grafana, Loki, Tempo
 - **Security:** SBOM (Syft/Grype), cosign, External Secrets/Vault
@@ -168,9 +168,9 @@ flowchart LR
 
 ## 5) Deployment View
 
-- **Local:** Docker Compose with seeded demo data
+- **Local:** Docker Compose with seeded demo data (MongoDB, Redis, Neo4j)
 - **Staging:** AKS/K3s, GitHub Actions CI, preview envs
-- **Prod:** Multi‑AZ, HPA, Postgres replicas, Redis HA, MinIO lifecycle policies
+- **Prod:** Multi‑AZ, HPA, MongoDB replica set, Redis HA, MinIO lifecycle policies
 
 ---
 

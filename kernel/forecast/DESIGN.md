@@ -120,3 +120,15 @@ def scenarios(body: dict, idempotency_key: str = Header(alias="Idempotency-Key")
         Scenario(id=1, demand={"t1":120}, lead_time_days=3.0),
     ])
 ```
+
+---
+
+## 12) Feedback & Active Learning Loop
+- `ForecastService.ingest_feedback(sku, actuals)` stores realized demand and updates `feedback_history`.
+- Subsequent `generate(...)` calls include `last_run_info.feedback` with observation counts and rolling averages injected into logs/telemetry.
+- Sparse-history SKUs automatically widen variance via `fallback_sigma_multiplier`; alerts surfaced in `last_run_info.fallback_skus`.
+
+## 13) Stress Testing Support
+- `stress_sample(context, samples=20, tail_factor=1.6)` produces heavy-tail demand spikes used by the pipeline’s robust evaluator.
+- Tail scenarios reuse the same signature hashing/caching mechanism so repeated stress runs remain deterministic by seed.
+- Metrics (`worst_case_service`, `cvar_cost`) derived from stress tests are published in pipeline diagnostics and referenced by the policy guard.

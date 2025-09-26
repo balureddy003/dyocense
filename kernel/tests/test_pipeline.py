@@ -327,6 +327,58 @@ class KernelPipelineTestCase(unittest.TestCase):
         self.assertIn("baseline", cf)
         self.assertIn("kpi_deltas", cf)
 
+    def test_policy_snapshot_present_in_result(self) -> None:
+        pipeline = build_pipeline(self.tmp_path)
+        goaldsl = {
+            "objective": {"cost": 1.0},
+            "constraints": {"budget_month": 10_000, "service_min": 0.9},
+            "policies": {},
+        }
+        result = pipeline.run(goaldsl, self.context, seed=3141, run_id="policy-ok")
+        policy = result.get("policy")
+        self.assertIsNotNone(policy)
+        self.assertTrue(policy["allow"])
+        self.assertIn("controls", policy)
+
+    def test_policy_guard_budget_cap_post_run(self) -> None:
+        pipeline = build_pipeline(self.tmp_path)
+        goaldsl = {
+            "objective": {"cost": 1.0},
+            "constraints": {},
+            "policies": {"caps": {"max_budget": 2_000}},
+        }
+        result = pipeline.run(goaldsl, self.context, seed=5150, run_id="policy-cap")
+        policy = result["policy"]
+        self.assertFalse(policy["allow"])
+        self.assertTrue(any("total_cost" in reason for reason in policy["reasons"]))
+
+    def test_policy_guard_enforces_tier_scenario_cap(self) -> None:
+        pipeline = build_pipeline(self.tmp_path)
+        goaldsl = {
+            "objective": {"cost": 1.0},
+            "constraints": {"budget_month": 10_000},
+            "policies": {},
+        }
+        tenant = TenantContext(tenant_id="tenant-free", tier="free")
+        with self.assertRaises(ValueError) as ctx:
+            pipeline.run(goaldsl, self.context, seed=42424, tenant=tenant)
+        self.assertIn("scenario count", str(ctx.exception))
+
+    def test_simulation_diagnostics_available(self) -> None:
+        pipeline = build_pipeline(self.tmp_path)
+        goaldsl = {
+            "objective": {"cost": 1.0},
+            "constraints": {"budget_month": 10_000, "service_min": 0.9},
+            "policies": {},
+        }
+        result = pipeline.run(goaldsl, self.context, seed=2024, run_id="simulation-check")
+        diagnostics = result["diagnostics"]
+        simulation = diagnostics.get("simulation")
+        self.assertIsNotNone(simulation)
+        self.assertIn("mean_service", simulation)
+        self.assertLessEqual(simulation["mean_service"], 1.0)
+        self.assertGreaterEqual(simulation["mean_service"], 0.0)
+
 
 class EvidenceGraphServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:

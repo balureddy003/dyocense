@@ -7,7 +7,7 @@ Run periodic refresh, KPI rollups, and notifications.
 - POST /scheduler/run {goal_id|tenant_id}
 - GET  /scheduler/status
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: job_run, job_metric
 
 ### Example Schema (SQLModel)

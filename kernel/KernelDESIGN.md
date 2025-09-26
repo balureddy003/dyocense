@@ -22,18 +22,20 @@ flowchart LR
   B -->|requires scenarios| C(Forecast)
   C -->|scenarios + stats| B
   B -->|OptiModel IR + Hints| D(Optimizer)
-  D -->|solution + diagnostics| E(Evidence Graph)
+  D -->|solution + diagnostics| S(Simulation)
+  S -->|stress KPIs + service| E(Evidence Graph)
   E -->|evidence_ref| A
-  B -->|policy checks| P(OPA/Policy)
+  B -->|policy checks| P(Policy Guard)
   D -->|feasibility relax check| P
 ```
 
 ### Narrative
 
 1. **Plan API** hands GoalDSL + planning context to **OptiGuide**.
-2. OptiGuide requests **Forecast** scenarios (demand/lead-time) and compiles the model.
-3. **Optimizer** solves the IR with warm-starts and returns solution + diagnostics.
-4. **Evidence Graph** records constraints, duals/activities, scenario IDs, KPIs; returns `evidence_ref`.
+2. OptiGuide requests **Forecast** scenarios (demand/lead-time), evaluates **Policy Guard**, and compiles the model.
+3. **Optimizer** solves the IR with warm-starts and returns solution + core diagnostics.
+4. **Simulation Service** stress-tests the plan and produces service/shortage metrics.
+5. **Evidence Graph** records constraints, duals/activities, policy snapshot, simulation summary, scenario IDs, KPIs; returns `evidence_ref`.
 
 ---
 
@@ -46,6 +48,7 @@ sequenceDiagram
   participant OG as OptiGuide
   participant FC as Forecast
   participant OP as Optimizer
+  participant SIM as Simulation
   participant EG as Evidence
   participant OPA as Policy Guard
 
@@ -60,7 +63,11 @@ sequenceDiagram
   OP->>OP: build & solve (OR-Tools/Pyomo)
   OP->>OPA: feasibility relax check (optional)
   OP-->>API: solution {steps, KPIs, diagnostics}
-  API->>EG: /evidence {plan_id, solution, constraints, duals}
+  API->>SIM: run(plan, scenarios)
+  SIM-->>API: simulation {mean_service, shortage, expedite_cost}
+  API->>OPA: post_check {solution, diagnostics, simulation}
+  OPA-->>API: policy_snapshot (updated)
+  API->>EG: /evidence {plan_id, solution, diagnostics, policy_snapshot}
   EG-->>API: evidence_ref
   API-->>U: plan + KPIs + evidence_ref
 ```
@@ -98,10 +105,11 @@ sequenceDiagram
 }
 ```
 
-### 3.3 `/optimizer/solve` → `Solution`
+### 3.3 `/optimizer/solve` → `SolutionEnvelope`
 
 ```json
 {
+"solution": {
   "status": "FEASIBLE",
   "gap": 0.012,
   "kpis": {"total_cost": 7821.4, "service": 0.975, "co2": 123.5},
@@ -111,13 +119,34 @@ sequenceDiagram
   "binding_constraints": ["budget","moq"],
   "activities": {"budget":8000,"balance_t2":0},
   "shadow_prices": {"budget": 0.03}
+},
+"diagnostics": {
+  "reduction": {"original_count": 50, "reduced_count": 10},
+  "robust_eval": {"worst_case_service": 0.91, "cvar_cost": 8120.0},
+  "simulation": {"mean_service": 0.947, "avg_shortage": 3.2, "avg_expedite_cost": 88.4}
+},
+"policy": {
+  "allow": true,
+  "policy_id": "policy.guard.v1",
+  "warnings": [],
+  "controls": {"tier": "pro", "scenario_cap": 200}
+}
 }
 ```
 
 ### 3.4 `/evidence/write` → `EvidenceRef`
 
 ```json
-{"evidence_ref":"neo4j://run/3f9a...", "snapshot_hash":"sha256:..."}
+{
+  "evidence_ref":"neo4j://run/3f9a...",
+  "snapshot_hash":"sha256:...",
+  "policy_snapshot": {
+    "policy_id": "policy.guard.v1",
+    "allow": true,
+    "warnings": [],
+    "controls": {"tier": "pro", "scenario_cap": 200}
+  }
+}
 ```
 
 ---
@@ -126,8 +155,9 @@ sequenceDiagram
 
 - **Infeasible model** → Optimizer runs IIS/relaxation; returns minimal relaxing slacks; Plan API surfaces *"which constraints to relax"*.
 - **No/poor history** in Forecast → fall back to naive + wider σ; OptiGuide adds safety stock term.
-- **Policy denial** → early fail from OptiGuide with human‑readable message & offending rule.
+- **Policy denial** → Policy Guard stops compile; returns `PolicySnapshot` with reasons + remediation (reduce scenarios, adjust budget).
 - **Timeout** → return best‑found solution with `status=FEASIBLE` & `gap`.
+- **Simulation fallback** → if simulation fails (no scenarios), diagnostics note `notes="No scenarios provided"` and pipeline continues with deterministic KPIs.
 
 ---
 
@@ -146,16 +176,19 @@ sequenceDiagram
 
 ## 6) Telemetry & SLOs
 
-- **Tracing (OTel spans):** `kernel.compile`, `kernel.forecast`, `kernel.solve`, `kernel.evidence.write`.
-- **Metrics:** `solver_wall_time`, `mip_gap`, `status_code`, `forecast_rmse`, `scenario_count`, `evidence_write_ms`.
-- **SLOs:** P50 compile < 300ms; P50 solve < 20s; P95 end‑to‑end < 90s.
+- **Tracing (OTel spans):** `kernel.compile`, `kernel.forecast`, `kernel.solve`, `kernel.simulation`, `kernel.policy.guard`, `kernel.evidence.write`.
+- **Metrics:** `solver_wall_time`, `mip_gap`, `status_code`, `forecast_rmse`, `scenario_count`, `robust_worst_service`, `simulation_mean_service`, `simulation_expedite_cost`, `policy_denials_total`, `policy_warnings_total`, `evidence_write_ms`.
+- **SLOs:** P50 compile < 300ms; P50 solve < 20s; P95 end‑to‑end (forecast→evidence) < 90s; simulation add-on < 2s for 40 runs; policy evaluation < 50ms.
 
 ---
 
-## 7) Security & Policy Hooks
+## 7) Governance & Safety Layer
 
-- JWT propagated with tenant; OptiGuide queries OPA for *vendor allow/deny*, *spend caps*.
-- Evidence Graph redacts PII; snapshots hashed in MinIO.
+- **PolicyGuardService (kernel/policy/service.py)** evaluates GoalDSL + context before solve and revisits the solution after optimization. It enforces tier-based caps (scenarios, budget), validates policy flags (vendor blocklists, deny overrides), and emits a structured `PolicySnapshot {allow, reasons, warnings, controls}` that travels with diagnostics and evidence metadata.
+- **Pre-solve checks:** deny flag, scenario/budget quotas, supplier blocklist conflicts. Any violation raises a `PolicyDenied` error with remediation hints, preventing solver spend.
+- **Post-solve checks:** compare delivered KPIs (cost, service) and robust metrics (`worst_case_service`) against recorded controls; downgrade `allow=false` when outputs violate caps, while retaining evidence for audit.
+- **Safety logging:** all policy decisions tagged with `tenant_id`, `tier`, and `policy_id`. Counters (`policy_denials_total`, `policy_warnings_total`) feed alerts when a tenant approaches limits.
+- **Security posture:** JWT tenant claims matched against request body; evidence metadata redacts PII and stores hashed references. Policy snapshots persisted alongside plan DNA to prove compliance during audits.
 
 ---
 
@@ -164,13 +197,26 @@ sequenceDiagram
 - **Golden tests** for GoalDSL→OptiModel.
 - **Scenario regression** for Optimizer across seed datasets.
 - **Forecast backtests** with time‑series CV.
+- **Policy guard** coverage: deny/warn scenarios, tier caps, post-solve guard rails.
+- **Simulation diagnostics** sanity: service metrics stay within [0,1], expedite cost non-negative.
 - **Property tests**: budget monotonicity (cost non‑decreasing as budget shrinks), feasibility under relaxations.
 
 ---
 
-## 9) Future Extensions
+## 9) Hybrid Simulation–Optimization
 
+After each solve the pipeline executes a **Monte Carlo execution simulation** to stress plans against sampled demand noise and lead-time variance. Key aspects:
 
+- **Engine:** `SimulationService` (40 configurable runs, Gaussian noise scaled by forecast σ, expedite penalties).
+- **Inputs:** `PlanningContext`, solved `Solution`, original `ScenarioSet`, compiled supplier prices.
+- **Outputs:** `diagnostics.simulation` with `mean_service`, `p10_service`, `avg_shortage`, `avg_leftover`, and `avg_expedite_cost`.
+- **Usage:**
+  - Plan API surfaces the figures alongside deterministic KPIs.
+  - Policy guard cross-checks `mean_service`/`worst_case_service` against contractual thresholds.
+  - Evidence snapshots persist the summary for downstream BI dashboards and replay tooling.
+- **Extensibility:** plug additional event hooks (e.g., discrete-event kitchen sim, logistics network replay) by swapping the `SimulationService` implementation while keeping the diagnostics contract intact.
+
+Future extensions include exporting full sample traces (`top_worst_runs`) and scenario IDs to enable root-cause investigation.
 ---
 
 ## 10) Multi‑Tenancy & Scalability
@@ -193,7 +239,7 @@ This section extends the kernel to operate safely and efficiently across **many 
 ```
 
 ### 10.2 Data Partitioning & Isolation
-- **Postgres**: either (a) **schema‑per‑tenant** for small N tenants, or (b) **row‑level security (RLS)** with `tenant_id` column + policies. All queries **MUST** include tenant filters via DAO helpers.
+- **MongoDB**: per-tenant collections or shared collections with `tenant_id` guard fields. Use helper utilities to append tenant filters to every query.
 - **MinIO**: bucket or prefix per tenant: `minio://dyocense/{tenant_id}/evidence/...`.
 - **Neo4j**: label or subgraph per tenant: `(:Goal {tenant_id})`, or use **multi‑DB** when scaling.
 - **Redis**: namespaced keys: `tn:{tenant_id}:queue`, `tn:{tenant_id}:cache:*`.
@@ -433,11 +479,11 @@ paths:
                 mip_gap: { type: number, default: 0.02 }
       responses:
         "200":
-          description: Solution
+          description: Solution envelope
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Solution'
+                $ref: '#/components/schemas/SolutionEnvelope'
   /evidence/write:
     post:
       summary: Persist evidence graph & snapshot
@@ -515,11 +561,45 @@ components:
         binding_constraints: { type: array, items: { type: string } }
         activities: { type: object }
         shadow_prices: { type: object }
+    SolutionEnvelope:
+      type: object
+      properties:
+        solution: { $ref: '#/components/schemas/Solution' }
+        diagnostics:
+          type: object
+          properties:
+            reduction: { type: object }
+            robust_eval:
+              type: object
+              properties:
+                worst_case_service: { type: number }
+                cvar_cost: { type: number }
+              additionalProperties: true
+            simulation:
+              type: object
+              properties:
+                runs: { type: integer }
+                mean_service: { type: number }
+                avg_shortage: { type: number }
+                avg_expedite_cost: { type: number }
+              additionalProperties: true
+          additionalProperties: true
+        policy: { $ref: '#/components/schemas/PolicySnapshot' }
+      required: [solution]
     EvidenceRef:
       type: object
       properties:
         evidence_ref: { type: string }
         snapshot_hash: { type: string }
+    PolicySnapshot:
+      type: object
+      properties:
+        allow: { type: boolean }
+        policy_id: { type: string }
+        reasons: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+        controls: { type: object, additionalProperties: true }
+      required: [allow, policy_id]
 ```
 
 ---
@@ -556,33 +636,31 @@ Example policy fragment for a tenant:
 
 ---
 
-## 17) Kernel Data Tables (Postgres/RLS)
+## 17) Kernel Data Collections (MongoDB)
 
-```sql
--- All tables include tenant_id and RLS policies
-CREATE TABLE kernel_runs (
-  run_id text primary key,
-  tenant_id text not null,
-  tier text not null,
-  idem_key text not null,
-  seed int,
-  started_at timestamptz default now(),
-  status text,
-  optimodel_sha text,
-  plan_dna text
-);
+```json
+{
+  "_id": "run_123",
+  "tenant_id": "tenant_demo",
+  "tier": "pro",
+  "idempotency_key": "idem_abc",
+  "seed": 4242,
+  "status": "FEASIBLE",
+  "optimodel_sha": "sha256:...",
+  "plan_dna": "sha256:...",
+  "created_at": "2025-01-01T12:34:56Z"
+}
 
-CREATE TABLE forecast_cache (
-  tenant_id text,
-  sku text,
-  horizon int,
-  model_cfg jsonb,
-  scenarios jsonb,
-  stats jsonb,
-  hash text,
-  created_at timestamptz default now(),
-  primary key (tenant_id, sku, horizon, hash)
-);
+{
+  "tenant_id": "tenant_demo",
+  "sku": "SKU1",
+  "horizon": 4,
+  "hash": "sha256:...",
+  "model_cfg": {"num_scenarios": 50, "model": "auto"},
+  "scenarios": [...],
+  "stats": {...},
+  "created_at": "2025-01-01T12:10:00Z"
+}
 ```
 
 ---
@@ -766,7 +844,7 @@ curl -X POST $KERNEL/evidence/write \
 | Evidence | Write‑behind + GC; PII redaction verified | ☐ |
 | Security | JWT→tenant match; OPA snapshot logged; secrets via External Secrets | ☐ |
 | Observability | OTel traces; Grafana dashboards; alerts configured | ☐ |
-| DR/Backups | PITR Postgres; MinIO replication; Neo4j dumps | ☐ |
+| DR/Backups | Mongo replica snapshots; MinIO replication; Neo4j dumps | ☐ |
 | Runbooks | Infeasibility, policy denial, evidence backlog, queue saturation | ☐ |
 
 ---

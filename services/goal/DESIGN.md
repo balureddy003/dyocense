@@ -9,7 +9,7 @@ Parse & persist goals; produce GoalDSL; manage lifecycle.
 - GET /goals/{id}/questions -> VoI questions
 - PATCH /goals/{id} -> update metadata/status
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: goal, goal_history
 
 ### Example Schema (SQLModel)

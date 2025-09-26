@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Mapping, Tuple
 
 from kernel.datamodel import (
     ConstraintDef,
     ExplainabilityHints,
     ObjectiveTerm,
+    PolicyDecision,
     OptiModel,
     PlanningContext,
     RobustConfig,
     ScenarioSet,
     VariableDef,
 )
+from kernel.policy.service import PolicyGuardService
 
 
 @dataclass
@@ -49,21 +51,26 @@ class GoalDSLParser:
 class OptiGuideService:
     """Compiles GoalDSL + context + scenarios into OptiModel IR."""
 
+    def __init__(self, policy_guard: PolicyGuardService | None = None) -> None:
+        self.policy_guard = policy_guard or PolicyGuardService()
+
     def compile(
         self,
         goaldsl: Any,
         context: PlanningContext,
         scenarios: ScenarioSet,
+        *,
+        tenant: Any = None,
     ) -> Dict[str, Any]:
         goal = GoalDSLParser.parse(goaldsl)
 
-        policy_decision = self._evaluate_policies(goal)
-        if not policy_decision["allow"]:
+        policy_decision = self._evaluate_policies(goal, context, scenarios, tenant=tenant)
+        if not policy_decision.allow:
             raise ValueError(
                 "Policy denied",
                 {
-                    "reasons": policy_decision["reasons"],
-                    "policy_id": policy_decision.get("policy_id", "unspecified"),
+                    "reasons": policy_decision.policy_snapshot.reasons,
+                    "policy_id": policy_decision.policy_snapshot.policy_id,
                 },
             )
 
@@ -71,6 +78,7 @@ class OptiGuideService:
         hints = self._build_explainability(goal)
 
         compiled_inputs = self._export_compiled_inputs(goal, context, scenarios)
+        policy_snapshot = policy_decision.policy_snapshot
 
         return {
             "optimodel": model,
@@ -78,10 +86,10 @@ class OptiGuideService:
             "metadata": {
                 "goal_scope": goal.scope,
                 "scenario_ids": [scenario.id for scenario in scenarios.scenarios],
-                "policy_id": policy_decision.get("policy_id"),
-                "policy_reasons": policy_decision.get("reasons", []),
+                "policy_snapshot": asdict(policy_snapshot),
             },
             "compiled_inputs": compiled_inputs,
+            "policy_snapshot": policy_snapshot,
         }
 
     def _build_model(
@@ -291,11 +299,12 @@ class OptiGuideService:
             "vendor_blocklist": list(blocklist),
         }
 
-    def _evaluate_policies(self, goal: GoalDSL) -> Dict[str, Any]:
-        policies = goal.policies or {}
-        deny_flag = policies.get("deny") or False
-        reasons = policies.get("deny_reasons", [])
-        policy_id = policies.get("policy_id", "policy-local")
-        if deny_flag:
-            return {"allow": False, "reasons": reasons or ["Policy deny flag set"], "policy_id": policy_id}
-        return {"allow": True, "reasons": [], "policy_id": policy_id}
+    def _evaluate_policies(
+        self,
+        goal: GoalDSL,
+        context: PlanningContext,
+        scenarios: ScenarioSet,
+        *,
+        tenant: Any = None,
+    ) -> PolicyDecision:
+        return self.policy_guard.evaluate(goal, context, scenarios, tenant=tenant)

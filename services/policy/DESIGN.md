@@ -7,7 +7,7 @@ OPA policy bundles, evaluations, and admin PAP APIs.
 - POST /policy/evaluate
 - GET  /policy/bundles
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: policy_audit
 
 ### Example Schema (SQLModel)

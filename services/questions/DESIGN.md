@@ -8,7 +8,7 @@ Generate VoI-ranked questions; collect structured answers.
 - POST /answers -> upsert answer {goal_id, field, value}
 - GET /answers?goal_id=
 
-## Data Ownership (Postgres)
+## Data Ownership (MongoDB)
 Tables: question, answer
 
 ### Example Schema (SQLModel)
