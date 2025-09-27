@@ -378,6 +378,7 @@ sequenceDiagram
 - [ ] Add warm‑start cache per `goal_id:variant`.
 - [ ] Batch evidence writes and enable MinIO lifecycle rules.
 - [ ] Tag all metrics with `tenant_id` + SLA tier; set alerts.
+- [x] Generate LLM-backed (or fallback) plan narratives exposed to downstream services.
 
 ---
 

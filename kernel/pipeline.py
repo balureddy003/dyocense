@@ -26,6 +26,7 @@ from kernel.optiguide.service import OptiGuideService
 from kernel.optimizer.service import OptimizerService
 from kernel.simulation.service import SimulationService
 from kernel.policy.service import PolicyGuardService
+from kernel.llm import LLMClient
 
 # Dynamically import evidence-graph/service.py to avoid circular imports
 evidence_graph_path = os.path.join(os.path.dirname(__file__), "evidence-graph", "service.py")
@@ -55,6 +56,7 @@ class KernelPipeline:
         policy_guard: PolicyGuardService | None = None,
         domain_adapter: DomainAdapter | None = None,
         scheduler: TenantScheduler | None = None,
+        llm_client: LLMClient | None = None,
     ) -> None:
         self.forecast = forecast or ForecastService()
         resolved_policy_guard = policy_guard
@@ -72,6 +74,7 @@ class KernelPipeline:
         self.evidence = evidence or EvidenceGraphService()
         self.domain_adapter = domain_adapter
         self.scheduler = scheduler
+        self.llm = llm_client or LLMClient()
 
     def run(
         self,
@@ -168,10 +171,23 @@ class KernelPipeline:
             },
         )
 
+        llm_summary = self.llm.summarize_plan(
+            context={
+                "skus": [sku_ctx.sku for sku_ctx in adapted_context.skus],
+                "periods": list(adapted_context.periods),
+                "locations": list(adapted_context.locations),
+            },
+            solution=solution_to_dict(optimizer_result["solution"]),
+            diagnostics=optimizer_result["diagnostics"],
+            policy=asdict(policy_snapshot),
+        )
+        optimizer_result["diagnostics"]["llm_summary"] = llm_summary
+
         kernel_result = KernelResult(
             solution=optimizer_result["solution"],
             evidence=evidence_ref,
             policy=policy_snapshot,
+            llm_summary=llm_summary,
         )
 
         result_payload = {
@@ -188,6 +204,7 @@ class KernelPipeline:
             "robust_eval": robust_eval,
             "simulation": simulation_summary,
             "policy": asdict(policy_snapshot),
+            "llm_summary": llm_summary,
         }
         if self.domain_adapter:
             result_payload = self.domain_adapter.postprocess_solution(result_payload)

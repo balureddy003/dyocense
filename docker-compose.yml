@@ -1,0 +1,110 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    container_name: dyocense-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    container_name: dyocense-redis
+    ports:
+      - "6379:6379"
+
+  neo4j:
+    image: neo4j:5.18
+    restart: unless-stopped
+    container_name: dyocense-neo4j
+    environment:
+      NEO4J_AUTH: "neo4j/testpassword"
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+  kernel:
+    build:
+      context: ./kernel
+    restart: unless-stopped
+    container_name: dyocense-kernel
+    environment:
+      PYTHONUNBUFFERED: "1"
+      FORECAST_CACHE_DIR: /app/kernel/forecast/.cache
+      KERNEL_DEFAULT_SEED: 424242
+    depends_on:
+      - mongo
+      - redis
+      - neo4j
+    ports:
+      - "8080:8080"
+    volumes:
+      - kernel_forecast_cache:/app/kernel/forecast/.cache
+      - kernel_evidence:/app/kernel/evidence-graph/data
+
+  api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    container_name: dyocense-api
+    environment:
+      PLAN_MONGO_URI: mongodb://mongo:27017
+      PLAN_MONGO_DB: dyocense
+      PLAN_MONGO_COLLECTION: plans
+      PLAN_KERNEL_BASE_URL: http://kernel:8080
+      GOAL_MONGO_URI: mongodb://mongo:27017
+      GOAL_MONGO_DB: dyocense
+      GOAL_MONGO_COLLECTION: goals
+      GOAL_KERNEL_BASE_URL: http://kernel:8080
+      GOAL_PLAN_SERVICE_URL: http://api:8000
+      EVIDENCE_MONGO_URI: mongodb://mongo:27017
+      EVIDENCE_MONGO_DB: dyocense
+      EVIDENCE_COLLECTION: evidence_snapshots
+      FEEDBACK_MONGO_URI: mongodb://mongo:27017
+      FEEDBACK_MONGO_DB: dyocense
+      FEEDBACK_COLLECTION: feedback_events
+      FEEDBACK_KERNEL_BASE_URL: http://kernel:8080
+      FEEDBACK_SCHEDULER_URL: http://api:8000
+      SCHEDULER_MONGO_URI: mongodb://mongo:27017
+      SCHEDULER_MONGO_DB: dyocense
+      SCHEDULER_JOBS_COLLECTION: scheduler_jobs
+      SCHEDULER_TENANTS_COLLECTION: scheduler_tenants
+      POLICY_MONGO_URI: mongodb://mongo:27017
+      POLICY_MONGO_DB: dyocense
+      POLICY_POLICIES_COLLECTION: policies
+      POLICY_AUDITS_COLLECTION: policy_audits
+      MARKET_MONGO_URI: mongodb://mongo:27017
+      MARKET_MONGO_DB: dyocense
+      MARKET_COLLECTION: market_intel
+      NEGOTIATION_PLAN_SERVICE_URL: http://api:8000
+    depends_on:
+      - kernel
+      - mongo
+      - redis
+      - neo4j
+    ports:
+      - "8000:8000"
+
+  client:
+    build:
+      context: ./client
+      args:
+        VITE_API_BASE_URL: http://api:8000
+    restart: unless-stopped
+    container_name: dyocense-client
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+
+volumes:
+  mongo_data:
+  neo4j_data:
+  kernel_forecast_cache:
+  kernel_evidence:

@@ -190,6 +190,10 @@ class KernelPipelineTestCase(unittest.TestCase):
             self.assertTrue(solution["steps"], "Expected non-empty plan steps")
             self.assertTrue(solution["binding_constraints"], "Binding constraints required")
             self.assertTrue(result["evidence_ref"].startswith("evidence://"))
+            llm_summary = result.get("llm_summary")
+            self.assertIsInstance(llm_summary, dict)
+            self.assertIn("text", llm_summary)
+            self.assertEqual(llm_summary.get("source"), "fallback")
 
         self.assertEqual(result_a["solution"]["kpis"], result_b["solution"]["kpis"])
         self.assertEqual(result_a["solution"]["steps"], result_b["solution"]["steps"])

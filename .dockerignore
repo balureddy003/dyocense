@@ -1,0 +1,12 @@
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+node_modules
+__pycache__
+*.pyc
+*.pyo
+.venv
+npm-debug.log
+coverage

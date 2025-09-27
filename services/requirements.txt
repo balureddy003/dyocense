@@ -1,6 +1,0 @@
-fastapi>=0.110
-starlette>=0.37
-requests>=2.32
-pymongo>=4.7
-mongomock>=4.1
-uvicorn[standard]>=0.27

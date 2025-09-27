@@ -187,6 +187,7 @@ class KernelResult:
     solution: Solution
     evidence: EvidenceRef
     policy: PolicySnapshot
+    llm_summary: Optional[Dict[str, Any]] = None
 
 
 @dataclass
