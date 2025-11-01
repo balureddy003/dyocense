@@ -1,4 +1,4 @@
-# Dyocense Platform — Unified Architecture (MVP1 Sports, MVP2 Restaurant)
+# The open-standard Decision Kernel that powers intelligent planning for any AI agent.
 
 This repo contains high‑level architecture, data model, tool schemas, and storyboards for the Dyocense platform.
 
