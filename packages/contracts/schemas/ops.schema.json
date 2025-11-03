@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Optimization Problem Spec (OPS)",
+  "type": "object",
+  "required": [
+    "metadata",
+    "objective",
+    "decision_variables",
+    "parameters",
+    "constraints"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "ops_version",
+        "problem_type"
+      ],
+      "properties": {
+        "ops_version": {
+          "type": "string"
+        },
+        "problem_type": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "run_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "objective": {
+      "type": "object",
+      "required": [
+        "sense",
+        "expression"
+      ],
+      "properties": {
+        "sense": {
+          "type": "string",
+          "enum": [
+            "min",
+            "max"
+          ]
+        },
+        "expression": {
+          "type": "string"
+        }
+      }
+    },
+    "decision_variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "lb",
+          "ub"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "integer",
+              "continuous"
+            ]
+          },
+          "lb": {
+            "type": "number"
+          },
+          "ub": {
+            "type": "number"
+          },
+          "index_sets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "expression"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "for_all": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expression": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "kpis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "expression"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "validation_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

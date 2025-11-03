@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SolutionPack",
+  "type": "object",
+  "required": [
+    "status",
+    "objective_value",
+    "decisions",
+    "diagnostics"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "optimal",
+        "feasible",
+        "infeasible",
+        "timeout",
+        "error"
+      ]
+    },
+    "objective_value": {
+      "type": "number"
+    },
+    "decisions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "kpis": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "string"
+        ]
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "gap": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "runtime_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "solver": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "active_constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "iis": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "explanation_hints": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

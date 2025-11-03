@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: dyocense
+resources:
+  - namespace.yaml
+  - mongo-secret.yaml
+  - global-config.yaml
+  - mongo-statefulset.yaml
+  - neo4j-statefulset.yaml
+  - keycloak-deployment.yaml
+  - nats-deployment.yaml
+  - compiler-deployment.yaml
+  - forecast-deployment.yaml
+  - optimiser-deployment.yaml
+  - policy-deployment.yaml
+  - diagnostician-deployment.yaml
+  - explainer-deployment.yaml
+  - evidence-deployment.yaml
+  - marketplace-deployment.yaml
+  - kernel-deployment.yaml

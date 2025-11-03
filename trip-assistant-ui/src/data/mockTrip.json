@@ -1,0 +1,97 @@
+{
+  "title": "Inventory Optimization Playbook",
+  "goal": "Reduce holding costs while maintaining 95% service level across high-volume SKUs.",
+  "summary": {
+    "context": "Demand volatility has increased 12% MoM. Safety stock was overstated for Widgets and Gadgets, driving excess capital tie-up.",
+    "primaryKpis": [
+      { "label": "Projected Holding Cost", "value": "-$142K" },
+      { "label": "Service Level", "value": "95.4%" },
+      { "label": "Stock-out Risk", "value": "1.7%" }
+    ],
+    "quickWins": [
+      "Shift replenishment cadence for Widgets from weekly to twice-weekly.",
+      "Consolidate slow-moving SKUs into pooled buffer at central DC.",
+      "Enable supplier flex order for peak weeks 24-26."
+    ]
+  },
+  "plan": [
+    {
+      "title": "Stage 1 · Diagnose",
+      "description": "Compile baseline metrics and identify high-cost segments.",
+      "activities": [
+        {
+          "name": "Run data ingest",
+          "description": "Compile demand, cost and service level inputs across all regions.",
+          "impact": "Identified 3 SKUs contributing 62% of excess cost."
+        },
+        {
+          "name": "Highlight risk segments",
+          "description": "Surface SKUs with highest variance week-over-week.",
+          "impact": "Flagged Widgets & Gadgets as high-priority for scenario testing."
+        }
+      ]
+    },
+    {
+      "title": "Stage 2 · Simulate",
+      "description": "Test demand shocks and supply constraints to stress the plan.",
+      "activities": [
+        {
+          "name": "Demand spike scenario",
+          "description": "Model 20% spike in Widget demand for promotional weeks.",
+          "impact": "Requires 8% buffer increase to retain 95% service level."
+        },
+        {
+          "name": "Supplier delay",
+          "description": "Simulate 3-day lead-time slip on Gadget supplier.",
+          "impact": "Introduced cross-dock mitigation to hold service level at 94%."
+        }
+      ]
+    },
+    {
+      "title": "Stage 3 · Commit",
+      "description": "Lock-in recommendations and publish stakeholder summary.",
+      "activities": [
+        {
+          "name": "Finalize reorder policy",
+          "description": "Adopt dynamic reorder point per SKU cluster.",
+          "impact": "Delivers $142K annual holding-cost reduction."
+        },
+        {
+          "name": "Share stakeholder brief",
+          "description": "Distribute plan across Ops, Finance, Merchandising.",
+          "impact": "Ensures change readiness before week 21 deployment."
+        }
+      ]
+    }
+  ],
+  "whatIfs": [
+    {
+      "title": "What if demand spikes 30%?",
+      "summary": "Increase safety stock by 12% for high-margin SKUs; maintain buffer only for premium customers.",
+      "delta": {
+        "holdingCost": "+$28K",
+        "serviceLevel": "97.2%",
+        "stockoutRisk": "0.9%"
+      }
+    },
+    {
+      "title": "What if supplier lead-time doubles?",
+      "summary": "Trigger alternate supplier and expedite on-hand transfer; stock-out risk rises slightly but stays <3%.",
+      "delta": {
+        "holdingCost": "+$12K",
+        "serviceLevel": "94.1%",
+        "stockoutRisk": "2.7%"
+      }
+    }
+  ],
+  "unscheduled": [
+    "Explore co-pack opportunities with supplier B",
+    "Evaluate automation to accelerate cycle counts",
+    "Assess impact of seasonal assortment refresh"
+  ],
+  "notes": [
+    "Data validated against ERP snapshot as of 2025-05-12.",
+    "Finance sign-off needed by 2025-05-18.",
+    "Run refresh after week 21 promotional period."
+  ]
+}

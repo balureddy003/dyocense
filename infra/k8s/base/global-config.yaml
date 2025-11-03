@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dyocense-config
+  namespace: dyocense
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  MONGO_URI: "mongodb://mongo-0.mongo.dyocense.svc.cluster.local:27017"
+  NATS_URL: "nats://nats.dyocense.svc.cluster.local:4222"
+  POLICY_API_URL: "http://policy.dyocense.svc.cluster.local:8005"

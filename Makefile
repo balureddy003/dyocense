@@ -1,0 +1,66 @@
+PYTHON ?= python3
+VENV = .venv
+VENV_BIN = $(VENV)/bin
+
+.PHONY: validate format lint setup install clean test run-kernel run-compiler run-optimiser run-forecast run-explainer run-policy run-diagnostician run-evidence run-marketplace run-orchestrator kind-up
+
+$(VENV):
+	$(PYTHON) -m venv $(VENV)
+
+setup: $(VENV)
+ifeq ($(SKIP_PIP),1)
+	@echo "Skipping dependency installation (SKIP_PIP=1)."
+else
+	$(VENV_BIN)/pip install -r requirements-dev.txt
+endif
+
+clean:
+	rm -rf $(VENV)
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
+
+validate: setup
+	$(VENV_BIN)/python scripts/validate_ops.py examples/inventory_simple.ops.json
+
+lint:
+	@echo "Linting is not yet configured. Enable in Phase 2."
+
+format:
+	@echo "Formatting is not yet configured. Enable in Phase 2."
+
+test: setup
+	PYTHONPATH=. $(VENV_BIN)/pytest
+
+run-kernel: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.kernel.main:app --reload --port 8001
+
+
+run-compiler: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.compiler.main:app --reload --port 8002
+
+run-optimiser: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.optimiser.main:app --reload --port 8003
+
+run-forecast: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.forecast.main:app --reload --port 8004
+
+run-explainer: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.explainer.main:app --reload --port 8005
+
+run-policy: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.policy.main:app --reload --port 8006
+
+run-diagnostician: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.diagnostician.main:app --reload --port 8007
+
+run-evidence: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.evidence.main:app --reload --port 8008
+
+run-marketplace: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.marketplace.main:app --reload --port 8009
+
+run-orchestrator: setup
+	PYTHONPATH=. $(VENV_BIN)/uvicorn services.orchestrator.main:app --reload --port 8010
+
+kind-up:
+	bash scripts/kind_bootstrap.sh

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Marketplace Catalog",
+  "type": "object",
+  "required": ["items", "generated_at"],
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "category", "version", "artifact"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["archetype", "solver", "connector"]
+          },
+          "version": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "data_inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "description": {"type": "string"},
+                "columns": {"type": "string"}
+              }
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "required": ["type", "uri"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["oci", "pip", "npm", "docker"]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "signature": {
+                "type": "string"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

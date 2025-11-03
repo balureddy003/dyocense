@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kernel-api
+  namespace: dyocense
+spec:
+  selector:
+    app: kernel-api
+  ports:
+    - port: 8001
+      targetPort: 8001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kernel-api
+  namespace: dyocense
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kernel-api
+  template:
+    metadata:
+      labels:
+        app: kernel-api
+    spec:
+      containers:
+        - name: kernel-api
+          image: ghcr.io/dyocense/kernel:dev
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: dyocense-config
+          ports:
+            - containerPort: 8001

@@ -1,0 +1,209 @@
+{
+  "info": {
+    "name": "Dyocense Decision Kernel",
+    "_postman_id": "b5f9e0f0-0000-0000-0000-000000000000",
+    "description": "Collection for exercising the Dyocense unified kernel API (compile → forecast → policy → optimise → diagnose → explain → evidence) and orchestration endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/healthz",
+          "host": ["{{baseUrl}}"],
+          "path": ["healthz"]
+        }
+      }
+    },
+    {
+      "name": "Submit Run",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"goal\": \"Reduce holding cost\",\n  \"archetype_id\": \"inventory_basic\",\n  \"project_id\": \"demo-postman\",\n  \"horizon\": 2,\n  \"data_inputs\": {\n    \"demand\": [\n      {\"sku\": \"widget\", \"quantity\": 120},\n      {\"sku\": \"gadget\", \"quantity\": 95}\n    ],\n    \"holding_cost\": [\n      {\"sku\": \"widget\", \"cost\": 2.5},\n      {\"sku\": \"gadget\", \"cost\": 1.75}\n    ]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/runs",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "runs"]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get Run Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/runs/{{run_id}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "runs", "{{run_id}}"]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "List Runs",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/runs",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "runs"]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Compile Goal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"goal\": \"Reduce holding cost\",\n  \"tenant_id\": \"demo-tenant\",\n  \"project_id\": \"demo-postman\",\n  \"data_inputs\": {\n    \"demand\": [{\"sku\": \"widget\", \"quantity\": 120}],\n    \"holding_cost\": [{\"sku\": \"widget\", \"cost\": 2.5}]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/compile",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "compile"]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Catalog",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/catalog",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "catalog"]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "List Evidence",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/evidence?limit=5",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "evidence"],
+          "query": [
+            {
+              "key": "limit",
+              "value": "5"
+            }
+          ]
+        },
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8001"
+    },
+    {
+      "key": "token",
+      "value": "demo-tenant"
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    }
+  ]
+}

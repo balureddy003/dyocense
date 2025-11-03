@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "inventory_basic",
+      "name": "Inventory Planning - Basic",
+      "description": "Minimise holding cost subject to demand satisfaction.",
+      "data_inputs": [
+        {"id": "demand", "description": "Expected demand per SKU", "columns": "sku,quantity"},
+        {"id": "holding_cost", "description": "Holding cost per SKU", "columns": "sku,cost"}
+      ],
+      "solver_hint": "cbc-mip"
+    }
+  ]
+}

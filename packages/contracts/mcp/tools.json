@@ -1,0 +1,78 @@
+{
+  "server": {
+    "name": "dyocense-decision-kernel",
+    "version": "0.3.0"
+  },
+  "tools": [
+    {
+      "name": "compile",
+      "description": "Compile natural-language goals into OPS JSON",
+      "input_schema": {
+        "$ref": "../schemas/ops.schema.json"
+      }
+    },
+    {
+      "name": "forecast",
+      "description": "Generate naive forecasts for named series",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/ForecastRequest"
+      }
+    },
+    {
+      "name": "policy",
+      "description": "Evaluate policies for OPS payloads",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/PolicyRequest"
+      }
+    },
+    {
+      "name": "optimise",
+      "description": "Optimise OPS into a SolutionPack",
+      "input_schema": {
+        "$ref": "../schemas/solution_pack.schema.json"
+      }
+    },
+    {
+      "name": "explain",
+      "description": "Produce summary narrative for optimisation outputs",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/ExplainRequest"
+      }
+    },
+    {
+      "name": "diagnose",
+      "description": "Provide relaxation suggestions for infeasible runs",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/DiagnoseRequest"
+      }
+    },
+    {
+      "name": "evidence_log",
+      "description": "Persist decision artefacts for later auditing",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/EvidenceRecord"
+      }
+    },
+    {
+      "name": "catalog",
+      "description": "List marketplace items (archetypes, solvers, connectors)",
+      "input_schema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "submit_run",
+      "description": "Execute the full decision pipeline",
+      "input_schema": {
+        "$ref": "../openapi/decision-kernel.yaml#/components/schemas/RunRequest"
+      }
+    },
+    {
+      "name": "list_runs",
+      "description": "List recent orchestration runs",
+      "input_schema": {
+        "type": "null"
+      }
+    }
+  ]
+}

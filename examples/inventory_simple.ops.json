@@ -1,0 +1,53 @@
+{
+  "metadata": {
+    "ops_version": "1.0.0",
+    "problem_type": "inventory_planning",
+    "tenant_id": "demo-tenant",
+    "project_id": "inventory-mvp",
+    "run_tags": [
+      "phase0",
+      "sample"
+    ]
+  },
+  "objective": {
+    "sense": "min",
+    "expression": "sum_{sku} holding_cost[sku] * stock[sku]"
+  },
+  "decision_variables": [
+    {
+      "name": "stock",
+      "type": "integer",
+      "lb": 0,
+      "ub": 1000,
+      "index_sets": [
+        "sku"
+      ]
+    }
+  ],
+  "parameters": {
+    "holding_cost": {
+      "widget": 2.5,
+      "gadget": 1.75
+    },
+    "demand": {
+      "widget": 120,
+      "gadget": 95
+    }
+  },
+  "constraints": [
+    {
+      "name": "demand_satisfaction",
+      "for_all": "sku",
+      "expression": "stock[sku] >= demand[sku]"
+    }
+  ],
+  "kpis": [
+    {
+      "name": "total_holding_cost",
+      "expression": "sum_{sku} holding_cost[sku] * stock[sku]"
+    }
+  ],
+  "validation_notes": [
+    "Placeholder example used for schema validation."
+  ]
+}
