@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🧭 Dyocense Decision Kernel Platform (DDKP)
 **Open-standard Decision Intelligence for the Agent Economy**
 
@@ -151,3 +152,22 @@ Set `SKIP_PIP=1` when invoking make targets if you have already installed depend
 - `vision.md` — Long-term vision, roadmap, and differentiation pillars.
 
 Future phases will expand each service directory with implementation guides, add SDKs under `packages/`, and introduce IaC in `infra/`.
+=======
+# The open-standard Decision Kernel that powers intelligent planning for any AI agent.
+
+This repo contains high‑level architecture, data model, tool schemas, and storyboards for the Dyocense platform.
+
+- **Platform core**: Goal → Plan → Execute (domain‑agnostic)
+- **MVP1**: Sports Planner (Parents/Kids)
+- **MVP2**: Restaurant Copilot (Inventory/Waste)
+- **Extensibility**: Packs, Connectors (MCP), Marketplace
+- **Runtime**: 2‑tier (Frontend + Backend) with MongoDB **or** SaaS split (Vercel UI + FastAPI + Postgres).
+
+Quick links:
+- `docs/dyocense_platform_architecture.md`
+- `docs/data_model_domain_agnostic.md`
+- `docs/tool_schemas_and_mcp.md`
+- `docs/mvp1_sports_planner.md`
+- `docs/mvp2_restaurant_copilot.md`
+- `docs/deployment_and_scaling.md`
+>>>>>>> 6cb3ef8471d1c704b9ddb6eaf687a0c68513d6c0
