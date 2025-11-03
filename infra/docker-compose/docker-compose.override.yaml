@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  kernel-api:
+    profiles: ["kernel-services"]
+
+  orchestrator:
+    profiles: ["kernel-services"]
+
+  qdrant:
+    profiles: ["knowledge-plane"]
+
+  postgres-metadata:
+    profiles: ["knowledge-plane"]
+
+  nessie:
+    profiles: ["knowledge-plane"]
+
