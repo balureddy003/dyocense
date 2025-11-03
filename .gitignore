@@ -3,3 +3,21 @@
 artifacts/
 __pycache__/
 *.pyc
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build output
+dist/
+build/
+.next/
+out/
