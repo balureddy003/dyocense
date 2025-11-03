@@ -22,7 +22,11 @@ def test_compile_returns_valid_ops():
     data = response.json()
     assert "ops" in data
     assert "version_id" in data
+    assert "goal_pack" in data
     metadata = data["ops"]["metadata"]
+    goal_pack = data["goal_pack"]
+    assert goal_pack["version_id"] == data["version_id"]
+    assert goal_pack["tenant_id"] == "demo-tenant"
     assert metadata["tenant_id"] == "demo-tenant"
     assert metadata["project_id"] == "proj"
     assert data["ops"]["objective"]["sense"] == "min"
@@ -44,8 +48,11 @@ def test_end_to_end_flow():
         json={"goal": "Reduce holding costs", "tenant_id": "demo-tenant", "project_id": "p1"},
         headers=headers,
     )
-    ops = compile_response.json()["ops"]
-    version_id = compile_response.json()["version_id"]
+    compile_payload = compile_response.json()
+    ops = compile_payload["ops"]
+    version_id = compile_payload["version_id"]
+    goal_pack = compile_payload["goal_pack"]
+    assert goal_pack["version_id"] == version_id
 
     forecast_response = forecast_client.post(
         "/v1/forecast",
@@ -112,6 +119,7 @@ def test_end_to_end_flow():
             "ops": ops,
             "solution": solution,
             "explanation": explanation,
+            "goal_pack": goal_pack,
             "facts": [
                 {
                     "category": "policy",
@@ -134,6 +142,7 @@ def test_end_to_end_flow():
     assert evidence_fetch.status_code == 200
     fetched = evidence_fetch.json()
     assert fetched["run_id"] == stored["run_id"]
+    assert fetched.get("goal_pack", {}).get("version_id") == version_id
 
     evidence_list = evidence_client.get(
         "/v1/evidence?limit=5", headers=headers

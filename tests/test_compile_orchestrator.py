@@ -40,3 +40,5 @@ def test_orchestrator_retrieves_snippets_and_selects_playbook(monkeypatch):
     assert base_ops["metadata"]["knowledge_snippets"] == ["doc-123"]
     assert base_ops["metadata"]["playbook_id"] == "inventory_baseline"
     assert artifacts.llm_ops is None
+    assert artifacts.source == "disabled"
+    assert artifacts.duration_seconds == 0.0

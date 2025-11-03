@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import os
+from datetime import datetime, timezone
 import uuid
 from typing import Any, Dict
 
@@ -10,6 +13,7 @@ from pydantic import BaseModel, Field
 from packages.kernel_common import load_schema
 from packages.kernel_common.deps import require_auth
 from packages.kernel_common.logging import configure_logging
+from packages.kernel_common.telemetry import set_span_attributes, start_span
 from packages.compiler_pipeline import CompileOrchestrator, CompileRequestContext, CompileTelemetry
 from packages.knowledge import KnowledgeClient
 from packages.playbooks import PlaybookRegistry, load_default_playbooks
@@ -28,50 +32,74 @@ def build_ops_document(
     project_id: str,
     data_inputs: Dict[str, Any] | None = None,
     use_llm: bool = True,
-) -> dict:
-    base_ops = _base_metadata(goal, tenant_id, project_id)
-    context = CompileRequestContext(
-        goal=goal,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        data_inputs=data_inputs,
-        use_llm=use_llm,
-    )
-    artifacts = orchestrator.generate_ops(context, base_ops)
-    logger.debug(
-        "Compiling goal '%s' for tenant=%s project=%s (use_llm=%s)",
-        goal,
-        tenant_id,
-        project_id,
-        use_llm,
-    )
-    ops_document: dict
-    if artifacts.llm_ops:
-        merged = _merge_ops(base_ops, artifacts.llm_ops)
-        if _has_required_sections(merged):
-            logger.info(
-                "Generated OPS via LLM for goal '%s' (playbook=%s snippets=%s)",
-                goal,
-                getattr(artifacts.playbook, "id", None),
-                len(artifacts.snippets),
-            )
-            ops_document = merged
+) -> tuple[dict, dict]:
+    with start_span(
+        "compiler.build_ops",
+        {
+            "goal.length": len(goal or ""),
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "use_llm": use_llm,
+        },
+    ) as span:
+        base_ops = _base_metadata(goal, tenant_id, project_id)
+        context = CompileRequestContext(
+            goal=goal,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            data_inputs=data_inputs,
+            use_llm=use_llm,
+        )
+        artifacts = orchestrator.generate_ops(context, base_ops)
+        logger.debug(
+            "Compiling goal '%s' for tenant=%s project=%s (use_llm=%s)",
+            goal,
+            tenant_id,
+            project_id,
+            use_llm,
+        )
+        ops_document: dict
+        if artifacts.llm_ops:
+            merged = _merge_ops(base_ops, artifacts.llm_ops)
+            if _has_required_sections(merged):
+                logger.info(
+                    "Generated OPS via LLM for goal '%s' (playbook=%s snippets=%s)",
+                    goal,
+                    getattr(artifacts.playbook, "id", None),
+                    len(artifacts.snippets),
+                )
+                ops_document = merged
+                set_span_attributes(
+                    span,
+                    {
+                        "compiler.playbook_id": getattr(artifacts.playbook, "id", None),
+                        "compiler.snippet_count": len(artifacts.snippets),
+                        "compiler.source": "llm",
+                    },
+                )
+            else:
+                logger.warning("LLM OPS missing sections; using stub fallback")
+                ops_document = _stub_ops(goal, tenant_id, project_id, data_inputs, artifacts)
+                set_span_attributes(span, {"compiler.source": "fallback_incomplete"})
         else:
-            logger.warning("LLM OPS missing sections; using stub fallback")
+            logger.warning("LLM compiler unavailable or failed; returning stub OPS")
             ops_document = _stub_ops(goal, tenant_id, project_id, data_inputs, artifacts)
-    else:
-        logger.warning("LLM compiler unavailable or failed; returning stub OPS")
-        ops_document = _stub_ops(goal, tenant_id, project_id, data_inputs, artifacts)
+            set_span_attributes(span, {"compiler.source": "fallback"})
 
-    version_id = _record_version(
-        ops_document,
-        goal,
-        tenant_id,
-        project_id,
-        data_inputs,
-    )
-    ops_document.setdefault("metadata", {})["version_id"] = version_id
-    return ops_document
+        goal_version = _record_version(
+            ops_document,
+            goal,
+            tenant_id,
+            project_id,
+            data_inputs,
+            artifacts,
+        )
+        version_id = goal_version.version_id
+        ops_document.setdefault("metadata", {})["version_id"] = version_id
+        set_span_attributes(span, {"compiler.version_id": version_id})
+        goal_pack = _build_goal_pack(goal_version)
+        set_span_attributes(span, {"compiler.goal_hash": goal_version.goal_hash})
+        return ops_document, goal_pack
 
 
 app = FastAPI(
@@ -93,10 +121,15 @@ class CompileRequest(BaseModel):
 
 class CompileResponse(BaseModel):
     ops: dict = Field(..., description="Optimization Problem Spec JSON document.")
+    goal_pack: dict = Field(..., description="Immutable GoalPack record emitted for this compile.")
     version_id: str = Field(..., description="Version identifier recorded in ledger.")
     schema: dict = Field(
         default_factory=lambda: load_schema("ops.schema.json"),
         description="Inline OPS schema snapshot.",
+    )
+    goalpack_schema: dict = Field(
+        default_factory=lambda: load_schema("goalpack.schema.json"),
+        description="GoalPack contract snapshot for clients.",
     )
 
 
@@ -104,7 +137,7 @@ class CompileResponse(BaseModel):
 def compile_goal(body: CompileRequest, identity: dict = Depends(require_auth)) -> CompileResponse:
     """Produce an OPS document using the Phase 2 compiler pipeline."""
     tenant_id = body.tenant_id or identity["tenant_id"]
-    ops_document = build_ops_document(
+    ops_document, goal_pack = build_ops_document(
         body.goal,
         tenant_id,
         body.project_id,
@@ -116,8 +149,8 @@ def compile_goal(body: CompileRequest, identity: dict = Depends(require_auth)) -
         body.goal,
         tenant_id,
     )
-    version_id = ops_document["metadata"].get("version_id")
-    return CompileResponse(ops=ops_document, version_id=version_id)
+    version_id = goal_pack["version_id"]
+    return CompileResponse(ops=ops_document, goal_pack=goal_pack, version_id=version_id)
 
 
 def _base_metadata(goal: str, tenant_id: str, project_id: str) -> dict:
@@ -251,21 +284,69 @@ def _record_version(
     tenant_id: str,
     project_id: str,
     data_inputs: Dict[str, Any] | None,
-) -> str:
+    artifacts,
+) -> GoalVersion:
     version_id = ops.get("metadata", {}).get("version_id") or f"ver-{uuid.uuid4().hex[:12]}"
     knowledge_snippets = ops.get("metadata", {}).get("knowledge_snippets", [])
     playbook_id = ops.get("metadata", {}).get("playbook_id")
-    GLOBAL_LEDGER.record(
-        GoalVersion(
-            version_id=version_id,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            goal=goal,
-            ops=copy.deepcopy(ops),
-            data_inputs=copy.deepcopy(data_inputs) if data_inputs else {},
-            playbook_id=playbook_id,
-            knowledge_snippets=list(knowledge_snippets),
-            parent_version_id=None,
-        )
+    created_at = datetime.now(timezone.utc)
+    goal_hash = hashlib.sha256((goal or "").encode("utf-8")).hexdigest()
+    dataset_version = os.getenv("ICEBERG_SNAPSHOT") or os.getenv("DATASET_VERSION")
+    retrieval = {
+        "snippet_ids": list(knowledge_snippets),
+        "snippet_count": len(knowledge_snippets),
+    }
+    if dataset_version:
+        retrieval["dataset_version"] = dataset_version
+    provenance = {
+        "compiler_source": artifacts.source,
+        "model": artifacts.model_name,
+        "duration_seconds": artifacts.duration_seconds,
+    }
+    version = GoalVersion(
+        version_id=version_id,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        goal=goal,
+        ops=copy.deepcopy(ops),
+        data_inputs=copy.deepcopy(data_inputs) if data_inputs else None,
+        playbook_id=playbook_id,
+        knowledge_snippets=list(knowledge_snippets),
+        parent_version_id=None,
+        label=None,
+        created_at=created_at,
+        goal_hash=goal_hash,
+        retrieval=retrieval,
+        provenance=provenance,
     )
-    return version_id
+    GLOBAL_LEDGER.record(version)
+    return version
+
+
+def _build_goal_pack(version: GoalVersion) -> dict:
+    created_at = version.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    goal_pack = {
+        "version_id": version.version_id,
+        "goal": version.goal,
+        "tenant_id": version.tenant_id,
+        "project_id": version.project_id,
+        "created_at": created_at.isoformat(),
+        "goal_hash": version.goal_hash,
+        "ops": copy.deepcopy(version.ops),
+        "data_inputs": copy.deepcopy(version.data_inputs) if version.data_inputs else None,
+        "retrieval": version.retrieval,
+        "provenance": version.provenance,
+    }
+    if version.playbook_id:
+        goal_pack["playbook"] = {
+            "id": version.playbook_id,
+            "version": version.ops.get("metadata", {}).get("playbook_version"),
+        }
+    if version.parent_version_id:
+        goal_pack["scenario"] = {
+            "parent_version_id": version.parent_version_id,
+            "label": version.label,
+        }
+    return goal_pack

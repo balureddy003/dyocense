@@ -37,6 +37,9 @@ class CompileArtifacts:
     snippets: list[dict]
     playbook: DecisionPlaybook | None
     llm_ops: dict | None
+    duration_seconds: float
+    model_name: str | None
+    source: str
 
 
 class CompileOrchestrator:
@@ -66,7 +69,14 @@ class CompileOrchestrator:
 
         if not context.use_llm:
             self._telemetry.record("llm_disabled", goal=context.goal)
-            return CompileArtifacts(snippets=snippets, playbook=playbook, llm_ops=None)
+            return CompileArtifacts(
+                snippets=snippets,
+                playbook=playbook,
+                llm_ops=None,
+                duration_seconds=0.0,
+                model_name=None,
+                source="disabled",
+            )
 
         prompt_start = time.perf_counter()
         llm_ops = generate_ops_llm(
@@ -87,9 +97,23 @@ class CompileOrchestrator:
             model=model,
         )
         if llm_ops:
-            return CompileArtifacts(snippets=snippets, playbook=playbook, llm_ops=llm_ops)
+            return CompileArtifacts(
+                snippets=snippets,
+                playbook=playbook,
+                llm_ops=llm_ops,
+                duration_seconds=duration,
+                model_name=model,
+                source="llm",
+            )
         self._telemetry.record("llm_compile_failed", goal=context.goal)
-        return CompileArtifacts(snippets=snippets, playbook=playbook, llm_ops=None)
+        return CompileArtifacts(
+            snippets=snippets,
+            playbook=playbook,
+            llm_ops=None,
+            duration_seconds=duration,
+            model_name=model,
+            source="fallback",
+        )
 
     def _retrieve_context(self, context: CompileRequestContext, base_ops: dict) -> list[dict]:
         request = KnowledgeRetrievalRequest(

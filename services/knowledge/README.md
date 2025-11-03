@@ -11,6 +11,8 @@ All endpoints require bearer tokens (see `packages/kernel_common.deps.require_au
 
 ## Configuration
 - The default runtime keeps data in-process using `InMemoryKnowledgeStore`. Configure a remote store by injecting `KNOWLEDGE_SERVICE_URL` into clients (e.g., compiler) or swapping the store implementation.
+- To enable vector search with Qdrant, set `KNOWLEDGE_BACKEND=qdrant` alongside `QDRANT_URL` (and optionally `QDRANT_API_KEY`/`QDRANT_COLLECTION`). The Docker Compose stack exposes Qdrant on `http://localhost:6333`.
+- When Qdrant is active and Azure embeddings are configured (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_EMBED_DEPLOYMENT`), the knowledge store will automatically index text with Azure OpenAI embeddings instead of the default hash vectors.
 - Future phases will connect to MinIO + Iceberg for raw datasets and Qdrant/Neo4j for vector/graph retrieval.
 
 ## Local Usage

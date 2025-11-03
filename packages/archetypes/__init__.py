@@ -41,7 +41,7 @@ def build_ops_from_archetype(archetype_id: str, goal: str, tenant_id: str, proje
     if not archetype:
         raise ValueError(f"Unknown archetype '{archetype_id}'")
 
-    ops = build_ops_document(
+    ops, _goal_pack = build_ops_document(
         goal,
         tenant_id,
         project_id,

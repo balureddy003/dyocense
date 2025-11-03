@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,4 +25,12 @@ class GoalVersion(BaseModel):
         description="Friendly label capturing scenario name or checkpoint description.",
     )
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
+    goal_hash: str = Field(..., description="SHA256 hash of the goal text for deduplication.")
+    retrieval: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Metadata about knowledge snippets and dataset versions used during compile.",
+    )
+    provenance: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provenance information including compiler source and model name.",
+    )

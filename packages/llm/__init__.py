@@ -61,6 +61,8 @@ def _invoke_llm(prompt: str) -> Optional[str]:
         return _invoke_openai(prompt)
     if provider == "ollama":
         return _invoke_ollama(prompt)
+    if provider == "azure":
+        return _invoke_azure_openai(prompt)
     return None
 
 
@@ -81,6 +83,37 @@ def _invoke_openai(prompt: str) -> Optional[str]:
         return (completion.output_text or "").strip()
     except Exception as exc:
         logger.warning("OpenAI invocation failed: %s", exc)
+        return None
+
+
+def _invoke_azure_openai(prompt: str) -> Optional[str]:  # pragma: no cover - optional dependency
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    if not (endpoint and api_key and deployment):
+        logger.warning("Azure OpenAI environment variables missing; skipping invocation")
+        return None
+
+    try:
+        from azure.ai.openai import OpenAIClient  # type: ignore
+        from azure.core.credentials import AzureKeyCredential  # type: ignore
+    except ImportError:
+        logger.warning("azure-ai-openai package not installed; cannot invoke Azure OpenAI")
+        return None
+
+    try:
+        client = OpenAIClient(endpoint=endpoint, credential=AzureKeyCredential(api_key))
+        response = client.get_completions(
+            deployment_id=deployment,
+            prompt=prompt,
+            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.0")),
+            max_tokens=int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048")),
+        )
+        if not response.choices:
+            return None
+        return (response.choices[0].text or "").strip()
+    except Exception as exc:
+        logger.warning("Azure OpenAI invocation failed: %s", exc)
         return None
 
 

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dyocense.dev/goalpack.schema.json",
+  "title": "GoalPack",
+  "description": "Canonical record emitted whenever a natural-language goal is compiled into an OPS document.",
+  "type": "object",
+  "required": [
+    "version_id",
+    "goal",
+    "tenant_id",
+    "project_id",
+    "created_at",
+    "ops",
+    "provenance"
+  ],
+  "properties": {
+    "version_id": {
+      "type": "string",
+      "description": "Unique identifier for this goal version (e.g. ver-abc123)."
+    },
+    "goal": {
+      "type": "string",
+      "description": "Original natural-language goal submitted by the user."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant owning the goal."
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Project or workspace identifier scoped under the tenant."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the goal version was created (UTC)."
+    },
+    "goal_hash": {
+      "type": "string",
+      "description": "Stable hash of the goal text (SHA256 hex) for deduplication.",
+      "minLength": 16
+    },
+    "ops": {
+      "description": "Optimization Problem Spec generated for this version.",
+      "$ref": "./ops.schema.json"
+    },
+    "playbook": {
+      "type": "object",
+      "description": "Playbook guidance applied during compilation.",
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "required": ["id", "version"],
+      "additionalProperties": false
+    },
+    "retrieval": {
+      "type": "object",
+      "description": "Context retrieved from the knowledge plane.",
+      "properties": {
+        "snippet_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "snippet_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dataset_version": {
+          "type": "string",
+          "description": "Optional dataset version or Iceberg snapshot ID."
+        }
+      },
+      "additionalProperties": false
+    },
+    "data_inputs": {
+      "type": ["object", "null"],
+      "description": "Structured inputs supplied alongside the goal."
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Scenario metadata when this version derives from another goal.",
+      "properties": {
+        "parent_version_id": { "type": "string" },
+        "label": { "type": "string" }
+      },
+      "required": ["parent_version_id"],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Compilation provenance (model + runtime).",
+      "properties": {
+        "compiler_source": {
+          "type": "string",
+          "description": "Source of OPS (llm, fallback, clone)."
+        },
+        "model": {
+          "type": "string",
+          "description": "LLM or solver model used during compile."
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": ["compiler_source"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

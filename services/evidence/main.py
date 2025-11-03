@@ -39,6 +39,10 @@ class EvidenceRecord(BaseModel):
         default=None,
         description="Optional compliance facts (category, statement, status, source, metadata).",
     )
+    goal_pack: dict | None = Field(
+        default=None,
+        description="Optional GoalPack record associated with the run.",
+    )
 
 
 class EvidenceResponse(BaseModel):

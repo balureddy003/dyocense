@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional
 
@@ -66,6 +67,16 @@ class GoalVersionLedger:
             pass
 
     def _hydrate(self, document: dict) -> None:
+        document = dict(document)
+        document.setdefault("goal_hash", hashlib.sha256(document.get("goal", "").encode("utf-8")).hexdigest())
+        if "retrieval" not in document:
+            snippets = document.get("knowledge_snippets", [])
+            document["retrieval"] = {
+                "snippet_ids": snippets,
+                "snippet_count": len(snippets),
+            }
+        if "provenance" not in document:
+            document["provenance"] = {"compiler_source": "unknown", "model": None, "duration_seconds": 0.0}
         try:
             version = GoalVersion.model_validate(document)
         except Exception:  # pragma: no cover - malformed documents ignored

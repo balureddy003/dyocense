@@ -11,6 +11,9 @@ def test_record_and_annotate_version():
         data_inputs={},
         playbook_id=None,
         knowledge_snippets=[],
+        goal_hash="hash",
+        retrieval={"snippet_ids": [], "snippet_count": 0},
+        provenance={"compiler_source": "llm", "model": "test", "duration_seconds": 0.0},
     )
 
     GLOBAL_LEDGER.record(version)

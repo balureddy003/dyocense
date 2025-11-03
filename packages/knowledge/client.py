@@ -15,6 +15,7 @@ from .models import (
     KnowledgeRetrievalResponse,
 )
 from .store import BaseKnowledgeStore, InMemoryKnowledgeStore
+from .vector_store import QdrantKnowledgeStore
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,10 @@ class KnowledgeClient:
         timeout: float = 30.0,
     ) -> None:
         self._base_url = base_url or os.getenv("KNOWLEDGE_SERVICE_URL")
-        self._store = store or InMemoryKnowledgeStore()
+        if store is not None:
+            self._store = store
+        else:
+            self._store = self._init_store_from_env()
         self._timeout = timeout
 
     def ingest(self, document: KnowledgeDocument) -> KnowledgeIngestResponse:
@@ -50,6 +54,18 @@ class KnowledgeClient:
             return self._retrieve_http(request)
         return self._store.retrieve(request)
 
+    def _init_store_from_env(self) -> BaseKnowledgeStore:
+        backend = os.getenv("KNOWLEDGE_BACKEND", "memory").lower()
+        if backend == "qdrant":
+            url = os.getenv("QDRANT_URL", "http://localhost:6333")
+            api_key = os.getenv("QDRANT_API_KEY")
+            collection = os.getenv("QDRANT_COLLECTION", "dyocense_ops_context")
+            try:
+                return QdrantKnowledgeStore(url=url, api_key=api_key, collection=collection)
+            except Exception as exc:  # pragma: no cover - optional dependency
+                logger.warning("Falling back to in-memory knowledge store (qdrant unavailable: %s)", exc)
+        return InMemoryKnowledgeStore()
+
     def _ingest_http(self, document: KnowledgeDocument) -> KnowledgeIngestResponse:
         url = f"{self._base_url.rstrip('/')}/v1/datasets/documents"
         try:
@@ -69,4 +85,3 @@ class KnowledgeClient:
         except Exception as exc:
             logger.warning("Knowledge retrieval over HTTP failed: %s", exc)
             raise
-

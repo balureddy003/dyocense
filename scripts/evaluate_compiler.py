@@ -44,15 +44,16 @@ def evaluate(records: List[Dict], tenant_id: str, project_id: str) -> Dict[str, 
     for idx, record in enumerate(records, start=1):
         goal = record.get("goal")
         data_inputs = record.get("data_inputs")
-        ops = build_ops_document(goal, tenant_id, f"{project_id}-{idx}", data_inputs=data_inputs)
+        ops, goal_pack = build_ops_document(goal, tenant_id, f"{project_id}-{idx}", data_inputs=data_inputs)
         ok = _has_required_sections(ops)
         if ok:
             successes += 1
         outputs.append({
             "goal": goal,
             "success": ok,
-            "version_id": ops.get("metadata", {}).get("version_id"),
+            "version_id": goal_pack.get("version_id"),
             "ops": ops,
+            "goal_pack": goal_pack,
         })
     return {
         "total": len(records),

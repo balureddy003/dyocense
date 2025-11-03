@@ -41,6 +41,7 @@ Everything is **contract‑first** (OpenAPI + JSON‑Schema), **observable** (Op
 - **Scenario**: Branching what-if manager that clones goal versions, applies overrides, and diffs outcomes
 - **Evidence Graph**: Neo4j Community (current implementation; JanusGraph adapter on backlog)
 - **Knowledge**: Dataset catalog + retrieval layer (MinIO/Iceberg + Qdrant fallback)
+- **Metadata Catalog**: Project Nessie + OpenMetadata over Postgres
 - **Trust & Facts**: a1facts-inspired registry attaching compliance statements to runs
 - **Marketplace**: Catalog of archetypes/solvers/connectors served via REST/OCI
 - **Orchestrator**: Background workflow that drives compile→forecast→policy→optimise→diagnose→explain→evidence
@@ -49,10 +50,14 @@ Everything is **contract‑first** (OpenAPI + JSON‑Schema), **observable** (Op
 
 ### Storage (Free OSS)
 - **MongoDB Community**: metadata, runs, tenancy
+- **MongoDB Collections**: goal version ledger + compliance facts registry
+- **Postgres (metadata)**: Iceberg/Nessie + OpenMetadata store
 - **MinIO**: artifacts/datasets (S3 compatible)
 - **Redis OSS**: caching, small queues
 - **Neo4j CE**: evidence/ontology graph (JanusGraph adapter follows once the graph abstraction stabilises)
 - **NATS JetStream** (or Apache Kafka OSS): events bus (CloudEvents payloads)
+
+See [data-foundation.md](./data-foundation.md) for deployment details covering Iceberg/Nessie, Qdrant, and OpenMetadata integration.
 
 ---
 

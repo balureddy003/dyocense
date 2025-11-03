@@ -7,6 +7,7 @@ the system can scale toward external stores such as MinIO + Qdrant later.
 
 from .client import KnowledgeClient
 from .store import InMemoryKnowledgeStore
+from .vector_store import QdrantKnowledgeStore
 from .models import (
     KnowledgeDocument,
     KnowledgeIngestResponse,
@@ -23,4 +24,5 @@ __all__ = [
     "KnowledgeRetrievalRequest",
     "KnowledgeRetrievalResponse",
     "KnowledgeSnippet",
+    "QdrantKnowledgeStore",
 ]
