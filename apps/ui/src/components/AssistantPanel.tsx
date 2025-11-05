@@ -89,55 +89,59 @@ export const AssistantPanel = ({ playbook }: AssistantPanelProps) => {
         </ul>
       </section>
 
-      <section className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-gray-50">
-        <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          <MessageSquareMore size={14} /> Conversation
-        </div>
-        <div className="space-y-3">
-          {messages.map((msg, idx) => (
-            <div
-              key={`${msg.role}-${idx}`}
-              className={`p-3 rounded-xl text-sm leading-5 shadow-sm max-w-full ${
-                msg.role === "user"
-                  ? "bg-blue-50 text-blue-900 ml-auto"
-                  : "bg-white text-gray-800 border border-gray-100"
-              }`}
-            >
-              {msg.content}
-            </div>
-          ))}
-          {loading && (
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <Loader2 size={14} className="animate-spin" /> Drafting response…
-            </div>
-          )}
-        </div>
-      </section>
+      <div className="flex-1 bg-gray-50 flex flex-col">
+        <section className="flex-1 overflow-y-auto px-5 pt-4 pb-6 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <MessageSquareMore size={14} /> Conversation
+          </div>
+          <div className="space-y-3">
+            {messages.map((msg, idx) => (
+              <div
+                key={`${msg.role}-${idx}`}
+                className={`p-3 rounded-xl text-sm leading-5 shadow-sm max-w-full ${
+                  msg.role === "user"
+                    ? "bg-blue-50 text-blue-900 ml-auto"
+                    : "bg-white text-gray-800 border border-gray-100"
+                }`}
+              >
+                {msg.content}
+              </div>
+            ))}
+            {loading && (
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <Loader2 size={14} className="animate-spin" /> Drafting response…
+              </div>
+            )}
+          </div>
+        </section>
 
-      <form
-        className="px-5 py-4 border-t bg-white flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!loading && input.trim()) {
-            sendMessage(input);
-            setInput("");
-          }
-        }}
-      >
-        <input
-          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-          placeholder="Ask anything about the playbook…"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:bg-gray-300"
-          disabled={loading}
+        <form
+          className="px-5 pt-3 pb-4 border-t border-gray-200 bg-white shadow-[0_-12px_24px_-20px_rgba(15,23,42,0.35)]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!loading && input.trim()) {
+              sendMessage(input);
+              setInput("");
+            }
+          }}
         >
-          Send
-        </button>
-      </form>
+          <div className="flex gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-2.5">
+            <input
+              className="flex-1 text-sm bg-transparent outline-none"
+              placeholder="Ask anything about the playbook…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-semibold disabled:bg-gray-300"
+              disabled={loading}
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      </div>
     </aside>
   );
 };

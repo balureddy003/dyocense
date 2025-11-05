@@ -38,6 +38,7 @@ export interface EvidenceItem {
   type: string;
   summary: string;
   link?: string;
+  storedAt?: string;
 }
 
 export interface PlaybookHistoryEntry {
@@ -121,8 +122,27 @@ function formatKpis(kpis?: Record<string, number>, fallback = FALLBACK_PLAYBOOK.
     }));
 }
 
+const parseDeltaText = (text: string): Record<string, string> => {
+  const entries = text
+    .split(/[,;\n]/)
+    .map((piece) => piece.trim())
+    .filter(Boolean);
+  const delta: Record<string, string> = {};
+  entries.forEach((entry) => {
+    const parts = entry.split(/[:=]/);
+    if (parts.length >= 2) {
+      const key = parts[0].trim().replace(/\s+/g, "_").toLowerCase();
+      const value = parts.slice(1).join(":").trim();
+      if (key && value) {
+        delta[key] = value;
+      }
+    }
+  });
+  return delta;
+};
+
 function mapWhatIfs(
-  source?: Array<string | { title?: string; summary?: string }>,
+  source?: Array<string | { title?: string; summary?: string; delta?: Record<string, unknown>; deltas?: Record<string, unknown>; delta_kpis?: Record<string, unknown> }>,
   fallback = FALLBACK_PLAYBOOK.whatIfs
 ): WhatIfScenario[] {
   if (!source || !source.length) return fallback;
@@ -131,18 +151,32 @@ function mapWhatIfs(
       return {
         title: `Scenario ${index + 1}`,
         summary: item,
-        delta: {},
+        delta: parseDeltaText(item),
       };
     }
+    const summary = item.summary || "";
+    const candidateDelta =
+      item.delta || item.deltas || item.delta_kpis || (summary ? parseDeltaText(summary) : {});
+    const normalisedDelta = Object.entries(candidateDelta || {}).reduce<Record<string, string>>(
+      (acc, [key, value]) => {
+        const label = key.replace(/[_-]+/g, " ");
+        acc[label] = typeof value === "number" ? value.toFixed(2) : String(value);
+        return acc;
+      },
+      {}
+    );
     return {
       title: item.title || `Scenario ${index + 1}`,
-      summary: item.summary || "",
-      delta: {},
+      summary,
+      delta: Object.keys(normalisedDelta).length ? normalisedDelta : parseDeltaText(summary),
     };
   });
 }
 
-function mapArtifacts(artifacts: Record<string, any> | undefined): EvidenceItem[] {
+function mapArtifacts(
+  artifacts: Record<string, any> | undefined,
+  defaults?: { stored_at?: string }
+): EvidenceItem[] {
   if (!artifacts) return [];
   return Object.entries(artifacts).map(([key, value]) => {
     const info = value ?? {};
@@ -153,6 +187,7 @@ function mapArtifacts(artifacts: Record<string, any> | undefined): EvidenceItem[
       type: info.type || info.format || "artifact",
       summary: info.description || info.summary || "Artifact captured for this run.",
       link,
+      storedAt: info.stored_at || defaults?.stored_at,
     };
   });
 }
@@ -194,6 +229,19 @@ function composePlaybook(run: DyocenseRun | null, evidenceItems: EvidenceItem[])
   };
 
   const evidence = evidenceItems.length ? evidenceItems : FALLBACK_PLAYBOOK.evidence;
+  const runHistory = buildHistory(run);
+  const evidenceHistory: PlaybookHistoryEntry[] = evidence
+    .filter((item) => item.storedAt)
+    .map((item) => ({
+      timestamp: item.storedAt as string,
+      event: `Evidence captured: ${item.name}`,
+      author: "Evidence service",
+    }));
+  const history = [...runHistory, ...evidenceHistory].sort((a, b) => {
+    const aTime = new Date(a.timestamp).getTime();
+    const bTime = new Date(b.timestamp).getTime();
+    return bTime - aTime;
+  });
 
   return {
     title: run.goal || FALLBACK_PLAYBOOK.title,
@@ -204,7 +252,7 @@ function composePlaybook(run: DyocenseRun | null, evidenceItems: EvidenceItem[])
     unscheduled: FALLBACK_PLAYBOOK.unscheduled,
     notes: FALLBACK_PLAYBOOK.notes,
     itinerary: FALLBACK_PLAYBOOK.itinerary,
-    history: buildHistory(run),
+    history: history.length ? history : FALLBACK_PLAYBOOK.history,
     evidence,
   };
 }
@@ -267,19 +315,21 @@ export const usePlaybook = () => {
         const run = await getRun<DyocenseRun>(runId, FALLBACK_RUN);
         let evidence: EvidenceItem[] = [];
         try {
-          const evidenceResponse = await getEvidence<{ artifacts?: Record<string, any> }>(
-            runId,
-            { artifacts: {} }
-          );
-          evidence = mapArtifacts(evidenceResponse.artifacts);
+          const evidenceResponse = await getEvidence<{
+            artifacts?: Record<string, any>;
+            stored_at?: string;
+          }>(runId, { artifacts: {} });
+          evidence = mapArtifacts(evidenceResponse.artifacts, {
+            stored_at: (evidenceResponse as any).stored_at,
+          });
         } catch (err) {
           console.warn("Falling back to list evidence", err);
           try {
-            const listResponse = await listEvidence<{ items?: Array<{ artifacts?: Record<string, any> }> }>(
-              { items: [] }
-            );
+            const listResponse = await listEvidence<{
+              items?: Array<{ artifacts?: Record<string, any>; stored_at?: string; run_id?: string }>;
+            }>({ items: [] });
             const matching = listResponse.items?.find((item: any) => item.run_id === runId);
-            evidence = mapArtifacts(matching?.artifacts);
+            evidence = mapArtifacts(matching?.artifacts, { stored_at: matching?.stored_at });
           } catch (e) {
             console.warn("Evidence fallback failed", e);
             evidence = [];

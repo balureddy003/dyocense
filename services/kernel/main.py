@@ -13,8 +13,10 @@ from services.explainer.main import app as explainer_app
 from services.evidence.main import app as evidence_app
 from services.marketplace.main import app as marketplace_app
 from services.orchestrator.main import app as orchestrator_app
+from services.accounts.main import app as accounts_app
 
 SUB_APPS = [
+    accounts_app,
     compiler_app,
     forecast_app,
     policy_app,
@@ -41,7 +43,16 @@ app.add_middleware(
 )
 
 for sub_app in SUB_APPS:
-    app.include_router(sub_app.router)
+    # Add each sub-service router and tag its operations with the service title
+    # This keeps a single, flat API surface while grouping docs nicely.
+    try:
+        service_tag = getattr(sub_app, "title", None) or sub_app.__class__.__name__
+        app.include_router(sub_app.router, tags=[service_tag])
+    except Exception as e:
+        # Fail-soft: if a sub-app fails to attach (e.g., optional deps), continue with others
+        # This mirrors the platform's graceful degradation pattern.
+        import logging
+        logging.getLogger("kernel").warning(f"Skipping router for sub-app due to error: {e}")
 
 
 @app.get("/healthz", tags=["system"])

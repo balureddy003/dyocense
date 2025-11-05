@@ -1,70 +1,93 @@
-import { useEffect, useState } from "react";
-import { TopNav } from "../components/TopNav";
-import { Header } from "../components/Header";
-import { AssistantPanel } from "../components/AssistantPanel";
-import { ItineraryColumn } from "../components/ItineraryColumn";
-import { InsightsPanel } from "../components/InsightsPanel";
-import { PlanDrawer } from "../components/PlanDrawer";
-import { ExportModal } from "../components/ExportModal";
-import { CreatePlaybook } from "../components/CreatePlaybook";
-import { CreatePlaybookPayload, usePlaybook } from "../hooks/usePlaybook";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { PropsWithChildren } from "react";
+import { LandingPage } from "./LandingPage";
+import { LoginPage } from "./LoginPage";
+import { ProfileSetupPage } from "./ProfileSetupPage";
+import { HomePage } from "./HomePage";
+import { PurchasePage } from "./PurchasePage";
+import { AdminDashboardPage } from "./AdminDashboardPage";
+import { AcceptInvitePage } from "./AcceptInvitePage";
+import { SettingsPage } from "./SettingsPage";
+import { useAuth } from "../context/AuthContext";
 
-export default function App() {
-  const {
-    runs,
-    selectedRunId,
-    playbook,
-    loading,
-    createPlaybook,
-    selectRun,
-  } = usePlaybook();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [mode, setMode] = useState<"create" | "playbook">("create");
+const LoadingScreen = () => (
+  <div className="min-h-screen flex items-center justify-center bg-white text-sm text-gray-500">
+    Preparing your workspace…
+  </div>
+);
 
-  const handleCreate = async (payload: CreatePlaybookPayload) => {
-    await createPlaybook(payload);
-    setMode("playbook");
-  };
+const RequireAuth = ({ children }: PropsWithChildren) => {
+  const { ready, authenticated } = useAuth();
+  const location = useLocation();
 
-  useEffect(() => {
-    if (mode === "create" && runs.length) {
-      setMode("playbook");
-    }
-  }, [mode, runs.length]);
-
-  if (mode === "create") {
-    return (
-      <div className="h-full flex flex-col bg-bg text-gray-900">
-        <TopNav />
-        <CreatePlaybook onSubmit={handleCreate} submitting={loading} />
-      </div>
-    );
+  if (!ready) {
+    return <LoadingScreen />;
   }
 
+  if (!authenticated) {
+    const destination = `${location.pathname}${location.search}`;
+    const redirect = encodeURIComponent(destination || "/home");
+    return <Navigate to={`/login?redirect=${redirect}`} replace />;
+  }
+
+  return <>{children}</>;
+};
+
+const RequireProfile = ({ children }: PropsWithChildren) => {
+  const { profile } = useAuth();
+  const location = useLocation();
+
+  if (!profile && location.pathname !== "/profile") {
+    return <Navigate to="/profile" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+export const App = () => {
   return (
-    <div className="h-full flex flex-col bg-bg text-gray-900">
-      <TopNav />
-      <Header
-        title={playbook.title}
-        onOpenDrawer={() => setDrawerOpen(true)}
-        onOpenExport={() => setExportOpen(true)}
-        onNewPlaybook={() => setMode("create")}
+    <Routes>
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/accept-invite/:inviteId" element={<AcceptInvitePage />} />
+      <Route
+        path="/profile"
+        element={
+          <RequireAuth>
+            <ProfileSetupPage />
+          </RequireAuth>
+        }
       />
-      <div className="flex flex-1 overflow-hidden">
-        <AssistantPanel playbook={playbook} />
-        <ItineraryColumn playbook={playbook} loading={loading} />
-        <InsightsPanel playbook={playbook} />
-      </div>
-      <PlanDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        runs={runs}
-        selectedRunId={selectedRunId}
-        onSelect={selectRun}
-        onCreateNew={() => setMode("create")}
+      <Route
+        path="/home"
+        element={
+          <RequireAuth>
+            <RequireProfile>
+              <HomePage />
+            </RequireProfile>
+          </RequireAuth>
+        }
       />
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} playbook={playbook} />
-    </div>
+      <Route
+        path="/admin"
+        element={
+          <RequireAuth>
+            <AdminDashboardPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <SettingsPage />
+          </RequireAuth>
+        }
+      />
+      <Route path="/buy" element={<PurchasePage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
-}
+};
+
+export default App;

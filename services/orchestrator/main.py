@@ -19,6 +19,21 @@ from services.forecast.main import ForecastRequest, ForecastSeries, compute_fore
 from services.optimiser.main import optimise_ops_document
 from services.policy.main import evaluate_ops_policy
 
+try:  # optional dependency in case accounts service not initialised
+    from packages.accounts.repository import (
+        get_tenant,
+        get_plan,
+        record_playbook_usage,
+        SubscriptionLimitError,
+    )
+except Exception:  # pragma: no cover - optional
+    get_tenant = None
+    get_plan = None
+    record_playbook_usage = None
+
+    class SubscriptionLimitError(Exception):
+        pass
+
 logger = configure_logging("orchestrator-service")
 
 ARTIFACT_ROOT = Path("artifacts/runs")
@@ -83,6 +98,17 @@ def submit_run(
     background_tasks: BackgroundTasks,
     identity: dict = Depends(require_auth),
 ) -> RunResponse:
+    if get_tenant and get_plan:
+        tenant = get_tenant(identity["tenant_id"])
+        if tenant is None:
+            raise HTTPException(status_code=403, detail="Tenant subscription not found.")
+        plan = get_plan(tenant.plan_tier)
+        if tenant.usage.playbooks >= plan.limits.max_playbooks:
+            raise HTTPException(
+                status_code=403,
+                detail="Playbook storage limit reached for your subscription tier.",
+            )
+
     run_id = body.project_id or f"run-{uuid.uuid4().hex[:12]}"
     state = RunState(
         status="pending",
@@ -179,6 +205,11 @@ def _execute_run(run_id: str, request: RunRequest, tenant_id: str) -> None:
             "artifacts": artifacts,
             "evidence": evidence.model_dump(),
         }
+        if record_playbook_usage:
+            try:
+                record_playbook_usage(tenant_id, increment=1)
+            except SubscriptionLimitError as exc:
+                logger.warning("Unable to record playbook usage for tenant %s: %s", tenant_id, exc)
         state.status = "completed"
         logger.info("Run %s completed", run_id)
     except Exception as exc:  # pragma: no cover - ensures failure surfaced

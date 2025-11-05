@@ -1,4 +1,5 @@
-export const API_BASE_URL = import.meta.env.VITE_DYOCENSE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8001";
+export const API_BASE_URL = import.meta.env.VITE_DYOCENSE_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8001";
+export const ADMIN_TENANT_ID = import.meta.env.VITE_ADMIN_TENANT_ID || "admin";
 
 export const DEFAULT_HEADERS: HeadersInit = {
   "Content-Type": "application/json",

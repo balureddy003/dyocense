@@ -11,12 +11,14 @@ import {
 import Keycloak, { KeycloakConfig, KeycloakInstance } from "keycloak-js";
 import { getKeycloakConfig, isKeycloakConfigured } from "../lib/auth";
 import { setAuthToken } from "../lib/config";
+import { getTenantProfile, loginUser, registerUser, fetchUserProfile } from "../lib/api";
 
 export interface AuthUser {
   id: string;
   fullName: string;
   email?: string;
   username?: string;
+  tenantId?: string;
 }
 
 export interface BusinessProfile {
@@ -35,11 +37,16 @@ interface AuthContextValue {
   profile: BusinessProfile | null;
   loadingProfile: boolean;
   login: (redirectTo?: string) => Promise<void>;
+  loginDemo: () => Promise<void>;
+  loginWithToken: (options: TokenLoginOptions) => Promise<void>;
+  loginWithCredentials: (tenantId: string, email: string, password: string) => Promise<void>;
+  registerUserAccount: (tenantId: string, email: string, fullName: string, password: string, temporaryPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (profile: BusinessProfile) => Promise<void>;
   refreshProfile: () => Promise<void>;
   keycloak?: KeycloakInstance;
   usingMock?: boolean;
+  supportsKeycloak: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -80,29 +87,39 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+interface TokenLoginOptions {
+  apiToken: string;
+  tenantId?: string;
+  displayName?: string;
+  email?: string;
+  remember?: boolean;
+}
+
 export const AuthProvider = ({ children }: AuthProviderProps) => {
-  const usingMock = !isKeycloakConfigured();
+  const supportsKeycloak = isKeycloakConfigured();
   const keycloakConfig = useMemo<KeycloakConfig | null>(() => {
-    if (usingMock) return null;
+    if (!supportsKeycloak) return null;
     const env = getKeycloakConfig();
     return {
       url: env.url!,
       realm: env.realm!,
       clientId: env.clientId!,
     };
-  }, [usingMock]);
+  }, [supportsKeycloak]);
 
   const keycloakRef = useRef<KeycloakInstance | null>(null);
 
-  const [ready, setReady] = useState(usingMock);
+  const [ready, setReady] = useState(!supportsKeycloak);
   const [authenticated, setAuthenticated] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [mockSession, setMockSession] = useState(!supportsKeycloak);
+  const [hydratedFromStorage, setHydratedFromStorage] = useState(false);
 
   useEffect(() => {
-    if (usingMock) {
+    if (!supportsKeycloak) {
       setReady(true);
       return;
     }
@@ -131,11 +148,13 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setToken(instance.token ?? null);
             setAuthToken(instance.token ?? null);
             setProfile(readStoredProfile(newUser.id));
+            setMockSession(false);
           } else {
             setUser(null);
             setToken(null);
             setAuthToken(null);
             setProfile(null);
+            setMockSession(false);
           }
         })
         .catch((error) => {
@@ -161,25 +180,189 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setToken(null);
             setAuthToken(null);
             setProfile(null);
+            setMockSession(false);
           });
       };
     }
-  }, [keycloakConfig, usingMock]);
+  }, [keycloakConfig, supportsKeycloak]);
+
+  const loginDemo = useCallback(async () => {
+    const mockUser: AuthUser = {
+      id: "demo-user",
+      fullName: "Demo User",
+      email: "demo@dyocense.dev",
+      username: "demo",
+    };
+    setAuthenticated(true);
+    setUser(mockUser);
+    setToken("demo-mock");
+    setAuthToken("demo-mock");
+    setProfile(readStoredProfile(mockUser.id));
+    setMockSession(true);
+  }, []);
+
+  const loginWithToken = useCallback(
+    async ({ apiToken, tenantId, displayName, email, remember = true }: TokenLoginOptions) => {
+      const trimmedToken = apiToken.trim();
+      if (!trimmedToken) {
+        throw new Error("API token is required.");
+      }
+
+      const provisionalUser: AuthUser = {
+        id: tenantId?.trim() || "manual-tenant",
+        fullName: displayName?.trim() || tenantId?.trim() || "Dyocense Customer",
+        email: email?.trim() || undefined,
+        username: tenantId?.trim() || "customer",
+      };
+
+      setAuthToken(trimmedToken);
+      setToken(trimmedToken);
+      setAuthenticated(true);
+      setUser(provisionalUser);
+      setMockSession(false);
+
+      try {
+        const tenantProfile = await getTenantProfile();
+        const enrichedUser: AuthUser = {
+          id: tenantProfile.tenant_id,
+          fullName: tenantProfile.name || provisionalUser.fullName,
+          email: tenantProfile.owner_email || provisionalUser.email,
+          username: tenantProfile.tenant_id,
+        };
+        setUser(enrichedUser);
+        setProfile({
+          companyName: tenantProfile.name || "",
+          industry: "",
+          teamSize: String(tenantProfile.usage?.members ?? ""),
+          primaryGoal: "",
+          timezone: "",
+        });
+        try {
+          const profile = await fetchUserProfile();
+          setUser({
+            id: profile.user_id,
+            fullName: profile.full_name,
+            email: profile.email,
+            username: profile.email,
+          });
+        } catch (userErr) {
+          console.warn("User profile unavailable for API token", userErr);
+        }
+      } catch (err: any) {
+        console.warn("Failed to load tenant profile", err);
+        if (err?.message?.includes("401") || err?.message?.includes("403")) {
+          setAuthenticated(false);
+          setUser(null);
+          setToken(null);
+          setAuthToken(null);
+          setProfile(null);
+          setMockSession(false);
+          throw new Error("Invalid or expired API token.");
+        }
+      }
+
+      if (remember && typeof window !== "undefined") {
+        window.localStorage.setItem("dyocense-api-token", trimmedToken);
+        if (tenantId?.trim()) {
+          window.localStorage.setItem("dyocense-tenant-id", tenantId.trim());
+        }
+        if (displayName?.trim()) {
+          window.localStorage.setItem("dyocense-user-name", displayName.trim());
+        }
+        if (email?.trim()) {
+          window.localStorage.setItem("dyocense-user-email", email.trim());
+        }
+      } else if (typeof window !== "undefined") {
+        window.localStorage.removeItem("dyocense-api-token");
+        window.localStorage.removeItem("dyocense-tenant-id");
+        window.localStorage.removeItem("dyocense-user-name");
+        window.localStorage.removeItem("dyocense-user-email");
+      }
+    },
+    []
+  );
+
+  const loginWithCredentials = useCallback(
+    async (tenantId: string, email: string, password: string) => {
+      const response = await loginUser({ tenant_id: tenantId, email, password });
+      setAuthToken(response.token);
+      setToken(response.token);
+      setAuthenticated(true);
+      setMockSession(false);
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("dyocense-api-token", response.token);
+        window.localStorage.setItem("dyocense-tenant-id", tenantId);
+        window.localStorage.setItem("dyocense-user-email", email);
+      }
+
+      try {
+        const userProfile = await fetchUserProfile();
+        setUser({
+          id: userProfile.user_id,
+          fullName: userProfile.full_name,
+          email: userProfile.email,
+          username: userProfile.email,
+        });
+      } catch (err) {
+        console.warn("Failed to fetch user profile", err);
+        setUser({ id: response.user_id, fullName: email, email, username: email });
+      }
+
+      try {
+        const tenantProfile = await getTenantProfile();
+        setProfile({
+          companyName: tenantProfile.name,
+          industry: "",
+          teamSize: String(tenantProfile.usage?.members ?? ""),
+          primaryGoal: "",
+          timezone: "",
+        });
+      } catch (err) {
+        console.warn("Failed to fetch tenant profile", err);
+      }
+    },
+    []
+  );
+
+  const registerUserAccount = useCallback(
+    async (tenantId: string, email: string, fullName: string, password: string, temporaryPassword: string) => {
+      await registerUser({ tenant_id: tenantId, email, full_name: fullName, password, temporary_password: temporaryPassword });
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (hydratedFromStorage || authenticated) return;
+    if (typeof window === "undefined") return;
+    const storedToken = window.localStorage.getItem("dyocense-api-token");
+    if (storedToken) {
+      loginWithToken({
+        apiToken: storedToken,
+        tenantId: window.localStorage.getItem("dyocense-tenant-id") || undefined,
+        displayName: window.localStorage.getItem("dyocense-user-name") || undefined,
+        email: window.localStorage.getItem("dyocense-user-email") || undefined,
+        remember: true,
+      })
+        .catch((err) => {
+          console.warn("Stored token login failed", err);
+          window.localStorage.removeItem("dyocense-api-token");
+          window.localStorage.removeItem("dyocense-tenant-id");
+          window.localStorage.removeItem("dyocense-user-name");
+          window.localStorage.removeItem("dyocense-user-email");
+        })
+        .finally(() => {
+          setHydratedFromStorage(true);
+        });
+    } else {
+      setHydratedFromStorage(true);
+    }
+  }, [authenticated, hydratedFromStorage, loginWithToken]);
 
   const login = useCallback(
     async (redirectTo?: string) => {
-      if (usingMock) {
-        const mockUser: AuthUser = {
-          id: "demo-user",
-          fullName: "Demo User",
-          email: "demo@dyocense.dev",
-          username: "demo",
-        };
-        setAuthenticated(true);
-        setUser(mockUser);
-        setToken("mock-token");
-        setAuthToken("mock-token");
-        setProfile(readStoredProfile(mockUser.id));
+      if (!supportsKeycloak) {
+        await loginDemo();
         return;
       }
 
@@ -189,27 +372,35 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         });
       }
     },
-    [usingMock]
+    [supportsKeycloak, loginDemo]
   );
 
   const logout = useCallback(async () => {
-    if (usingMock) {
+    if (mockSession || !supportsKeycloak) {
       if (user?.id) {
         clearStoredProfile(user.id);
+      }
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("dyocense-api-token");
+        window.localStorage.removeItem("dyocense-tenant-id");
+        window.localStorage.removeItem("dyocense-user-name");
+        window.localStorage.removeItem("dyocense-user-email");
       }
       setAuthenticated(false);
       setUser(null);
       setToken(null);
       setAuthToken(null);
       setProfile(null);
+      setMockSession(!supportsKeycloak);
       return;
     }
 
     if (keycloakRef.current) {
       const redirectUri = window.location.origin;
       await keycloakRef.current.logout({ redirectUri });
+      setMockSession(false);
     }
-  }, [usingMock, user]);
+  }, [mockSession, supportsKeycloak, user]);
 
   const refreshProfile = useCallback(async () => {
     if (!user?.id) return;
@@ -240,11 +431,16 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     profile,
     loadingProfile,
     login,
+    loginDemo,
+    loginWithToken,
+    loginWithCredentials,
+    registerUserAccount,
     logout,
     updateProfile,
     refreshProfile,
     keycloak: keycloakRef.current ?? undefined,
-    usingMock,
+    usingMock: mockSession,
+    supportsKeycloak,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

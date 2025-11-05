@@ -1,21 +1,17 @@
-import { useState } from "react";
-import {
-  CalendarRange,
-  ChevronDown,
-  ChevronUp,
-  Database,
-  Layers,
-  Settings2,
-  Sparkles,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CalendarRange, ChevronDown, ChevronUp, Database, Briefcase, PlusCircle, Layers, Settings2, Sparkles } from "lucide-react";
 import { CreatePlaybookPayload } from "../hooks/usePlaybook";
+import { DataIngestionPanel } from "./DataIngestionPanel";
+import { getArchetypes } from "../lib/api";
 
 interface CreatePlaybookProps {
   onSubmit: (payload: CreatePlaybookPayload) => Promise<void>;
   submitting: boolean;
+  projects?: Array<{ project_id: string; name: string }>;
+  onCreateProject?: (name: string, description?: string | null) => Promise<{ project_id: string; name: string } | null>;
 }
 
-const archetypeOptions = [
+const FALLBACK_ARCHETYPES = [
   { label: "Inventory optimization", id: "inventory_basic" },
   { label: "Demand forecasting", id: "forecasting_basic" },
   { label: "Assortment rationalization", id: "assortment_optimizer" },
@@ -65,14 +61,63 @@ const SAMPLE_DATA_INPUTS = {
   ],
 };
 
-export const CreatePlaybook = ({ onSubmit, submitting }: CreatePlaybookProps) => {
+export const CreatePlaybook = ({ onSubmit, submitting, projects = [], onCreateProject }: CreatePlaybookProps) => {
   const [preferencesOpen, setPreferencesOpen] = useState(true);
-  const [selectedArchetype, setSelectedArchetype] = useState(archetypeOptions[0]);
+  const [archetypes, setArchetypes] = useState(FALLBACK_ARCHETYPES);
+  const [selectedArchetype, setSelectedArchetype] = useState(FALLBACK_ARCHETYPES[0]);
   const [showArchetypeList, setShowArchetypeList] = useState(false);
   const [goal, setGoal] = useState("Reduce holding cost while maintaining 95% service level.");
   const [horizon, setHorizon] = useState<number>(4);
   const [projectId, setProjectId] = useState<string>(`ui-${Date.now()}`);
   const [dataSource, setDataSource] = useState<string>("ERP snapshot, weekly feed");
+  const [dataInputs, setDataInputs] = useState<Record<string, unknown>>(SAMPLE_DATA_INPUTS);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("Dyocense Launchpad");
+  const [newProjectDescription, setNewProjectDescription] = useState("Initial playbook sandbox");
+
+  const projectOptions = useMemo(
+    () => projects.map((project) => ({ id: project.project_id, name: project.name })),
+    [projects]
+  );
+
+  useEffect(() => {
+    if (!projectOptions.length) return;
+    if (!projectOptions.find((option) => option.id === projectId)) {
+      setProjectId(projectOptions[0].id);
+    }
+  }, [projectOptions, projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadArchetypes() {
+      try {
+        const response = await getArchetypes<{
+          items?: Array<{ id: string; name?: string; description?: string }>;
+          archetypes?: Array<{ id: string; name?: string; description?: string }>;
+        }>({ items: [] });
+        const collection = response.items ?? (response as any).archetypes ?? [];
+        if (!cancelled && collection.length) {
+          const mapped = collection.map((item: any) => ({
+            id: item.id,
+            label: item.name || item.id,
+            description: item.description,
+          }));
+          setArchetypes(mapped);
+          setSelectedArchetype((prev) => mapped.find((entry) => entry.id === prev.id) ?? mapped[0]);
+        }
+      } catch (err) {
+        console.warn("Using fallback archetypes", err);
+        if (!cancelled) {
+          setArchetypes(FALLBACK_ARCHETYPES);
+          setSelectedArchetype((prev) => prev ?? FALLBACK_ARCHETYPES[0]);
+        }
+      }
+    }
+    loadArchetypes();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = async (archetypeOverride?: string) => {
     const archetypeId = archetypeOverride ?? selectedArchetype.id;
@@ -84,9 +129,18 @@ export const CreatePlaybook = ({ onSubmit, submitting }: CreatePlaybookProps) =>
       project_id: projectId,
       data_inputs: {
         source: dataSource,
-        ...SAMPLE_DATA_INPUTS,
+        ...dataInputs,
       },
     });
+  };
+
+  const handleCreateProject = async () => {
+    if (!onCreateProject || !newProjectName.trim()) return;
+    const project = await onCreateProject(newProjectName.trim(), newProjectDescription.trim() || undefined);
+    if (project) {
+      setProjectId(project.project_id);
+      setCreatingProject(false);
+    }
   };
 
   return (
@@ -146,7 +200,7 @@ export const CreatePlaybook = ({ onSubmit, submitting }: CreatePlaybookProps) =>
                   </button>
                   {showArchetypeList && (
                     <div className="absolute z-10 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg">
-                      {archetypeOptions.map((option) => (
+                      {archetypes.map((option) => (
                         <button
                           key={option.id}
                           className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 ${
@@ -177,14 +231,76 @@ export const CreatePlaybook = ({ onSubmit, submitting }: CreatePlaybookProps) =>
               </label>
             </div>
 
-            <label className="flex flex-col gap-2 text-sm text-gray-700">
-              Project identifier
-              <input
-                className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                value={projectId}
-                onChange={(event) => setProjectId(event.target.value)}
-              />
-            </label>
+            <div className="space-y-3">
+              <label className="flex flex-col gap-2 text-sm text-gray-700">
+                Project
+                {projectOptions.length ? (
+                  <div className="relative">
+                    <select
+                      className="w-full appearance-none rounded-lg border border-gray-200 px-3 py-2 focus:border-primary focus:ring-2 focus:ring-primary/10 text-sm"
+                      value={projectId}
+                      onChange={(event) => setProjectId(event.target.value)}
+                    >
+                      {projectOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Briefcase size={16} className="absolute left-3 top-3 text-gray-400" />
+                  </div>
+                ) : (
+                  <input
+                    className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                    placeholder="Project identifier"
+                    value={projectId}
+                    onChange={(event) => setProjectId(event.target.value)}
+                  />
+                )}
+                {onCreateProject && (
+                  <button
+                    type="button"
+                    className="mt-2 inline-flex items-center gap-2 text-xs text-primary font-medium"
+                    onClick={() => setCreatingProject((prev) => !prev)}
+                  >
+                    <PlusCircle size={14} /> {creatingProject ? "Cancel new project" : "Create new project"}
+                  </button>
+                )}
+              </label>
+
+              {creatingProject && onCreateProject && (
+                <div className="grid gap-4 md:grid-cols-2 border border-dashed border-primary/40 rounded-2xl p-4 bg-blue-50/40">
+                  <label className="flex flex-col gap-2 text-sm text-gray-700">
+                    New project name
+                    <input
+                      className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                      placeholder="e.g. North America replenishment"
+                      value={newProjectName}
+                      onChange={(event) => setNewProjectName(event.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm text-gray-700">
+                    Description (optional)
+                    <input
+                      className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                      placeholder="Team, geography, or KPI focus"
+                      value={newProjectDescription}
+                      onChange={(event) => setNewProjectDescription(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="md:col-span-2 inline-flex items-center justify-center gap-2 rounded-full bg-primary text-white px-4 py-2 text-sm font-semibold disabled:bg-blue-200"
+                    onClick={handleCreateProject}
+                    disabled={submitting}
+                  >
+                    <Sparkles size={16} /> Save project and continue
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <DataIngestionPanel value={dataInputs} onChange={setDataInputs} />
 
             <div className="border border-gray-100 rounded-2xl">
               <button

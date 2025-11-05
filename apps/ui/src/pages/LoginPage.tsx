@@ -43,6 +43,7 @@ export const LoginPage = () => {
   const [registerAccessToken, setRegisterAccessToken] = useState("");
   const [registerName, setRegisterName] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
+  const [showApiTokenLogin, setShowApiTokenLogin] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -54,17 +55,27 @@ export const LoginPage = () => {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    
+    // First check URL params (takes precedence)
+    const urlTenant = params.get("tenant");
+    const urlEmail = params.get("email");
+    
+    if (urlTenant) setCredentialTenant(urlTenant);
+    if (urlEmail) setCredentialEmail(urlEmail);
+    
+    // Then check localStorage for remembered values (only if not in URL)
     const storedTenant = window.localStorage.getItem("dyocense-tenant-id");
     const storedName = window.localStorage.getItem("dyocense-user-name");
     const storedEmail = window.localStorage.getItem("dyocense-user-email");
     const storedToken = window.localStorage.getItem("dyocense-api-token");
-    if (storedTenant) setTenantId(storedTenant);
+    
+    if (!urlTenant && storedTenant) setTenantId(storedTenant);
     if (storedName) setBusinessName(storedName);
-    if (storedEmail) setContactEmail(storedEmail);
-    if (storedTenant) setCredentialTenant(storedTenant);
-    if (storedEmail) setCredentialEmail(storedEmail);
+    if (!urlEmail && storedEmail) setContactEmail(storedEmail);
+    if (!urlTenant && storedTenant) setCredentialTenant(storedTenant);
+    if (!urlEmail && storedEmail) setCredentialEmail(storedEmail);
     if (storedToken) setApiToken(storedToken);
-  }, []);
+  }, [params]);
 
   const handleTokenLogin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -150,22 +161,19 @@ export const LoginPage = () => {
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white font-semibold text-lg">
             D
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900">Welcome back to Dyocense</h1>
-          {supportsKeycloak ? (
-            <p className="text-sm text-gray-600">
-              Use your Dyocense tenant API token to sign in instantly, or connect with enterprise SSO if your
-              organization has enabled Keycloak.
-            </p>
-          ) : (
-            <p className="text-sm text-gray-600">
-              Small teams can access Dyocense with the tenant ID and API token we shared during onboarding. No SSO
-              setup required.
-            </p>
-          )}
+          <h1 className="text-2xl font-semibold text-gray-900">Welcome to Dyocense</h1>
+          <p className="text-sm text-gray-600">
+            Sign in with your account credentials or explore with demo data.
+          </p>
         </header>
         <div className="space-y-8">
           <section className="space-y-3">
-            <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">User account login</p>
+            {params.get("tenant") && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                👋 Welcome! Use the temporary password from your welcome email to register your account.
+              </div>
+            )}
+            <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Sign in with your account</p>
             <form className="space-y-3" onSubmit={registerMode ? handleRegister : handleCredentialLogin}>
               <label className="flex flex-col gap-2 text-sm text-gray-700">
                 Tenant ID
@@ -215,10 +223,10 @@ export const LoginPage = () => {
               </label>
               {registerMode && (
                 <label className="flex flex-col gap-2 text-sm text-gray-700">
-                  Access token (from subscription email)
+                  Temporary Password (from welcome email)
                   <input
                     className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    placeholder="key-xxxx"
+                    placeholder="Enter temporary password"
                     value={registerAccessToken}
                     onChange={(event) => setRegisterAccessToken(event.target.value)}
                     required
@@ -251,15 +259,16 @@ export const LoginPage = () => {
                     setRegisterMode((prev) => !prev);
                   }}
                 >
-                  {registerMode ? "Have an account? Sign in" : "Need an account? Register with your access token"}
+                  {registerMode ? "Have an account? Sign in" : "Need an account? Register with your temporary password"}
                 </button>
               </div>
             </form>
           </section>
 
-          <section className="space-y-3">
-            <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Small business API token</p>
-            <form className="space-y-3" onSubmit={handleTokenLogin}>
+          {showApiTokenLogin && (
+            <section className="space-y-3 border-t pt-6">
+              <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">API Token Access</p>
+              <form className="space-y-3" onSubmit={handleTokenLogin}>
               <label className="flex flex-col gap-2 text-sm text-gray-700">
                 Business name
                 <input
@@ -313,6 +322,17 @@ export const LoginPage = () => {
               </button>
             </form>
           </section>
+          )}
+
+          {!showApiTokenLogin && (
+            <button
+              type="button"
+              onClick={() => setShowApiTokenLogin(true)}
+              className="w-full text-sm text-primary font-semibold hover:underline"
+            >
+              Or sign in with API token →
+            </button>
+          )}
 
           <div className="space-y-5">
             {supportsKeycloak ? (

@@ -27,17 +27,40 @@ export const ItineraryColumn = ({ playbook, loading }: ItineraryColumnProps) => 
               <ItineraryDayCard key={day.id} day={day} accentIndex={idx} />
             ))}
           </div>
+         <section className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+           <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Run stages</h3>
+           <div className="mt-4 space-y-4">
+             {playbook.plan.map((stage, idx) => (
+               <StageCard
+                 key={stage.title}
+                 title={stage.title}
+                 description={stage.description}
+                 activities={stage.activities}
+                 accentColor={["#0ea5e9", "#f97316", "#22c55e"][idx % 3]}
+               />
+             ))}
+           </div>
+         </section>
           <section className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Run stages</h3>
-            <div className="mt-4 space-y-4">
-              {playbook.plan.map((stage, idx) => (
-                <StageCard
-                  key={stage.title}
-                  title={stage.title}
-                  description={stage.description}
-                  activities={stage.activities}
-                  accentColor={["#0ea5e9", "#f97316", "#22c55e"][idx % 3]}
-                />
+            <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Scenario analysis</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {playbook.whatIfs.map((scenario) => (
+                <article key={scenario.title} className="border border-gray-100 rounded-xl p-4 bg-gray-50 space-y-2">
+                  <h4 className="text-sm font-semibold text-gray-900">{scenario.title}</h4>
+                  <p className="text-xs text-gray-600 leading-5">{scenario.summary}</p>
+                  {Object.keys(scenario.delta).length ? (
+                    <dl className="text-xs text-gray-500 grid grid-cols-2 gap-2">
+                      {Object.entries(scenario.delta).map(([label, value]) => (
+                        <div key={label}>
+                          <dt className="uppercase text-gray-400">{label.replace(/_/g, " ")}</dt>
+                          <dd className="text-gray-700 font-semibold">{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="text-xs text-gray-400">No KPI deltas provided.</p>
+                  )}
+                </article>
               ))}
             </div>
           </section>
