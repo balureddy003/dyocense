@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
@@ -11,6 +12,7 @@ from packages.accounts.repository import (
     list_plans,
     register_tenant,
     get_tenant,
+    find_tenant_by_name_or_email,
     update_tenant_plan,
     create_project,
     list_projects,
@@ -23,6 +25,8 @@ from packages.accounts.repository import (
     delete_api_token,
     get_tenant_by_token,
     get_user,
+    count_users_for_tenant,
+    find_tenants_for_email,
     AuthenticationError,
     JWT_TTL_SECONDS,
 )
@@ -112,10 +116,24 @@ keycloak_credentials = {
     "password": os.getenv("KEYCLOAK_PASSWORD"),
 }
 
+# Log effective Keycloak configuration (without secrets)
+try:
+    _url = keycloak_credentials["server_url"]
+    _scheme = "https" if _url.lower().startswith("https") else "http"
+    _mode = (
+        "client-secret"
+        if keycloak_credentials.get("client_secret")
+        else ("password" if keycloak_credentials.get("username") and keycloak_credentials.get("password") else "disabled")
+    )
+    logger.info(f"Keycloak config: url={_url} scheme={_scheme} auth={_mode}")
+except Exception:
+    pass
+
 # Only attempt to initialize Keycloak if credentials are provided
 if keycloak_credentials.get("client_secret") or (
     keycloak_credentials.get("username") and keycloak_credentials.get("password")
 ):
+    logger.info("Initialising Keycloak onboarding service…")
     onboarding_service = TenantOnboardingService(
         server_url=keycloak_credentials["server_url"],
         client_id=keycloak_credentials["client_id"],
@@ -167,6 +185,8 @@ class TenantRegistrationResponse(BaseModel):
     tenant_id: str
     api_token: str
     plan: PlanResponse
+    already_exists: bool = False
+    message: str | None = None
 
 
 class OnboardingDetailsResponse(BaseModel):
@@ -316,6 +336,27 @@ def list_subscription_plans() -> list[PlanResponse]:
 
 @app.post("/v1/tenants/register", response_model=TenantRegistrationResponse, status_code=status.HTTP_201_CREATED, tags=["tenants"])
 def register_new_tenant(payload: TenantRegistrationRequest) -> TenantRegistrationResponse:
+    # Check if this exact organization (name + owner email) already exists
+    # This prevents the same person from accidentally registering the same org twice
+    existing_tenant = find_tenant_by_name_or_email(
+        name=payload.name,
+        owner_email=payload.owner_email
+    )
+    
+    if existing_tenant:
+        # Tenant already exists - return existing tenant info
+        logger.info(f"Found existing tenant {existing_tenant.tenant_id} for name '{payload.name}' and email '{payload.owner_email}'")
+        plan = next(p for p in list_plans() if p.tier == existing_tenant.plan_tier)
+        
+        return TenantRegistrationResponse(
+            tenant_id=existing_tenant.tenant_id,
+            api_token=existing_tenant.api_token,
+            plan=PlanResponse.from_model(plan),
+            already_exists=True,
+            message=f"You already registered the organization '{existing_tenant.name}'. Use the existing tenant ID to continue."
+        )
+    
+    # No existing tenant found - create a new one
     tenant = register_tenant(
         name=payload.name,
         owner_email=payload.owner_email,
@@ -342,7 +383,7 @@ def register_new_tenant(payload: TenantRegistrationRequest) -> TenantRegistratio
     # Send onboarding email
     try:
         temp_pass = tenant.metadata.get("temporary_password")
-        login_url = f"{os.getenv('APP_BASE_URL', 'http://localhost:5173')}/login?tenant={tenant.tenant_id}&email={payload.owner_email}"
+        login_url = f"{os.getenv('APP_BASE_URL', 'http://localhost:5173')}/login?tenant={tenant.tenant_id}&email={payload.owner_email}&register=true"
         subject = f"Welcome to Dyocense - {payload.name}"
         text = (
             f"Hi,\n\n"
@@ -352,8 +393,11 @@ def register_new_tenant(payload: TenantRegistrationRequest) -> TenantRegistratio
         if temp_pass:
             text += f"Temporary Password: {temp_pass}\n"
         text += (
-            f"\nClick here to complete your account setup: {login_url}\n\n"
-            f"You'll be prompted to create a permanent password on first login.\n\n"
+            f"\nClick here to create your account: {login_url}\n\n"
+            f"You'll need to:\n"
+            f"1. Enter your full name\n"
+            f"2. Create a permanent password\n"
+            f"3. Then you can sign in and start using Dyocense\n\n"
             f"Thank you,\nThe Dyocense Team"
         )
         mailer.send(payload.owner_email, subject, text)
@@ -365,6 +409,8 @@ def register_new_tenant(payload: TenantRegistrationRequest) -> TenantRegistratio
         tenant_id=tenant.tenant_id,
         api_token=tenant.api_token,
         plan=PlanResponse.from_model(plan),
+        already_exists=False,
+        message="New organization created successfully."
     )
 
 
@@ -374,6 +420,218 @@ def get_tenant_profile(identity: dict = Depends(require_auth)) -> TenantProfileR
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
     return TenantProfileResponse.from_model(tenant)
+
+
+@app.put("/v1/tenants/me/profile", response_model=dict, tags=["tenants"])
+def update_tenant_business_profile(payload: dict, identity: dict = Depends(require_auth)) -> dict:
+    """
+    Update tenant business profile metadata.
+    Stores information like industry, company size, primary goals.
+    """
+    from packages.accounts.repository import TENANT_COLLECTION
+    
+    tenant_id = identity["tenant_id"]
+    tenant = get_tenant(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    
+    # Extract business profile fields
+    business_profile = {
+        "industry": payload.get("industry"),
+        "company_size": payload.get("company_size"),
+        "team_size": payload.get("team_size"),
+        "primary_goal": payload.get("primary_goal"),
+        "business_type": payload.get("business_type"),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+    
+    # Remove None values
+    business_profile = {k: v for k, v in business_profile.items() if v is not None}
+    
+    # Update tenant metadata
+    result = TENANT_COLLECTION.update_one(
+        {"tenant_id": tenant_id},
+        {"$set": {"metadata.business_profile": business_profile}}
+    )
+    
+    if result.modified_count == 0 and result.matched_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    
+    logger.info(f"Updated business profile for tenant {tenant_id}")
+    return {"message": "Business profile updated successfully", "profile": business_profile}
+
+
+@app.get("/v1/goals/recommendations", response_model=dict, tags=["recommendations"])
+def get_goal_recommendations(identity: dict = Depends(require_auth)) -> dict:
+    """
+    Get recommended playbook templates based on tenant's business profile.
+    """
+    tenant = get_tenant(identity["tenant_id"])
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    
+    # Get business profile from tenant metadata
+    business_profile = tenant.metadata.get("business_profile", {})
+    industry = business_profile.get("industry", "general")
+    
+    # Define recommendations based on industry
+    recommendations_by_industry = {
+        "retail": [
+            {
+                "id": "inventory_optimization",
+                "title": "Inventory Optimization",
+                "description": "Minimize holding costs while maintaining service levels across stores",
+                "archetype_id": "inventory_basic",
+                "icon": "📦",
+                "estimated_time": "5 minutes",
+                "tags": ["Popular", "Quick Start"]
+            },
+            {
+                "id": "demand_forecasting",
+                "title": "Demand Forecasting",
+                "description": "Predict customer demand for better stock planning",
+                "archetype_id": "forecasting_basic",
+                "icon": "📈",
+                "estimated_time": "7 minutes",
+                "tags": ["Recommended"]
+            },
+            {
+                "id": "markdown_optimization",
+                "title": "Markdown Optimization",
+                "description": "Optimize pricing to clear seasonal inventory profitably",
+                "archetype_id": "markdown_planner",
+                "icon": "💰",
+                "estimated_time": "10 minutes",
+                "tags": ["Advanced"]
+            }
+        ],
+        "manufacturing": [
+            {
+                "id": "production_planning",
+                "title": "Production Planning",
+                "description": "Optimize production schedules and resource allocation",
+                "archetype_id": "production_scheduler",
+                "icon": "🏭",
+                "estimated_time": "8 minutes",
+                "tags": ["Popular"]
+            },
+            {
+                "id": "inventory_optimization",
+                "title": "Raw Materials Inventory",
+                "description": "Balance raw material costs with production needs",
+                "archetype_id": "inventory_basic",
+                "icon": "📦",
+                "estimated_time": "5 minutes",
+                "tags": ["Quick Start"]
+            },
+            {
+                "id": "workforce_planning",
+                "title": "Workforce Planning",
+                "description": "Optimize shift schedules and staffing levels",
+                "archetype_id": "staffing_basic",
+                "icon": "👥",
+                "estimated_time": "7 minutes",
+                "tags": ["Recommended"]
+            }
+        ],
+        "cpg": [
+            {
+                "id": "demand_forecasting",
+                "title": "Demand Forecasting",
+                "description": "Predict retailer orders and consumer demand",
+                "archetype_id": "forecasting_basic",
+                "icon": "📈",
+                "estimated_time": "7 minutes",
+                "tags": ["Popular", "Quick Start"]
+            },
+            {
+                "id": "inventory_optimization",
+                "title": "Distribution Inventory",
+                "description": "Optimize inventory across distribution centers",
+                "archetype_id": "inventory_basic",
+                "icon": "📦",
+                "estimated_time": "5 minutes",
+                "tags": ["Recommended"]
+            },
+            {
+                "id": "promotion_planning",
+                "title": "Promotion Planning",
+                "description": "Optimize promotional strategies and trade spend",
+                "archetype_id": "promotion_planner",
+                "icon": "🎯",
+                "estimated_time": "10 minutes",
+                "tags": ["Advanced"]
+            }
+        ],
+        "logistics": [
+            {
+                "id": "route_optimization",
+                "title": "Route Optimization",
+                "description": "Minimize delivery costs and improve service times",
+                "archetype_id": "route_optimizer",
+                "icon": "🚚",
+                "estimated_time": "10 minutes",
+                "tags": ["Popular"]
+            },
+            {
+                "id": "warehouse_optimization",
+                "title": "Warehouse Optimization",
+                "description": "Optimize warehouse layout and picking strategies",
+                "archetype_id": "warehouse_planner",
+                "icon": "🏢",
+                "estimated_time": "8 minutes",
+                "tags": ["Recommended"]
+            },
+            {
+                "id": "demand_forecasting",
+                "title": "Volume Forecasting",
+                "description": "Predict shipping volumes for capacity planning",
+                "archetype_id": "forecasting_basic",
+                "icon": "📈",
+                "estimated_time": "7 minutes",
+                "tags": ["Quick Start"]
+            }
+        ]
+    }
+    
+    # Default recommendations for unknown industries
+    default_recommendations = [
+        {
+            "id": "inventory_optimization",
+            "title": "Inventory Optimization",
+            "description": "Minimize holding costs while maintaining service levels",
+            "archetype_id": "inventory_basic",
+            "icon": "📦",
+            "estimated_time": "5 minutes",
+            "tags": ["Popular", "Quick Start"]
+        },
+        {
+            "id": "demand_forecasting",
+            "title": "Demand Forecasting",
+            "description": "Predict future demand for better planning",
+            "archetype_id": "forecasting_basic",
+            "icon": "📈",
+            "estimated_time": "7 minutes",
+            "tags": ["Recommended"]
+        },
+        {
+            "id": "workforce_planning",
+            "title": "Workforce Planning",
+            "description": "Optimize staffing schedules and labor costs",
+            "archetype_id": "staffing_basic",
+            "icon": "👥",
+            "estimated_time": "7 minutes",
+            "tags": ["Quick Start"]
+        }
+    ]
+    
+    recommendations = recommendations_by_industry.get(industry, default_recommendations)
+    
+    return {
+        "recommendations": recommendations,
+        "industry": industry,
+        "message": f"Showing {len(recommendations)} recommended playbooks for {industry} industry"
+    }
 
 
 @app.put("/v1/tenants/me/subscription", response_model=TenantProfileResponse, tags=["tenants"])
@@ -514,23 +772,48 @@ def list_tenant_projects(identity: dict = Depends(require_auth)) -> list[Project
 
 @app.post("/v1/users/register", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED, tags=["users"])
 def register_new_user(payload: UserRegistrationRequest) -> UserProfileResponse:
-    # Verify tenant exists and temporary password matches
+    logger.info(f"Registration attempt for tenant={payload.tenant_id}, email={payload.email}")
+    # Verify tenant exists and temporary password matches (or apply fallback)
     tenant = get_tenant(payload.tenant_id)
     if tenant is None:
+        logger.warning(f"Registration failed: tenant {payload.tenant_id} not found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
     
     # Verify temporary password from tenant metadata (set during Keycloak onboarding)
     stored_temp_pass = tenant.metadata.get("temporary_password")
-    if not stored_temp_pass or stored_temp_pass != payload.temporary_password:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid temporary password.")
+    if stored_temp_pass:
+        if stored_temp_pass != payload.temporary_password:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid temporary password.")
+    else:
+        # Fallback: If no temporary password was issued (e.g., Keycloak unavailable),
+        # allow the FIRST user (owner email) to register without a temp password.
+        try:
+            user_count = count_users_for_tenant(tenant.tenant_id)
+        except Exception:
+            user_count = 0
+        if not (user_count == 0 and payload.email.lower() == tenant.owner_email.lower()):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Registration requires a temporary password or an invitation. "
+                    "If you are the owner and did not receive a temporary password, "
+                    "ensure you use the owner email for first-time registration."
+                ),
+            )
     
     try:
         user = register_user(payload.tenant_id, payload.email, payload.full_name, payload.password)
+        logger.info(f"Registered user {user.user_id} ({user.email}) for tenant {user.tenant_id}")
         
-        # Clear temporary password after successful registration
-        tenant.metadata.pop("temporary_password", None)
-        # Note: In production, would persist this change to database
-        
+        # Clear temporary password after successful registration (if present)
+        if stored_temp_pass:
+            tenant.metadata.pop("temporary_password", None)
+            # Persist the metadata change if using a database
+            try:
+                from packages.accounts.repository import TENANT_COLLECTION, _tenant_to_doc
+                TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
+            except Exception:
+                pass
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     
@@ -540,12 +823,53 @@ def register_new_user(payload: UserRegistrationRequest) -> UserProfileResponse:
 
 @app.post("/v1/users/login", response_model=UserLoginResponse, tags=["users"])
 def login_user(payload: UserLoginRequest) -> UserLoginResponse:
+    logger.info(f"Login attempt for tenant={payload.tenant_id}, email={payload.email}")
     try:
         user = authenticate_user(payload.tenant_id, payload.email, payload.password)
+        logger.info(f"Login successful for user {user.user_id}")
+        token = issue_jwt(user)
+        return UserLoginResponse(
+            token=token,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            expires_in=JWT_TTL_SECONDS,
+        )
     except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    token = issue_jwt(user)
-    return UserLoginResponse(token=token, user_id=user.user_id, tenant_id=user.tenant_id, expires_in=JWT_TTL_SECONDS)
+        logger.warning(f"Login failed for tenant={payload.tenant_id}, email={payload.email}: {exc}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password.") from exc
+
+
+@app.get("/v1/users/tenants", response_model=dict, tags=["users"])
+def get_user_tenants(email: str) -> dict:
+    """
+    Get list of tenants where a user with the given email exists.
+    Returns tenant_id and name for each tenant.
+    """
+    try:
+        # Validate email format
+        if not email or "@" not in email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email format")
+        
+        # Find all tenant IDs where this email exists
+        tenant_ids = find_tenants_for_email(email)
+        
+        # Fetch tenant details for each
+        tenants = []
+        for tenant_id in tenant_ids:
+            tenant = get_tenant(tenant_id)
+            if tenant:
+                tenants.append({
+                    "tenant_id": tenant.tenant_id,
+                    "name": tenant.name
+                })
+        
+        logger.info(f"Found {len(tenants)} tenant(s) for email {email}")
+        return {"tenants": tenants}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error fetching tenants for email {email}: {exc}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch tenants") from exc
 
 
 @app.get("/v1/users/me", response_model=UserProfileResponse, tags=["users"])

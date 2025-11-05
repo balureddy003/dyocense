@@ -394,6 +394,39 @@ def authenticate_user(tenant_id: str, email: str, password: str) -> AccountUser:
     return user
 
 
+def count_users_for_tenant(tenant_id: str) -> int:
+    """Return the number of users that exist for a given tenant.
+
+    Used to allow a safe fallback for first-user registration when no temporary
+    password was issued during onboarding.
+    """
+    try:
+        return USERS_COLLECTION.count_documents({"tenant_id": tenant_id})
+    except Exception:
+        # In-memory fallback or collection not available; attempt len on list-like
+        try:
+            return len(list(USERS_COLLECTION.find({"tenant_id": tenant_id})))
+        except Exception:
+            return 0
+
+
+def find_tenants_for_email(email: str) -> list[str]:
+    """
+    Find all tenant IDs where a user with the given email exists.
+    Returns a list of tenant IDs.
+    """
+    try:
+        # Find all users with this email across all tenants
+        users = USERS_COLLECTION.find({"email": email.lower()})
+        tenant_ids = []
+        for user_doc in users:
+            if "tenant_id" in user_doc:
+                tenant_ids.append(user_doc["tenant_id"])
+        return tenant_ids
+    except Exception:
+        return []
+
+
 def update_user_password(user_id: str, password: str) -> AccountUser:
     user = get_user(user_id)
     if user is None:
@@ -624,6 +657,29 @@ def get_usage_summary(tenant_id: Optional[str] = None, days: int = 30) -> dict:
         "by_type": by_type,
         "tenant_id": tenant_id,
     }
+
+
+def find_tenant_by_name_or_email(name: str = None, owner_email: str = None) -> Optional[Tenant]:
+    """
+    Find an existing tenant by organization name AND owner email.
+    This checks if the same person is trying to register the same organization again.
+    Returns the matching tenant if found, None otherwise.
+    """
+    if not name or not owner_email:
+        return None
+    
+    # Only match if BOTH the organization name AND owner email match
+    # This allows the same person to create multiple organizations
+    # but prevents duplicate organization registrations by the same person
+    query = {
+        "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
+        "owner_email": owner_email.lower()
+    }
+    
+    document = TENANT_COLLECTION.find_one(query)
+    if not document:
+        return None
+    return _tenant_from_doc(document)
 
 
 def enforce_trial_for_tenant(tenant_id: str, trial_days: int = 14) -> Tenant:

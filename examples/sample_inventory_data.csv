@@ -1,0 +1,11 @@
+sku,product_name,current_stock,min_stock,max_stock,unit_cost,location
+WIDGET-001,Smart Widget Pro,450,200,800,25.99,Warehouse A
+GADGET-002,Digital Gadget Plus,320,150,600,18.50,Warehouse A
+TOOL-003,Multi-Purpose Tool,180,100,400,42.00,Warehouse B
+DEVICE-004,Portable Device X,625,300,1000,89.99,Warehouse A
+SUPPLY-005,Basic Supply Kit,890,400,1500,5.25,Warehouse C
+WIDGET-006,Standard Widget,275,150,500,19.99,Warehouse B
+GADGET-007,Budget Gadget,410,200,700,12.75,Warehouse C
+TOOL-008,Premium Tool Set,95,50,200,125.00,Warehouse B
+DEVICE-009,Compact Device,340,150,600,65.50,Warehouse A
+SUPPLY-006,Premium Supply Pack,520,250,900,8.99,Warehouse C

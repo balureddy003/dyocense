@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Headset, Mail, Shield, Copy, Check } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { BrandedHeader } from "../components/BrandedHeader";
+import { BrandedFooter } from "../components/BrandedFooter";
 import {
   listPlans,
   registerTenant,
@@ -93,6 +95,18 @@ export const PurchasePage = () => {
 
       const registrationResponse = await registerTenant(payload);
       
+      // Check if tenant already exists
+      if (registrationResponse.already_exists) {
+        // Show a friendly message - they already registered this organization
+        setError(
+          `${registrationResponse.message || 'This organization already exists.'} ` +
+          `Tenant ID: ${registrationResponse.tenant_id}. ` +
+          `Please check your email for the welcome message with login instructions.`
+        );
+        setLoading(false);
+        return;
+      }
+      
       // Store the API token so subsequent calls are authenticated
       setAuthToken(registrationResponse.api_token);
 
@@ -115,8 +129,10 @@ export const PurchasePage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
-      <div className="max-w-3xl mx-auto px-6 py-12">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 to-white">
+      <BrandedHeader showNav={false} />
+      
+      <div className="flex-1 max-w-3xl mx-auto px-6 py-12">
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Start Building Smarter</h1>
@@ -291,6 +307,8 @@ export const PurchasePage = () => {
           </div>
         </div>
       </div>
+      
+      <BrandedFooter />
     </div>
   );
 };

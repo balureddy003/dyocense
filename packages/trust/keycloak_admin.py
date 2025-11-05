@@ -61,6 +61,9 @@ class KeycloakAdminClient:
         self.client_id = client_id
 
         try:
+            # Allow overriding SSL verification for local/self-signed setups
+            verify_ssl_env = os.getenv("KEYCLOAK_VERIFY_SSL", "true").strip().lower()
+            verify_ssl = False if verify_ssl_env in ("false", "0", "no") else True
             if client_secret:
                 # Service account flow
                 self.admin = KeycloakAdmin(
@@ -68,7 +71,7 @@ class KeycloakAdminClient:
                     realm_name=realm_name,
                     client_id=client_id,
                     client_secret=client_secret,
-                    verify=True,
+                    verify=verify_ssl,
                 )
             elif username and password:
                 # Password flow
@@ -78,7 +81,7 @@ class KeycloakAdminClient:
                     client_id=client_id,
                     username=username,
                     password=password,
-                    verify=True,
+                    verify=verify_ssl,
                 )
             else:
                 raise ValueError(

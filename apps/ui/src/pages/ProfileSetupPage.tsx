@@ -64,21 +64,20 @@ export const ProfileSetupPage = () => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-blue-100 px-4">
       <div className="max-w-2xl w-full bg-white border border-gray-100 rounded-3xl shadow-xl p-10 space-y-8">
         <header className="space-y-2 text-center">
-          <h1 className="text-2xl font-semibold text-gray-900">Tell us about your organization</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Welcome! Let's get to know your business</h1>
           <p className="text-sm text-gray-600">
-            We tailor data foundations and AI playbooks based on your operating model. You can update these details
-            anytime from settings.
+            We'll customize your experience based on your industry and goals. You can change these details anytime in settings.
           </p>
         </header>
         <form className="space-y-6" onSubmit={handleSubmit}>
           <div className="grid gap-6 md:grid-cols-2">
             <label className="flex flex-col gap-2 text-sm text-gray-700">
-              Company or brand
+              Your company or brand name
               <div className="relative">
                 <Building2 size={16} className="absolute left-3 top-3 text-gray-400" />
                 <input
                   className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="Acme Supply Co."
+                  placeholder="e.g. Acme Supply Co."
                   value={form.companyName}
                   onChange={handleChange("companyName")}
                 />
@@ -86,7 +85,7 @@ export const ProfileSetupPage = () => {
               {errorMessage("companyName") && <span className="text-xs text-red-500">{errorMessage("companyName")}</span>}
             </label>
             <label className="flex flex-col gap-2 text-sm text-gray-700">
-              Industry
+              What industry are you in?
               <div className="relative">
                 <Layers size={16} className="absolute left-3 top-3 text-gray-400" />
                 <select
@@ -94,7 +93,7 @@ export const ProfileSetupPage = () => {
                   value={form.industry}
                   onChange={handleChange("industry")}
                 >
-                  <option value="">Select industry</option>
+                  <option value="">Choose your industry</option>
                   <option value="retail">Retail & eCommerce</option>
                   <option value="manufacturing">Manufacturing</option>
                   <option value="cpg">CPG & Food</option>
@@ -107,21 +106,22 @@ export const ProfileSetupPage = () => {
             </label>
           </div>
           <label className="flex flex-col gap-2 text-sm text-gray-700">
-            Teams using Dyocense
+            Which teams will use this? <span className="text-gray-500">(optional)</span>
             <input
               className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-              placeholder="Supply Planning, Merchandising, Finance Ops"
+              placeholder="e.g. Sales, Inventory, Operations"
               value={form.teamSize ?? ""}
               onChange={handleChange("teamSize")}
             />
+            <span className="text-xs text-gray-500">This helps us show relevant features for your team</span>
           </label>
           <label className="flex flex-col gap-2 text-sm text-gray-700">
-            Primary business goal
+            What's your main business challenge right now?
             <div className="relative">
               <Target size={16} className="absolute left-3 top-3 text-gray-400" />
               <textarea
                 className="w-full pl-9 pr-3 py-2 min-h-[110px] rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                placeholder="Where do you want Dyocense copilots to focus first?"
+                placeholder="e.g. Reduce inventory costs, improve stock availability, better sales forecasting..."
                 value={form.primaryGoal ?? ""}
                 onChange={handleChange("primaryGoal")}
               />
@@ -129,27 +129,28 @@ export const ProfileSetupPage = () => {
             {errorMessage("primaryGoal") && <span className="text-xs text-red-500">{errorMessage("primaryGoal")}</span>}
           </label>
           <label className="flex flex-col gap-2 text-sm text-gray-700">
-            Preferred timezone
+            Your timezone <span className="text-gray-500">(optional)</span>
             <div className="relative">
               <Globe2 size={16} className="absolute left-3 top-3 text-gray-400" />
               <input
                 className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                placeholder="e.g. America/Chicago"
+                placeholder="e.g. America/Chicago or America/New_York"
                 value={form.timezone ?? ""}
                 onChange={handleChange("timezone")}
               />
             </div>
+            <span className="text-xs text-gray-500">We'll use this to show dates and times in your local time</span>
           </label>
-          <div className="flex justify-between items-center text-sm text-gray-600">
+          <div className="flex justify-between items-center pt-4 border-t border-gray-100">
             <div>
               <p className="font-medium text-gray-800">{user?.fullName}</p>
               <p className="text-xs text-gray-500">{user?.email}</p>
             </div>
             <button
               type="submit"
-              className="px-5 py-2.5 rounded-full bg-primary text-white font-semibold shadow-lg hover:shadow-xl transition"
+              className="px-6 py-3 rounded-full bg-primary text-white font-semibold shadow-lg hover:shadow-xl hover:bg-blue-700 transition"
             >
-              Save & continue
+              Continue to Dashboard
             </button>
           </div>
         </form>

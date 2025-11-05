@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate, NavigateFunction } from "react-router-dom";
 import { LogIn, ShieldCheck, Sparkles } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { BrandedHeader } from "../components/BrandedHeader";
+import { BrandedFooter } from "../components/BrandedFooter";
+import { getUserTenants, TenantOption } from "../lib/api";
 
 const resolveRedirect = (navigate: NavigateFunction, target: string) => {
   if (!target.startsWith("http")) {
@@ -17,7 +20,6 @@ export const LoginPage = () => {
     authenticated,
     login,
     loginDemo,
-    loginWithToken,
     loginWithCredentials,
     registerUserAccount,
     profile,
@@ -27,13 +29,6 @@ export const LoginPage = () => {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const redirectTarget = params.get("redirect") || "/home";
-  const [businessName, setBusinessName] = useState("");
-  const [tenantId, setTenantId] = useState("");
-  const [apiToken, setApiToken] = useState("");
-  const [contactEmail, setContactEmail] = useState("");
-  const [remember, setRemember] = useState(true);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [credentialTenant, setCredentialTenant] = useState("");
   const [credentialEmail, setCredentialEmail] = useState("");
   const [credentialPassword, setCredentialPassword] = useState("");
@@ -43,7 +38,10 @@ export const LoginPage = () => {
   const [registerAccessToken, setRegisterAccessToken] = useState("");
   const [registerName, setRegisterName] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
-  const [showApiTokenLogin, setShowApiTokenLogin] = useState(false);
+  const [tenantFromUrl, setTenantFromUrl] = useState(false); // Track if tenant came from URL
+  const [availableTenants, setAvailableTenants] = useState<TenantOption[]>([]);
+  const [fetchingTenants, setFetchingTenants] = useState(false);
+  const [showTenantSelector, setShowTenantSelector] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -59,44 +57,57 @@ export const LoginPage = () => {
     // First check URL params (takes precedence)
     const urlTenant = params.get("tenant");
     const urlEmail = params.get("email");
+    const shouldRegister = params.get("register") === "true";
     
-    if (urlTenant) setCredentialTenant(urlTenant);
+    if (urlTenant) {
+      setCredentialTenant(urlTenant);
+      setTenantFromUrl(true); // Mark that tenant came from URL
+    }
     if (urlEmail) setCredentialEmail(urlEmail);
+    if (shouldRegister) setRegisterMode(true); // Auto-switch to register mode from welcome email
     
     // Then check localStorage for remembered values (only if not in URL)
     const storedTenant = window.localStorage.getItem("dyocense-tenant-id");
-    const storedName = window.localStorage.getItem("dyocense-user-name");
     const storedEmail = window.localStorage.getItem("dyocense-user-email");
-    const storedToken = window.localStorage.getItem("dyocense-api-token");
     
-    if (!urlTenant && storedTenant) setTenantId(storedTenant);
-    if (storedName) setBusinessName(storedName);
-    if (!urlEmail && storedEmail) setContactEmail(storedEmail);
     if (!urlTenant && storedTenant) setCredentialTenant(storedTenant);
     if (!urlEmail && storedEmail) setCredentialEmail(storedEmail);
-    if (storedToken) setApiToken(storedToken);
   }, [params]);
 
-  const handleTokenLogin = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setTokenError(null);
-    if (!apiToken.trim()) {
-      setTokenError("API token is required.");
+  // Fetch available tenants when email changes (only in login mode and if tenant not from URL)
+  const handleEmailBlur = async () => {
+    if (registerMode || tenantFromUrl || !credentialEmail.trim() || !credentialEmail.includes("@")) {
       return;
     }
-    setSubmitting(true);
+    
+    setFetchingTenants(true);
+    setCredentialError(null);
+    
     try {
-      await loginWithToken({
-        apiToken,
-        tenantId,
-        displayName: businessName,
-        email: contactEmail,
-        remember,
-      });
-    } catch (err: any) {
-      setTokenError(err?.message || "Unable to sign in with API token.");
+      const tenants = await getUserTenants(credentialEmail.trim());
+      setAvailableTenants(tenants);
+      
+      if (tenants.length === 0) {
+        setCredentialError("No account found with this email address.");
+        setShowTenantSelector(false);
+        setCredentialTenant("");
+      } else if (tenants.length === 1) {
+        // Auto-select the only tenant
+        setCredentialTenant(tenants[0].tenant_id);
+        setShowTenantSelector(false);
+      } else {
+        // Multiple tenants - show selector
+        setShowTenantSelector(true);
+        if (!credentialTenant || !tenants.find(t => t.tenant_id === credentialTenant)) {
+          setCredentialTenant(""); // Reset if current selection not in list
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch tenants:", error);
+      // Don't show error to user - they can still manually enter tenant ID
+      setShowTenantSelector(false);
     } finally {
-      setSubmitting(false);
+      setFetchingTenants(false);
     }
   };
 
@@ -124,8 +135,8 @@ export const LoginPage = () => {
   const handleRegister = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setCredentialError(null);
-    if (!credentialTenant.trim() || !registerAccessToken.trim()) {
-      setCredentialError("Tenant ID and access token are required.");
+    if (!credentialTenant.trim()) {
+      setCredentialError("Tenant ID is required.");
       return;
     }
     if (!credentialEmail.trim() || !registerPassword.trim() || !registerName.trim()) {
@@ -141,12 +152,28 @@ export const LoginPage = () => {
         registerPassword,
         registerAccessToken.trim()
       );
-      setRegisterMode(false);
-      setCredentialError("Account created! You can sign in now.");
-      setCredentialPassword(registerPassword);
-      setRegisterPassword("");
-      setRegisterAccessToken("");
-      setRegisterName("");
+      
+      // Account created successfully - now automatically log in
+      setCredentialError("Account created! Signing you in...");
+      
+      // Longer delay to ensure database write is committed (MongoDB may need time)
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      try {
+        await loginWithCredentials(credentialTenant.trim(), credentialEmail.trim(), registerPassword);
+        // Login successful - user will be redirected by the useEffect above
+        // Keep the form in submitting state while redirect happens
+        return;
+      } catch (loginErr: any) {
+        console.error("Auto-login failed:", loginErr);
+        // If auto-login fails, switch to login mode so they can try manually
+        setRegisterMode(false);
+        setCredentialPassword(registerPassword);
+        setCredentialError("Account created successfully! Please click 'Sign in' below.");
+        setRegisterPassword("");
+        setRegisterAccessToken("");
+        setRegisterName("");
+      }
     } catch (err: any) {
       setCredentialError(err?.message || "Unable to register account.");
     } finally {
@@ -155,46 +182,84 @@ export const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-blue-100 px-4">
-      <div className="max-w-md w-full bg-white border border-gray-100 rounded-2xl shadow-xl p-8 space-y-6">
-        <header className="space-y-2 text-center">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white font-semibold text-lg">
-            D
-          </div>
-          <h1 className="text-2xl font-semibold text-gray-900">Welcome to Dyocense</h1>
-          <p className="text-sm text-gray-600">
-            Sign in with your account credentials or explore with demo data.
-          </p>
-        </header>
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 via-white to-blue-100">
+      <BrandedHeader showNav={false} />
+      
+      <div className="flex-1 flex items-center justify-center px-4 py-8">
+        <div className="max-w-md w-full bg-white border border-gray-100 rounded-2xl shadow-xl p-8 space-y-6">
+          <header className="space-y-2 text-center">
+            <h1 className="text-2xl font-semibold text-gray-900">
+              {registerMode ? "Get Started with Dyocense" : "Welcome Back"}
+            </h1>
+            <p className="text-sm text-gray-600">
+              {registerMode 
+                ? "Join businesses making smarter inventory and planning decisions" 
+                : "Sign in to your business dashboard"}
+            </p>
+          </header>
+          
         <div className="space-y-8">
           <section className="space-y-3">
-            {params.get("tenant") && (
+            {params.get("tenant") && registerMode && (
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-                👋 Welcome! Use the temporary password from your welcome email to register your account.
+                👋 Welcome! Complete the form below to create your account.
               </div>
             )}
-            <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Sign in with your account</p>
+            {params.get("tenant") && !registerMode && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                👋 Welcome! Sign in with your credentials below.
+              </div>
+            )}
+            <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">
+              {registerMode ? "Create your account" : "Sign in to your account"}
+            </p>
             <form className="space-y-3" onSubmit={registerMode ? handleRegister : handleCredentialLogin}>
+              {!registerMode && showTenantSelector && availableTenants.length > 1 && (
+                <label className="flex flex-col gap-2 text-sm text-gray-700">
+                  Which company?
+                  <select
+                    className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                    value={credentialTenant}
+                    onChange={(event) => setCredentialTenant(event.target.value)}
+                    required
+                  >
+                    <option value="">-- Choose your company --</option>
+                    {availableTenants.map(tenant => (
+                      <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                        {tenant.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-500">You have access to multiple companies</span>
+                </label>
+              )}
+              {(registerMode && !tenantFromUrl) && (
+                <label className="flex flex-col gap-2 text-sm text-gray-700">
+                  Company ID
+                  <input
+                    className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                    placeholder="e.g. acme-supplies"
+                    value={credentialTenant}
+                    onChange={(event) => setCredentialTenant(event.target.value)}
+                    required
+                  />
+                  <span className="text-xs text-gray-500">This was provided in your invitation email</span>
+                </label>
+              )}
               <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Tenant ID
-                <input
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="tenant-123"
-                  value={credentialTenant}
-                  onChange={(event) => setCredentialTenant(event.target.value)}
-                  required
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Email
+                Your work email
                 <input
                   type="email"
                   className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="ops@yourcompany.com"
+                  placeholder="you@yourcompany.com"
                   value={credentialEmail}
                   onChange={(event) => setCredentialEmail(event.target.value)}
+                  onBlur={handleEmailBlur}
                   required
                 />
+                {fetchingTenants && (
+                  <span className="text-xs text-gray-500">Checking your account...</span>
+                )}
               </label>
               {registerMode && (
                 <label className="flex flex-col gap-2 text-sm text-gray-700">
@@ -221,22 +286,11 @@ export const LoginPage = () => {
                   required
                 />
               </label>
-              {registerMode && (
-                <label className="flex flex-col gap-2 text-sm text-gray-700">
-                  Temporary Password (from welcome email)
-                  <input
-                    className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    placeholder="Enter temporary password"
-                    value={registerAccessToken}
-                    onChange={(event) => setRegisterAccessToken(event.target.value)}
-                    required
-                  />
-                </label>
-              )}
               {credentialError && (
                 <p
                   className={`text-sm ${
-                    credentialError.toLowerCase().includes("created") ? "text-emerald-600" : "text-red-500"
+                    credentialError.toLowerCase().includes("signing you in") ? "text-blue-600" : 
+                    credentialError.toLowerCase().includes("successfully") ? "text-emerald-600" : "text-red-500"
                   }`}
                 >
                   {credentialError}
@@ -259,95 +313,26 @@ export const LoginPage = () => {
                     setRegisterMode((prev) => !prev);
                   }}
                 >
-                  {registerMode ? "Have an account? Sign in" : "Need an account? Register with your temporary password"}
+                  {registerMode ? "Have an account? Sign in" : "Need an account? Register"}
                 </button>
               </div>
             </form>
           </section>
-
-          {showApiTokenLogin && (
-            <section className="space-y-3 border-t pt-6">
-              <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">API Token Access</p>
-              <form className="space-y-3" onSubmit={handleTokenLogin}>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Business name
-                <input
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="e.g. Riverfront Supply Co."
-                  value={businessName}
-                  onChange={(event) => setBusinessName(event.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Tenant ID (optional)
-                <input
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="tenant-123"
-                  value={tenantId}
-                  onChange={(event) => setTenantId(event.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                API token
-                <input
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="key-xxxx"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.target.value)}
-                  required
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Contact email (optional)
-                <input
-                  type="email"
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="ops@yourcompany.com"
-                  value={contactEmail}
-                  onChange={(event) => setContactEmail(event.target.value)}
-                />
-              </label>
-              <label className="flex items-center gap-2 text-xs text-gray-500">
-                <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
-                Remember this device
-              </label>
-              {tokenError && <p className="text-sm text-red-500">{tokenError}</p>}
-              <button
-                type="submit"
-                className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-full bg-primary text-white font-semibold shadow-lg hover:shadow-xl transition disabled:opacity-70"
-                disabled={submitting}
-              >
-                <LogIn size={18} />
-                {submitting ? "Signing in…" : "Sign in with API token"}
-              </button>
-            </form>
-          </section>
-          )}
-
-          {!showApiTokenLogin && (
-            <button
-              type="button"
-              onClick={() => setShowApiTokenLogin(true)}
-              className="w-full text-sm text-primary font-semibold hover:underline"
-            >
-              Or sign in with API token →
-            </button>
-          )}
 
           <div className="space-y-5">
             {supportsKeycloak ? (
               <div className="space-y-3 text-sm text-gray-700">
                 <p className="flex items-center gap-2">
                   <ShieldCheck size={16} className="text-primary" />
-                  Single sign-on with Keycloak (OAuth 2.0 / OpenID Connect)
+                  Secure single sign-on (SSO) with your company account
                 </p>
                 <p className="flex items-center gap-2">
                   <ShieldCheck size={16} className="text-primary" />
-                  PKCE-enabled flow with auto token refresh
+                  Automatic login with your existing credentials
                 </p>
                 <p className="flex items-center gap-2">
                   <ShieldCheck size={16} className="text-primary" />
-                  Secure access to Dyocense APIs and copilots
+                  Safe and encrypted access to your business data
                 </p>
                 <button
                   className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-full bg-primary text-white font-semibold shadow-lg hover:shadow-xl transition disabled:opacity-70"
@@ -355,12 +340,12 @@ export const LoginPage = () => {
                   disabled={!ready}
                 >
                   <LogIn size={18} />
-                  Sign in with Keycloak
+                  Sign in with SSO
                 </button>
                 <p className="text-xs text-gray-400 text-center">
                   Need access?{" "}
                   <button className="text-primary font-semibold" onClick={() => navigate("/buy")}>
-                    Talk to us
+                    Contact us
                   </button>
                 </p>
               </div>
@@ -373,23 +358,25 @@ export const LoginPage = () => {
             >
               <p className="flex items-center gap-2 font-semibold text-gray-900">
                 <Sparkles size={16} className="text-primary" />
-                Explore the Dyocense demo workspace
+                Try it out with sample data
               </p>
               <p className="text-xs text-gray-500">
-                Launch a guided sandbox with sample data to experience playbooks and copilots before connecting your own
-                systems.
+                Explore how Dyocense works with demo data before connecting your own business information.
               </p>
               <button
                 className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-full border border-primary text-primary font-semibold bg-white shadow hover:bg-blue-50 transition"
                 onClick={() => void loginDemo()}
               >
                 <Sparkles size={18} />
-                Preview with demo data
+                View demo
               </button>
             </div>
           </div>
         </div>
       </div>
+      </div>
+      
+      <BrandedFooter />
     </div>
   );
 };

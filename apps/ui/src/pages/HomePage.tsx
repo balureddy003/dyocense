@@ -8,8 +8,14 @@ import { PlanDrawer } from "../components/PlanDrawer";
 import { ExportModal } from "../components/ExportModal";
 import { CreatePlaybook } from "../components/CreatePlaybook";
 import { InviteTeammateCard } from "../components/InviteTeammateCard";
+import { TrialBanner } from "../components/TrialBanner";
+import { WelcomeModal } from "../components/WelcomeModal";
+import { GettingStartedCard } from "../components/GettingStartedCard";
+import { RecommendedPlaybooks } from "../components/RecommendedPlaybooks";
 import { CreatePlaybookPayload, usePlaybook } from "../hooks/usePlaybook";
 import { useAccount } from "../hooks/useAccount";
+import { useAuth } from "../context/AuthContext";
+import { BusinessMetrics } from "../components/BusinessMetrics";
 
 export const HomePage = () => {
   const { playbook, runs, selectedRunId, loading, error, selectRun, createPlaybook } = usePlaybook();
@@ -18,9 +24,37 @@ export const HomePage = () => {
   const [mode, setMode] = useState<"create" | "playbook">(runs.length ? "playbook" : "create");
   const [allowAutoSwitch, setAllowAutoSwitch] = useState(true);
   const { profile, projects, error: accountError, createProject, apiTokens, createApiToken, refreshApiTokens } = useAccount();
+  const { user } = useAuth();
   const [tokenSecret, setTokenSecret] = useState<string | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [showGettingStarted, setShowGettingStarted] = useState(true);
+  const [selectedArchetypeId, setSelectedArchetypeId] = useState<string | undefined>(undefined);
+
+  // Check if user has seen the welcome modal
+  useEffect(() => {
+    if (user?.id && profile) {
+      const hasSeenWelcome = localStorage.getItem(`dyocense-welcome-${user.id}`);
+      if (!hasSeenWelcome) {
+        setShowWelcome(true);
+      }
+    }
+  }, [user?.id, profile]);
+
+  // Check if user has created any playbooks
+  useEffect(() => {
+    if (runs.length > 0 || projects.length > 1) {
+      setShowGettingStarted(false);
+    }
+  }, [runs.length, projects.length]);
+
+  const handleCloseWelcome = () => {
+    if (user?.id) {
+      localStorage.setItem(`dyocense-welcome-${user.id}`, "true");
+    }
+    setShowWelcome(false);
+  };
 
   const handleCreate = async (payload: CreatePlaybookPayload) => {
     await createPlaybook(payload);
@@ -39,83 +73,50 @@ export const HomePage = () => {
     return (
       <div className="min-h-screen flex flex-col bg-bg text-gray-900">
         <TopNav />
-        <div className="max-w-6xl mx-auto w-full px-6 pt-6 space-y-4">
-          {profile && (
-            <div className="rounded-2xl border border-blue-100 bg-white shadow-sm px-6 py-4 text-sm text-gray-700 flex flex-wrap items-center gap-3">
-              <span className="text-primary font-semibold text-xs uppercase tracking-wide">Current plan</span>
-              <span className="font-medium text-gray-900">{profile.plan.name}</span>
-              <span className="text-gray-500">
-                {profile.plan.limits.max_projects} projects · {profile.plan.limits.max_playbooks} playbooks · {profile.plan.limits.support_level} support
-              </span>
-            </div>
-          )}
-          {accountError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {accountError}
-            </div>
-          )}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm px-6 py-5 space-y-4">
-            <header className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Developer access</p>
-                <h2 className="text-sm font-semibold text-gray-900">User API tokens</h2>
-              </div>
-              <button
-                className="text-xs text-primary font-semibold"
-                onClick={() => {
-                  setTokenError(null);
-                  setTokenSecret(null);
-                  setTokenLoading(true);
-                  createApiToken(`Token ${apiTokens.length + 1}`)
-                    .then((secret) => {
-                      if (secret) {
-                        setTokenSecret(secret);
-                        refreshApiTokens().catch(() => undefined);
-                      } else {
-                        setTokenError("Unable to generate token.");
-                      }
-                    })
-                    .catch((err: any) => {
-                      setTokenError(err?.message || "Unable to generate token.");
-                    })
-                    .finally(() => setTokenLoading(false));
-                }}
-                disabled={tokenLoading}
-              >
-                {tokenLoading ? "Creating…" : "Generate new token"}
-              </button>
-            </header>
-            {tokenError && <p className="text-xs text-red-500">{tokenError}</p>}
-            {tokenSecret && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700">
-                <p className="font-semibold text-emerald-800">Copy your token secret</p>
-                <p className="mt-1 break-all">{tokenSecret}</p>
-              </div>
-            )}
-            <div className="space-y-2 text-xs text-gray-600">
-              {apiTokens.length ? (
-                apiTokens.map((token) => (
-                  <div key={token.token_id} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 bg-gray-50">
-                    <span className="font-medium text-gray-800">{token.name}</span>
-                    <span className="text-gray-400">{new Date(token.created_at).toLocaleString()}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-gray-400">No user tokens yet. Generate one to automate API calls.</p>
-              )}
-            </div>
-          </div>
-          <InviteTeammateCard />
-        </div>
-        <CreatePlaybook
-          onSubmit={handleCreate}
-          submitting={loading}
-          projects={projects.map((project) => ({ project_id: project.project_id, name: project.name }))}
-          onCreateProject={async (name, description) => {
-            const project = await createProject(name, description);
-            return project ? { project_id: project.project_id, name: project.name } : null;
-          }}
+        <WelcomeModal
+          open={showWelcome}
+          onClose={handleCloseWelcome}
+          companyName={profile?.name}
         />
+        
+        {/* Trial Banner - only if in trial */}
+        {profile && profile.status === "trial" && (
+          <div className="max-w-6xl mx-auto w-full px-6 pt-4">
+            <TrialBanner
+              status={profile.status}
+              planTier={profile.plan.tier}
+              trialEndsAt={profile.usage?.cycle_started_at ? new Date(new Date(profile.usage.cycle_started_at).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString() : null}
+            />
+          </div>
+        )}
+
+        {/* Business Metrics - simplified header */}
+        {!showGettingStarted && (
+          <div className="max-w-6xl mx-auto w-full px-6 pt-6">
+            <BusinessMetrics />
+          </div>
+        )}
+
+        {/* Recommended Templates */}
+        {!showGettingStarted && profile && (
+          <RecommendedPlaybooks
+            onSelectPlaybook={(archetypeId) => {
+              setSelectedArchetypeId(archetypeId);
+              const createSection = document.querySelector('[data-create-playbook]');
+              createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+          />
+        )}
+
+        {/* Main Create Playbook Form */}
+        <div data-create-playbook>
+          <CreatePlaybook
+            onSubmit={handleCreate}
+            submitting={loading}
+            projects={projects.map((project) => ({ project_id: project.project_id, name: project.name }))}
+            initialArchetypeId={selectedArchetypeId}
+          />
+        </div>
       </div>
     );
   }
@@ -123,6 +124,20 @@ export const HomePage = () => {
   return (
     <div className="min-h-screen flex flex-col bg-bg text-gray-900">
       <TopNav />
+      <WelcomeModal
+        open={showWelcome}
+        onClose={handleCloseWelcome}
+        companyName={profile?.name}
+      />
+      {profile && profile.status === "trial" && (
+        <div className="px-6 pt-4">
+          <TrialBanner
+            status={profile.status}
+            planTier={profile.plan.tier}
+            trialEndsAt={profile.usage?.cycle_started_at ? new Date(new Date(profile.usage.cycle_started_at).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString() : null}
+          />
+        </div>
+      )}
       <Header
         title={playbook.title}
         onOpenDrawer={() => setDrawerOpen(true)}

@@ -1,53 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarRange, ChevronDown, ChevronUp, Database, Briefcase, PlusCircle, Layers, Settings2, Sparkles } from "lucide-react";
+import { CalendarRange, ChevronDown, Layers, Sparkles } from "lucide-react";
 import { CreatePlaybookPayload } from "../hooks/usePlaybook";
 import { DataIngestionPanel } from "./DataIngestionPanel";
+import { Tooltip } from "./Tooltip";
 import { getArchetypes } from "../lib/api";
 
 interface CreatePlaybookProps {
   onSubmit: (payload: CreatePlaybookPayload) => Promise<void>;
   submitting: boolean;
   projects?: Array<{ project_id: string; name: string }>;
-  onCreateProject?: (name: string, description?: string | null) => Promise<{ project_id: string; name: string } | null>;
+  initialArchetypeId?: string;
 }
 
 const FALLBACK_ARCHETYPES = [
-  { label: "Inventory optimization", id: "inventory_basic" },
-  { label: "Demand forecasting", id: "forecasting_basic" },
-  { label: "Assortment rationalization", id: "assortment_optimizer" },
-];
-
-const quickStarts = [
-  {
-    title: "Holiday surge readiness",
-    description: "Model peak demand, supplier flex, and store allocation in one run.",
-    archetype: "inventory_basic",
-  },
-  {
-    title: "Express lane pilot rollout",
-    description: "Balance safety stock and cycle time for high-velocity SKUs across DCs.",
-    archetype: "inventory_basic",
-  },
-  {
-    title: "Markdown recovery plan",
-    description: "Blend demand forecasts with pricing levers to clear overstock.",
-    archetype: "markdown_planner",
-  },
-];
-
-const preferenceGroups = [
-  {
-    label: "Decision scope",
-    options: ["Network-wide", "Regional", "Store cluster", "Supplier-specific"],
-  },
-  {
-    label: "Primary KPI",
-    options: ["Holding cost", "Service level", "Margin", "Turns"],
-  },
-  {
-    label: "Planning cadence",
-    options: ["Weekly", "Bi-weekly", "Monthly", "Ad hoc"],
-  },
+  { label: "Inventory optimization", id: "inventory_basic", description: "Balance stock levels to avoid stockouts and reduce costs" },
+  { label: "Demand forecasting", id: "forecasting_basic", description: "Predict future sales to plan better" },
+  { label: "Assortment planning", id: "assortment_optimizer", description: "Choose the right products for each location" },
 ];
 
 const SAMPLE_DATA_INPUTS = {
@@ -61,19 +29,14 @@ const SAMPLE_DATA_INPUTS = {
   ],
 };
 
-export const CreatePlaybook = ({ onSubmit, submitting, projects = [], onCreateProject }: CreatePlaybookProps) => {
-  const [preferencesOpen, setPreferencesOpen] = useState(true);
+export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialArchetypeId }: CreatePlaybookProps) => {
   const [archetypes, setArchetypes] = useState(FALLBACK_ARCHETYPES);
   const [selectedArchetype, setSelectedArchetype] = useState(FALLBACK_ARCHETYPES[0]);
   const [showArchetypeList, setShowArchetypeList] = useState(false);
-  const [goal, setGoal] = useState("Reduce holding cost while maintaining 95% service level.");
+  const [goal, setGoal] = useState("Keep enough stock on hand while minimizing storage costs.");
   const [horizon, setHorizon] = useState<number>(4);
   const [projectId, setProjectId] = useState<string>(`ui-${Date.now()}`);
-  const [dataSource, setDataSource] = useState<string>("ERP snapshot, weekly feed");
   const [dataInputs, setDataInputs] = useState<Record<string, unknown>>(SAMPLE_DATA_INPUTS);
-  const [creatingProject, setCreatingProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("Dyocense Launchpad");
-  const [newProjectDescription, setNewProjectDescription] = useState("Initial playbook sandbox");
 
   const projectOptions = useMemo(
     () => projects.map((project) => ({ id: project.project_id, name: project.name })),
@@ -86,6 +49,16 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], onCreatePr
       setProjectId(projectOptions[0].id);
     }
   }, [projectOptions, projectId]);
+
+  // Update selected archetype when initialArchetypeId changes
+  useEffect(() => {
+    if (initialArchetypeId && archetypes.length) {
+      const matchingArchetype = archetypes.find((arch) => arch.id === initialArchetypeId);
+      if (matchingArchetype) {
+        setSelectedArchetype(matchingArchetype);
+      }
+    }
+  }, [initialArchetypeId, archetypes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +76,7 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], onCreatePr
             description: item.description,
           }));
           setArchetypes(mapped);
-          setSelectedArchetype((prev) => mapped.find((entry) => entry.id === prev.id) ?? mapped[0]);
+          setSelectedArchetype((prev) => mapped.find((entry: any) => entry.id === prev.id) ?? mapped[0]);
         }
       } catch (err) {
         console.warn("Using fallback archetypes", err);
@@ -119,261 +92,140 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], onCreatePr
     };
   }, []);
 
-  const handleSubmit = async (archetypeOverride?: string) => {
-    const archetypeId = archetypeOverride ?? selectedArchetype.id;
+  const handleSubmit = async () => {
     const effectiveHorizon = Number.isFinite(horizon) && horizon > 0 ? horizon : 4;
+    
+    // Backend expects data_inputs to be Dict[str, List[Dict]] - only data arrays, no strings
+    const cleanedDataInputs = Object.keys(dataInputs).reduce((acc, key) => {
+      const value = dataInputs[key];
+      // Only include if it's an array (filter out non-array values)
+      if (Array.isArray(value)) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {} as Record<string, unknown>);
+
     await onSubmit({
       goal,
       horizon: effectiveHorizon,
-      archetype_id: archetypeId,
+      archetype_id: selectedArchetype.id,
       project_id: projectId,
-      data_inputs: {
-        source: dataSource,
-        ...dataInputs,
-      },
+      data_inputs: Object.keys(cleanedDataInputs).length > 0 ? cleanedDataInputs : undefined,
     });
-  };
-
-  const handleCreateProject = async () => {
-    if (!onCreateProject || !newProjectName.trim()) return;
-    const project = await onCreateProject(newProjectName.trim(), newProjectDescription.trim() || undefined);
-    if (project) {
-      setProjectId(project.project_id);
-      setCreatingProject(false);
-    }
   };
 
   return (
     <div className="min-h-full bg-gradient-to-br from-blue-50 via-white to-blue-50">
-      <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col gap-10">
-        <header className="space-y-3">
+      <div className="max-w-4xl mx-auto px-6 py-10">
+        <header className="space-y-3 mb-8">
           <div className="flex items-center gap-2 text-sm font-semibold text-primary uppercase tracking-wide">
-            <Sparkles size={16} /> Dyocense Playbook Builder
+            <Sparkles size={16} /> Create Your AI Plan
           </div>
-          <h1 className="text-3xl font-semibold text-gray-900">Launch a new scenario in minutes.</h1>
-          <p className="text-gray-600 text-base max-w-3xl">
-            Describe the business objective, choose an archetype, and Dyocense will compile data, simulate what-ifs,
-            and deliver a sharing-ready playbook.
+          <h1 className="text-3xl font-semibold text-gray-900">Get smart recommendations in 3 steps</h1>
+          <p className="text-gray-600 text-base max-w-2xl">
+            Choose a template, upload your data, and let AI create a customized plan for your business.
           </p>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px] items-start">
-          <section className="bg-white shadow-card rounded-3xl border border-gray-100 p-6 space-y-6">
+        <div className="bg-white shadow-card rounded-3xl border border-gray-100 p-8 space-y-6">
+          {/* Step 1: Choose Template */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-white text-sm font-bold">1</span>
+              <h2 className="text-lg font-semibold text-gray-900">Choose a template</h2>
+            </div>
+            
+            <div className="grid gap-3 md:grid-cols-3">
+              {archetypes.map((archetype) => (
+                <button
+                  key={archetype.id}
+                  className={`p-4 rounded-xl border-2 text-left transition ${
+                    selectedArchetype.id === archetype.id
+                      ? "border-primary bg-blue-50"
+                      : "border-gray-200 hover:border-primary"
+                  }`}
+                  onClick={() => setSelectedArchetype(archetype)}
+                >
+                  <div className="flex items-start gap-2 mb-2">
+                    <Layers size={18} className={selectedArchetype.id === archetype.id ? "text-primary" : "text-gray-400"} />
+                    <h3 className="text-sm font-semibold text-gray-900">{archetype.label}</h3>
+                  </div>
+                  {archetype.description && (
+                    <p className="text-xs text-gray-600">{archetype.description}</p>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Step 2: Set Your Goal */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-white text-sm font-bold">2</span>
+              <h2 className="text-lg font-semibold text-gray-900">What do you want to achieve?</h2>
+              <Tooltip content="Describe your business goal in simple terms. The AI will use this to customize recommendations." />
+            </div>
+            
             <div className="grid gap-4 md:grid-cols-2">
               <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Goal statement
+                <span>Your goal</span>
                 <input
-                  className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  placeholder="e.g. Reduce holding cost while keeping 95% service level"
+                  className="px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  placeholder="e.g. Keep enough stock while lowering costs"
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Planning horizon (weeks)
-                <div className="flex items-center gap-2">
+                <span className="flex items-center gap-2">
+                  Planning horizon
+                  <Tooltip content="How many weeks ahead do you want to plan? Most businesses use 4-8 weeks." />
+                </span>
+                <div className="flex items-center gap-2 px-4 py-3 rounded-lg border border-gray-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/10">
                   <CalendarRange size={16} className="text-gray-400" />
                   <input
                     type="number"
                     min={1}
-                    className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
+                    max={52}
+                    className="flex-1 outline-none"
                     value={horizon}
                     onChange={(event) => setHorizon(Number(event.target.value))}
                   />
+                  <span className="text-sm text-gray-500">weeks</span>
                 </div>
               </label>
             </div>
+          </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Archetype
-                <div className="relative">
-                  <button
-                    type="button"
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-primary"
-                    onClick={() => setShowArchetypeList((prev) => !prev)}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Layers size={16} className="text-gray-400" /> {selectedArchetype.label}
-                    </span>
-                    <ChevronDown size={16} className="text-gray-400" />
-                  </button>
-                  {showArchetypeList && (
-                    <div className="absolute z-10 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg">
-                      {archetypes.map((option) => (
-                        <button
-                          key={option.id}
-                          className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 ${
-                            option.id === selectedArchetype.id ? "text-primary" : "text-gray-700"
-                          }`}
-                          onClick={() => {
-                            setSelectedArchetype(option);
-                            setShowArchetypeList(false);
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </label>
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Data source (optional)
-                <div className="flex items-center gap-2">
-                  <Database size={16} className="text-gray-400" />
-                  <input
-                    className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    value={dataSource}
-                    onChange={(event) => setDataSource(event.target.value)}
-                  />
-                </div>
-              </label>
+          {/* Step 3: Upload Data */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-white text-sm font-bold">3</span>
+              <h2 className="text-lg font-semibold text-gray-900">Upload your data</h2>
+              <Tooltip content="Upload CSV files with your sales, inventory, or cost data. Sample files are available in the examples folder." />
             </div>
-
-            <div className="space-y-3">
-              <label className="flex flex-col gap-2 text-sm text-gray-700">
-                Project
-                {projectOptions.length ? (
-                  <div className="relative">
-                    <select
-                      className="w-full appearance-none rounded-lg border border-gray-200 px-3 py-2 focus:border-primary focus:ring-2 focus:ring-primary/10 text-sm"
-                      value={projectId}
-                      onChange={(event) => setProjectId(event.target.value)}
-                    >
-                      {projectOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.name}
-                        </option>
-                      ))}
-                    </select>
-                    <Briefcase size={16} className="absolute left-3 top-3 text-gray-400" />
-                  </div>
-                ) : (
-                  <input
-                    className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    placeholder="Project identifier"
-                    value={projectId}
-                    onChange={(event) => setProjectId(event.target.value)}
-                  />
-                )}
-                {onCreateProject && (
-                  <button
-                    type="button"
-                    className="mt-2 inline-flex items-center gap-2 text-xs text-primary font-medium"
-                    onClick={() => setCreatingProject((prev) => !prev)}
-                  >
-                    <PlusCircle size={14} /> {creatingProject ? "Cancel new project" : "Create new project"}
-                  </button>
-                )}
-              </label>
-
-              {creatingProject && onCreateProject && (
-                <div className="grid gap-4 md:grid-cols-2 border border-dashed border-primary/40 rounded-2xl p-4 bg-blue-50/40">
-                  <label className="flex flex-col gap-2 text-sm text-gray-700">
-                    New project name
-                    <input
-                      className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                      placeholder="e.g. North America replenishment"
-                      value={newProjectName}
-                      onChange={(event) => setNewProjectName(event.target.value)}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-2 text-sm text-gray-700">
-                    Description (optional)
-                    <input
-                      className="px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/10"
-                      placeholder="Team, geography, or KPI focus"
-                      value={newProjectDescription}
-                      onChange={(event) => setNewProjectDescription(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="md:col-span-2 inline-flex items-center justify-center gap-2 rounded-full bg-primary text-white px-4 py-2 text-sm font-semibold disabled:bg-blue-200"
-                    onClick={handleCreateProject}
-                    disabled={submitting}
-                  >
-                    <Sparkles size={16} /> Save project and continue
-                  </button>
-                </div>
-              )}
-            </div>
-
+            
             <DataIngestionPanel value={dataInputs} onChange={setDataInputs} />
+          </div>
 
-            <div className="border border-gray-100 rounded-2xl">
-              <button
-                type="button"
-                className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-gray-800"
-                onClick={() => setPreferencesOpen((prev) => !prev)}
-              >
-                <span className="flex items-center gap-2">
-                  <Settings2 size={16} className="text-primary" /> Preferences
-                </span>
-                {preferencesOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </button>
-              {preferencesOpen && (
-                <div className="px-4 pb-4 pt-2 space-y-4">
-                  {preferenceGroups.map((group) => (
-                    <div key={group.label} className="space-y-2">
-                      <p className="text-xs font-semibold uppercase text-gray-500">{group.label}</p>
-                      <div className="flex flex-wrap gap-2">
-                        {group.options.map((option) => (
-                          <button
-                            key={option}
-                            className="px-3 py-1.5 rounded-full border border-gray-200 text-sm text-gray-700 hover:border-primary"
-                          >
-                            {option}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                  <textarea
-                    className="w-full min-h-[100px] rounded-xl border border-gray-200 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    placeholder="Note any constraints, change approvals, or stakeholder needs"
-                  />
-                  <div className="flex justify-end gap-3 text-sm">
-                    <button className="px-4 py-2 rounded-lg border border-gray-200 text-gray-500">Clear</button>
-                    <button className="px-4 py-2 rounded-lg bg-primary text-white font-semibold">Confirm</button>
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* Submit Button */}
+          <div className="flex justify-center pt-4">
+            <button
+              className="px-8 py-4 rounded-full bg-gradient-to-r from-primary to-blue-600 text-white text-base font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleSubmit}
+              disabled={submitting}
+            >
+              <span className="flex items-center gap-2">
+                <Sparkles size={18} />
+                {submitting ? "Creating your plan..." : "Get AI Recommendations"}
+              </span>
+            </button>
+          </div>
+        </div>
 
-            <div className="flex flex-wrap gap-3">
-              <button
-                className="px-5 py-3 rounded-full bg-primary text-white text-sm font-semibold shadow-card disabled:bg-blue-200"
-                onClick={() => handleSubmit()}
-                disabled={submitting}
-              >
-                <span className="flex items-center gap-2">
-                  <Sparkles size={16} /> Plan with Copilot
-                </span>
-              </button>
-            </div>
-          </section>
-
-          <aside className="space-y-4">
-            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Suggested playbooks</h3>
-            <div className="space-y-3">
-              {quickStarts.map((item) => (
-                <article key={item.title} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm space-y-2">
-                  <p className="text-xs text-primary uppercase tracking-wide">{item.archetype}</p>
-                  <h4 className="text-sm font-semibold text-gray-900">{item.title}</h4>
-                  <p className="text-sm text-gray-600">{item.description}</p>
-                  <button
-                    className="text-sm text-primary font-medium"
-                    onClick={() => handleSubmit(item.archetype)}
-                    disabled={submitting}
-                  >
-                    Use template
-                  </button>
-                </article>
-              ))}
-            </div>
-          </aside>
+        {/* Help Text */}
+        <div className="mt-6 text-center text-sm text-gray-500">
+          <p>Need help? Check the <code className="px-2 py-1 bg-gray-100 rounded">examples/</code> folder for sample data files.</p>
         </div>
       </div>
     </div>

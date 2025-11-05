@@ -14,6 +14,7 @@ from .repository import (
     register_tenant,
     get_tenant,
     get_tenant_by_token,
+    find_tenant_by_name_or_email,
     update_tenant_plan,
     list_projects,
     create_project,
@@ -29,6 +30,8 @@ from .repository import (
     delete_api_token,
     get_api_token,
     get_user,
+    count_users_for_tenant,
+    find_tenants_for_email,
     AuthenticationError,
     JWT_TTL_SECONDS,
 )
@@ -47,6 +50,7 @@ __all__ = [
     "register_tenant",
     "get_tenant",
     "get_tenant_by_token",
+    "find_tenant_by_name_or_email",
     "update_tenant_plan",
     "list_projects",
     "create_project",
@@ -62,6 +66,8 @@ __all__ = [
     "delete_api_token",
     "get_api_token",
     "get_user",
+    "count_users_for_tenant",
+    "find_tenants_for_email",
     "AuthenticationError",
     "JWT_TTL_SECONDS",
 ]

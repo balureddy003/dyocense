@@ -1,5 +1,6 @@
 import { ChangeEvent, useState } from "react";
-import { UploadCloud, FileSpreadsheet, ClipboardList } from "lucide-react";
+import { ClipboardList } from "lucide-react";
+import { CSVUpload } from "./CSVUpload";
 
 export type DataInputKey = "demand" | "holding_cost" | string;
 
@@ -11,13 +12,13 @@ interface DataIngestionPanelProps {
 const DATASETS: { key: DataInputKey; label: string; helper: string }[] = [
   {
     key: "demand",
-    label: "Demand signal",
-    helper: "sku, quantity columns expected",
+    label: "Sales or demand data",
+    helper: "Shows expected sales for each product",
   },
   {
     key: "holding_cost",
-    label: "Holding cost",
-    helper: "sku, cost columns expected",
+    label: "Storage costs",
+    helper: "Cost to keep each product in stock",
   },
 ];
 
@@ -59,8 +60,8 @@ export const DataIngestionPanel = ({ value, onChange }: DataIngestionPanelProps)
       <header className="flex items-center gap-2">
         <ClipboardList size={18} className="text-primary" />
         <div>
-          <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Data inputs</h3>
-          <p className="text-sm text-gray-500">Upload CSVs or paste JSON to override sample data.</p>
+          <h3 className="text-sm font-semibold text-gray-800">Upload Your Data</h3>
+          <p className="text-xs text-gray-500">Add your sales data to get personalized recommendations</p>
         </div>
       </header>
 
@@ -80,48 +81,16 @@ export const DataIngestionPanel = ({ value, onChange }: DataIngestionPanelProps)
         ))}
       </div>
 
-      <label className="flex flex-col gap-2 text-sm text-gray-700">
-        Upload CSV
-        <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 text-gray-600 cursor-pointer hover:border-primary">
-            <UploadCloud size={16} />
-            <span>Select file</span>
-            <input type="file" accept=".csv" className="hidden" onChange={handleFile} />
-          </label>
-          <span className="text-xs text-gray-500">
-            {DATASETS.find((d) => d.key === selectedDataset)?.helper}
-          </span>
-        </div>
-      </label>
-
-      <label className="flex flex-col gap-2 text-sm text-gray-700">
-        Or paste JSON
-        <textarea
-          className="w-full min-h-[120px] rounded-xl border border-gray-200 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/10"
-          placeholder='[{"sku":"widget","quantity":120}]'
-          onBlur={(event) => {
-            if (!event.target.value.trim()) return;
-            try {
-              const parsed = JSON.parse(event.target.value);
-              onChange({ ...value, [selectedDataset]: parsed });
-              setError(null);
-            } catch (err: any) {
-              setError("Invalid JSON");
-            }
-          }}
-        />
-      </label>
+      <CSVUpload
+        title={`Upload ${DATASETS.find((d) => d.key === selectedDataset)?.label}`}
+        description={DATASETS.find((d) => d.key === selectedDataset)?.helper || "Drag and drop your CSV file here"}
+        onFileSelect={(file, preview) => {
+          onChange({ ...value, [selectedDataset]: preview });
+          setError(null);
+        }}
+      />
 
       {error && <p className="text-sm text-red-500">{error}</p>}
-
-      <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-xs text-gray-600 space-y-1">
-        <p className="font-semibold text-gray-700 flex items-center gap-2">
-          <FileSpreadsheet size={14} className="text-primary" /> Current {selectedDataset}
-        </p>
-        <pre className="whitespace-pre-wrap break-words text-xs max-h-32 overflow-auto">
-          {JSON.stringify(value[selectedDataset] ?? [], null, 2)}
-        </pre>
-      </div>
     </section>
   );
 };

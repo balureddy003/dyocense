@@ -1,0 +1,11 @@
+product_id,product_name,supplier,lead_time_days,order_cost,reorder_point
+WIDGET-001,Smart Widget Pro,Acme Corp,14,500.00,250
+GADGET-002,Digital Gadget Plus,TechSupply Inc,10,350.00,175
+TOOL-003,Multi-Purpose Tool,ToolMasters,21,750.00,120
+DEVICE-004,Portable Device X,ElectroWorld,7,1200.00,350
+SUPPLY-005,Basic Supply Kit,QuickSupply Co,3,150.00,450
+WIDGET-006,Standard Widget,Acme Corp,14,450.00,180
+GADGET-007,Budget Gadget,TechSupply Inc,10,280.00,225
+TOOL-008,Premium Tool Set,ToolMasters,28,2500.00,60
+DEVICE-009,Compact Device,ElectroWorld,7,950.00,200
+SUPPLY-006,Premium Supply Pack,QuickSupply Co,5,225.00,300

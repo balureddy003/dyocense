@@ -33,17 +33,6 @@ const RequireAuth = ({ children }: PropsWithChildren) => {
   return <>{children}</>;
 };
 
-const RequireProfile = ({ children }: PropsWithChildren) => {
-  const { profile } = useAuth();
-  const location = useLocation();
-
-  if (!profile && location.pathname !== "/profile") {
-    return <Navigate to="/profile" replace />;
-  }
-
-  return <>{children}</>;
-};
-
 export const App = () => {
   return (
     <Routes>
@@ -62,9 +51,7 @@ export const App = () => {
         path="/home"
         element={
           <RequireAuth>
-            <RequireProfile>
-              <HomePage />
-            </RequireProfile>
+            <HomePage />
           </RequireAuth>
         }
       />

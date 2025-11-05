@@ -6,7 +6,9 @@ from typing import Optional
 try:  # pragma: no cover - optional dependency
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # Ensure .env variables override any previously set environment values in dev shells
+    # This avoids stale values (e.g., switching Keycloak URL) during reloads
+    load_dotenv(override=True)
 except ImportError:  # pragma: no cover
     pass
 

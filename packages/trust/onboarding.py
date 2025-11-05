@@ -44,7 +44,7 @@ class TenantOnboardingService:
                     password=password,
                 )
             except Exception as e:
-                logger.warning(f"Failed to initialize Keycloak client: {e}. Proceeding without Keycloak.")
+                logger.info(f"Keycloak integration disabled: {str(e)[:100]}. Operating in database-only mode.")
 
     def onboard_tenant(
         self,
@@ -75,7 +75,7 @@ class TenantOnboardingService:
             raise ValueError("tenant_id, tenant_name, and owner_email are required")
 
         if not self.keycloak:
-            logger.warning("Keycloak not available, skipping realm provisioning")
+            logger.info("Keycloak integration disabled - operating in database-only mode")
             return self._fallback_onboarding_response(tenant_id, owner_email)
 
         try:
@@ -144,7 +144,7 @@ class TenantOnboardingService:
         logger.info(f"Starting deprovisioning for tenant {tenant_id}")
 
         if not self.keycloak:
-            logger.warning("Keycloak not available, skipping realm deletion")
+            logger.info("Keycloak integration disabled - skipping realm deletion")
             return True
 
         try:

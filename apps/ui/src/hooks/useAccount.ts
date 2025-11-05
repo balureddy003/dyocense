@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import {
   TenantProfile,
   listPlans,
@@ -27,6 +28,7 @@ interface UseAccountState {
 }
 
 export const useAccount = (): UseAccountState => {
+  const { authenticated, ready } = useAuth();
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [profile, setProfile] = useState<TenantProfile | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -69,10 +71,13 @@ export const useAccount = (): UseAccountState => {
   }, []);
 
   useEffect(() => {
-    loadAccount().catch((err) => {
-      console.warn("Failed to load account context", err);
-    });
-  }, [loadAccount]);
+    // Only load account data if user is authenticated
+    if (ready && authenticated) {
+      loadAccount().catch((err) => {
+        console.warn("Failed to load account context", err);
+      });
+    }
+  }, [loadAccount, ready, authenticated]);
 
   const ensureLoaded = useCallback(async () => {
     if (!initialised && !loading) {

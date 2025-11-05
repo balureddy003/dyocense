@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { Key, Copy, RefreshCw, Check, CreditCard, ArrowUpCircle } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { BrandedHeader } from "../components/BrandedHeader";
+import { BrandedFooter } from "../components/BrandedFooter";
 
 interface TenantProfile {
   tenant_id: string;
@@ -121,8 +123,10 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-100">
-      <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 via-white to-blue-100">
+      <BrandedHeader showNav={true} />
+      
+      <div className="flex-1 max-w-4xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
@@ -308,6 +312,8 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+      
+      <BrandedFooter />
     </div>
   );
 }

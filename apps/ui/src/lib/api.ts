@@ -89,6 +89,8 @@ export interface TenantRegistrationResponse {
   tenant_id: string;
   api_token: string;
   plan: SubscriptionPlan;
+  already_exists?: boolean;
+  message?: string;
 }
 
 export interface TenantProfile {
@@ -189,6 +191,41 @@ export async function getTenantProfile(): Promise<TenantProfile> {
   return fetchJSON<TenantProfile>("/v1/tenants/me");
 }
 
+export async function updateTenantBusinessProfile(profile: {
+  industry?: string;
+  company_size?: string;
+  team_size?: string;
+  primary_goal?: string;
+  business_type?: string;
+}): Promise<{ message: string; profile: any }> {
+  return fetchJSON<{ message: string; profile: any }>("/v1/tenants/me/profile", {
+    method: "PUT",
+    body: JSON.stringify(profile),
+  });
+}
+
+export interface PlaybookRecommendation {
+  id: string;
+  title: string;
+  description: string;
+  archetype_id: string;
+  icon: string;
+  estimated_time: string;
+  tags: string[];
+}
+
+export async function getPlaybookRecommendations(): Promise<{
+  recommendations: PlaybookRecommendation[];
+  industry: string;
+  message: string;
+}> {
+  return fetchJSON<{
+    recommendations: PlaybookRecommendation[];
+    industry: string;
+    message: string;
+  }>("/v1/goals/recommendations");
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   return fetchJSON<ProjectSummary[]>("/v1/projects", { fallback: [] });
 }
@@ -205,6 +242,16 @@ export async function loginUser(payload: UserLoginPayload): Promise<UserLoginRes
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export interface TenantOption {
+  tenant_id: string;
+  name: string;
+}
+
+export async function getUserTenants(email: string): Promise<TenantOption[]> {
+  const response = await fetchJSON<{ tenants: TenantOption[] }>(`/v1/users/tenants?email=${encodeURIComponent(email)}`);
+  return response.tenants;
 }
 
 export async function registerUser(payload: UserRegistrationPayload): Promise<UserProfile> {

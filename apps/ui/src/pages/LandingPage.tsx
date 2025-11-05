@@ -1,6 +1,8 @@
 import { ArrowRight, CheckCircle2, Shield, Sparkles, Workflow, Zap, TrendingUp, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { BrandedHeader } from "../components/BrandedHeader";
+import { BrandedFooter } from "../components/BrandedFooter";
 
 const FEATURE_CARDS = [
   {
@@ -114,51 +116,10 @@ export const LandingPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-white via-blue-50/40 to-blue-100/30 text-gray-900">
-      <header className="max-w-6xl mx-auto px-6 py-6 flex items-center justify-between">
-        <div className="flex items-center gap-3 text-primary text-xl font-semibold">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white font-bold">
-            D
-          </span>
-          Dyocense
-        </div>
-        <nav className="hidden md:flex items-center gap-6 text-sm text-gray-600">
-          <button className="hover:text-primary" onClick={() => navigate("/#platform")}>
-            Platform
-          </button>
-          <button className="hover:text-primary" onClick={() => navigate("/#solutions")}>
-            Solutions
-          </button>
-          <button className="hover:text-primary" onClick={() => navigate("/#pricing")}>
-            Pricing
-          </button>
-          <button className="hover:text-primary" onClick={() => navigate("/#resources")}>
-            Resources
-          </button>
-        </nav>
-        <div className="flex items-center gap-3 text-sm">
-          <button
-            className="px-4 py-2 text-primary font-semibold rounded-full border border-primary hover:bg-primary hover:text-white transition"
-            onClick={() => {
-              if (authenticated) {
-                navigate("/home");
-              } else {
-                goToLogin("/home");
-              }
-            }}
-          >
-            {authenticated ? "Go to platform" : "Sign in"}
-          </button>
-          <button
-            className="px-4 py-2 rounded-full bg-primary text-white font-semibold shadow-lg hover:shadow-xl transition flex items-center gap-2"
-            onClick={() => navigate("/buy")}
-          >
-            Buy Dyocense <ArrowRight size={16} />
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-white via-blue-50/40 to-blue-100/30 text-gray-900">
+      <BrandedHeader showNav={false} />
 
-      <main className="px-6">
+      <main className="flex-1 px-6">
         {/* Hero Section */}
         <section className="max-w-5xl mx-auto text-center py-20 space-y-6">
           <p className="text-primary font-semibold uppercase tracking-widest text-xs">Decision Intelligence Platform</p>
@@ -372,6 +333,8 @@ export const LandingPage = () => {
           </div>
         </section>
       </main>
+      
+      <BrandedFooter />
     </div>
   );
 };
