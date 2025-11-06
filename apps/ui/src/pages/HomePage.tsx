@@ -1,36 +1,140 @@
 import { useEffect, useState } from "react";
 import { TopNav } from "../components/TopNav";
 import { Header } from "../components/Header";
-import { AssistantPanel } from "../components/AssistantPanel";
-import { ItineraryColumn } from "../components/ItineraryColumn";
-import { InsightsPanel } from "../components/InsightsPanel";
-import { PlanDrawer } from "../components/PlanDrawer";
-import { ExportModal } from "../components/ExportModal";
+import { AgentAssistant } from "../components/AgentAssistant";
+import { ExecutionPanel } from "../components/ExecutionPanel";
+import { MetricsPanel } from "../components/MetricsPanel";
 import { CreatePlaybook } from "../components/CreatePlaybook";
-import { InviteTeammateCard } from "../components/InviteTeammateCard";
 import { TrialBanner } from "../components/TrialBanner";
 import { WelcomeModal } from "../components/WelcomeModal";
-import { GettingStartedCard } from "../components/GettingStartedCard";
 import { RecommendedPlaybooks } from "../components/RecommendedPlaybooks";
+import { PlaybookResultsPage } from "./PlaybookResultsPage";
+import { GettingStartedGuide } from "../components/GettingStartedGuide";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { PlanSelector, SavedPlan } from "../components/PlanSelector";
+import { PlanNameModal } from "../components/PlanNameModal";
+import { PlanVersionsSidebar } from "../components/PlanVersionsSidebar";
+import { VersionComparisonModal } from "../components/VersionComparisonModal";
 import { CreatePlaybookPayload, usePlaybook } from "../hooks/usePlaybook";
 import { useAccount } from "../hooks/useAccount";
 import { useAuth } from "../context/AuthContext";
 import { BusinessMetrics } from "../components/BusinessMetrics";
+import { tenantConnectorStore } from "../lib/tenantConnectors";
+import { getSavedPlans, savePlan, deletePlan, getActivePlanId, setActivePlanId, clearActivePlan } from "../lib/planPersistence";
+
+type PlanOverview = {
+  title: string;
+  summary: string;
+  stages: Array<{
+    id: string;
+    title: string;
+    description: string;
+    todos: string[];
+  }>;
+  quickWins: string[];
+  estimatedDuration: string;
+  dataSources?: Array<{
+    id: string;
+    name: string;
+    type: string;
+    size: number;
+  }>;
+};
 
 export const HomePage = () => {
-  const { playbook, runs, selectedRunId, loading, error, selectRun, createPlaybook } = usePlaybook();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [mode, setMode] = useState<"create" | "playbook">(runs.length ? "playbook" : "create");
+  // Current project context (tenant -> project -> plan hierarchy)
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const { playbook, runs, selectedRunId, loading, error, selectRun, createPlaybook } = usePlaybook(currentProjectId);
+  const [mode, setMode] = useState<"create" | "results" | "agent" | "plan-selector">("plan-selector");
   const [allowAutoSwitch, setAllowAutoSwitch] = useState(true);
-  const { profile, projects, error: accountError, createProject, apiTokens, createApiToken, refreshApiTokens } = useAccount();
+  const [lastCreatedPayload, setLastCreatedPayload] = useState<CreatePlaybookPayload | null>(null);
+  const { profile, projects, createProject } = useAccount();
   const { user } = useAuth();
-  const [tokenSecret, setTokenSecret] = useState<string | null>(null);
-  const [tokenLoading, setTokenLoading] = useState(false);
-  const [tokenError, setTokenError] = useState<string | null>(null);
   const [showWelcome, setShowWelcome] = useState(false);
-  const [showGettingStarted, setShowGettingStarted] = useState(true);
-  const [selectedArchetypeId, setSelectedArchetypeId] = useState<string | undefined>(undefined);
+  const [showGettingStarted, setShowGettingStarted] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(undefined);
+  const [generatedPlan, setGeneratedPlan] = useState<PlanOverview | null>(null);
+  const [hasConnectors, setHasConnectors] = useState(false);
+  const [forceAgentMode, setForceAgentMode] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
+  const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
+  const [showPlanNameModal, setShowPlanNameModal] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState<PlanOverview | null>(null);
+  const [showVersionsSidebar, setShowVersionsSidebar] = useState(false);
+  // Header-only title when no plan exists yet
+  const [unsavedPlanName, setUnsavedPlanName] = useState<string | undefined>(undefined);
+  // Signal to reinitialize assistant and left panel for a fresh new plan flow
+  const [newPlanSignal, setNewPlanSignal] = useState(0);
+  // Version comparison state
+  const [showVersionComparison, setShowVersionComparison] = useState(false);
+  const [previousPlanVersion, setPreviousPlanVersion] = useState<SavedPlan | null>(null);
+  const [newPlanVersion, setNewPlanVersion] = useState<SavedPlan | null>(null);
+
+  // (moved up) currentProjectId state declared above to pass into usePlaybook
+
+  // Initialise current project from storage or default to first project
+  useEffect(() => {
+    if (!profile?.tenant_id) return;
+    const storageKey = `dyocense-active-project-${profile.tenant_id}`;
+    const stored = localStorage.getItem(storageKey);
+    const first = projects[0]?.project_id || null;
+    const next = stored || first;
+    if (next !== currentProjectId) {
+      setCurrentProjectId(next);
+    }
+  }, [projects, profile?.tenant_id]);
+
+  useEffect(() => {
+    if (profile?.tenant_id && currentProjectId) {
+      const key = `dyocense-active-project-${profile.tenant_id}`;
+      localStorage.setItem(key, currentProjectId);
+    }
+  }, [currentProjectId, profile?.tenant_id]);
+
+  // Load saved plans for current project
+  useEffect(() => {
+    if (profile?.tenant_id) {
+      const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+      setSavedPlans(plans);
+      
+      // Check for active plan
+      const activePlanId = getActivePlanId(profile.tenant_id, currentProjectId);
+      if (activePlanId) {
+        const activePlan = plans.find(p => p.id === activePlanId);
+        if (activePlan) {
+          setCurrentPlanId(activePlanId);
+          setGeneratedPlan(activePlan);
+          setMode("agent");
+          setShowGettingStarted(false);
+        } else {
+          // Active plan not found, show selector
+          setMode(plans.length > 0 ? "plan-selector" : "agent");
+          setShowGettingStarted(plans.length === 0);
+        }
+      } else {
+        // No active plan, show selector if plans exist
+        setMode(plans.length > 0 ? "plan-selector" : "agent");
+        setShowGettingStarted(plans.length === 0);
+      }
+    }
+  }, [profile?.tenant_id, currentProjectId]);
+
+  // Check if user has connectors
+  useEffect(() => {
+    if (profile?.tenant_id) {
+      (async () => {
+        try {
+          const connectors = await tenantConnectorStore.getAll(profile.tenant_id);
+          setHasConnectors(connectors.filter((c) => c.status === "active").length > 0);
+        } catch (err) {
+          console.warn("Failed to load connectors for hasConnectors check", err);
+          setHasConnectors(false);
+        }
+      })();
+    }
+  }, [profile?.tenant_id]);
 
   // Check if user has seen the welcome modal
   useEffect(() => {
@@ -44,10 +148,10 @@ export const HomePage = () => {
 
   // Check if user has created any playbooks
   useEffect(() => {
-    if (runs.length > 0 || projects.length > 1) {
+    if (runs.length > 0 || projects.length > 1 || generatedPlan || savedPlans.length > 0) {
       setShowGettingStarted(false);
     }
-  }, [runs.length, projects.length]);
+  }, [runs.length, projects.length, generatedPlan, savedPlans.length]);
 
   const handleCloseWelcome = () => {
     if (user?.id) {
@@ -57,22 +161,362 @@ export const HomePage = () => {
   };
 
   const handleCreate = async (payload: CreatePlaybookPayload) => {
+    setLastCreatedPayload(payload);
     await createPlaybook(payload);
-    setMode("playbook");
+    setMode("results");
     setAllowAutoSwitch(false);
+  };
+
+  const handleRegenerate = async (payload: CreatePlaybookPayload) => {
+    setLastCreatedPayload(payload);
+    await createPlaybook(payload);
+  };
+
+  const handleViewFullPlan = () => {
+    setMode("agent");
+  };
+
+  const handlePlanGenerated = (plan: PlanOverview) => {
+    // Always update the working plan view
+    setGeneratedPlan(plan);
+
+    if (!profile?.tenant_id) return;
+
+    // If we already have a current plan, this is a modification → auto-increment version and show comparison
+    if (currentPlanId) {
+      const existingPlan = savedPlans.find((p) => p.id === currentPlanId);
+      if (existingPlan) {
+        const updatedPlan: SavedPlan = {
+          ...existingPlan,
+          ...plan,
+          id: existingPlan.id,
+          userProvidedName: existingPlan.userProvidedName, // Keep the user's chosen name
+          version: existingPlan.version + 1,
+          createdAt: existingPlan.createdAt,
+          updatedAt: new Date().toISOString(),
+        };
+        
+        // Store both versions for comparison
+        setPreviousPlanVersion(existingPlan);
+        setNewPlanVersion(updatedPlan);
+        setShowVersionComparison(true);
+        
+        // Don't auto-save yet - let user decide via comparison modal
+        return;
+      }
+    }
+
+    // This is a brand new plan → decide whether to prompt for naming
+    let shouldPrompt = true;
+    const dismissedPending = sessionStorage.getItem(`dyocense-skip-name-pending-${profile.tenant_id}`) === "true";
+    if (unsavedPlanName || dismissedPending) {
+      shouldPrompt = false;
+    }
+
+    if (shouldPrompt) {
+      setPendingPlan(plan);
+      setShowPlanNameModal(true);
+    } else {
+      setPendingPlan(null);
+      setShowPlanNameModal(false);
+    }
+  };
+
+  const handleSavePlanName = (userProvidedName: string) => {
+    if (!pendingPlan || !profile?.tenant_id) return;
+    
+    // Get existing plan if updating
+    const existingPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
+    
+    const savedPlan: SavedPlan = {
+      id: currentPlanId || `plan-${Date.now()}`,
+      projectId: currentProjectId || undefined,
+      ...pendingPlan,
+      userProvidedName,
+      version: existingPlan ? existingPlan.version + 1 : 1,
+      createdAt: existingPlan?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    
+    savePlan(profile.tenant_id, savedPlan, currentProjectId);
+    setActivePlanId(profile.tenant_id, savedPlan.id, currentProjectId);
+    setCurrentPlanId(savedPlan.id);
+    // Ensure any previous "skip naming" suppression for this plan is cleared once it has a name
+    try {
+      localStorage.removeItem(`dyocense-skip-name-${profile.tenant_id}-${savedPlan.id}`);
+      sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
+    } catch {}
+    
+    // Refresh saved plans list
+  const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+    setSavedPlans(plans);
+    
+    setPendingPlan(null);
+    // Clear any unsaved header override once saved
+    setUnsavedPlanName(undefined);
+  };
+
+  const handleSkipPlanName = () => {
+    if (!pendingPlan || !profile?.tenant_id) return;
+    
+    // Save without user-provided name
+    const existingPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
+    
+    const savedPlan: SavedPlan = {
+      id: currentPlanId || `plan-${Date.now()}`,
+      projectId: currentProjectId || undefined,
+      ...pendingPlan,
+      version: existingPlan ? existingPlan.version + 1 : 1,
+      createdAt: existingPlan?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    
+    savePlan(profile.tenant_id, savedPlan, currentProjectId);
+    setActivePlanId(profile.tenant_id, savedPlan.id, currentProjectId);
+    setCurrentPlanId(savedPlan.id);
+    // Persist suppression so we don't re-open the name modal for this plan until the user actually names it
+    try {
+      localStorage.setItem(`dyocense-skip-name-${profile.tenant_id}-${savedPlan.id}`, "true");
+      sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
+    } catch {}
+    
+    // Refresh saved plans list
+  const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+    setSavedPlans(plans);
+    
+    setPendingPlan(null);
+    // Clear any unsaved header override once saved
+    setUnsavedPlanName(undefined);
+  };
+
+  const handleUpdatePlanName = (newName: string) => {
+    // Case 1: Editing a saved plan name
+    if (currentPlanId && profile?.tenant_id) {
+      const currentPlan = savedPlans.find(p => p.id === currentPlanId);
+      if (!currentPlan) return;
+      const updatedPlan: SavedPlan = {
+        ...currentPlan,
+        userProvidedName: newName,
+        updatedAt: new Date().toISOString(),
+      };
+      savePlan(profile.tenant_id, updatedPlan, currentProjectId);
+      const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+      setSavedPlans(plans);
+      setGeneratedPlan(updatedPlan);
+      return;
+    }
+
+    // Case 2: Editing a generated (unsaved) plan title
+    if (generatedPlan) {
+      setGeneratedPlan({ ...generatedPlan, title: newName });
+      return;
+    }
+
+    // Case 3: No plan yet – just update header title
+    setUnsavedPlanName(newName);
+  };
+
+  const handleKeepNewVersion = () => {
+    if (!newPlanVersion || !profile?.tenant_id) return;
+    
+    savePlan(profile.tenant_id, newPlanVersion, currentProjectId);
+    setActivePlanId(profile.tenant_id, newPlanVersion.id, currentProjectId);
+    
+    // Refresh saved plans list
+    const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+    setSavedPlans(plans);
+    
+    // Update local state
+    setGeneratedPlan(newPlanVersion);
+    
+    // Close modal
+    setShowVersionComparison(false);
+    setPreviousPlanVersion(null);
+    setNewPlanVersion(null);
+  };
+
+  const handleReturnToPreviousVersion = () => {
+    if (!previousPlanVersion) return;
+    
+    // Revert to previous version
+    setGeneratedPlan(previousPlanVersion);
+    
+    // Close modal
+    setShowVersionComparison(false);
+    setPreviousPlanVersion(null);
+    setNewPlanVersion(null);
+  };
+
+  const calculateChanges = () => {
+    if (!previousPlanVersion || !newPlanVersion) {
+      return { added: [], removed: [], modified: [] };
+    }
+
+    const changes: { added: string[]; removed: string[]; modified: string[] } = {
+      added: [],
+      removed: [],
+      modified: [],
+    };
+
+    // Compare stages
+    const prevStageIds = new Set(previousPlanVersion.stages.map(s => s.id));
+    const newStageIds = new Set(newPlanVersion.stages.map(s => s.id));
+
+    newPlanVersion.stages.forEach(stage => {
+      if (!prevStageIds.has(stage.id)) {
+        changes.added.push(`Added stage: ${stage.title}`);
+      }
+    });
+
+    previousPlanVersion.stages.forEach(stage => {
+      if (!newStageIds.has(stage.id)) {
+        changes.removed.push(`Removed stage: ${stage.title}`);
+      }
+    });
+
+    // Compare quick wins count
+    if (newPlanVersion.quickWins.length !== previousPlanVersion.quickWins.length) {
+      changes.modified.push(
+        `Quick wins changed from ${previousPlanVersion.quickWins.length} to ${newPlanVersion.quickWins.length}`
+      );
+    }
+
+    // Compare duration
+    if (newPlanVersion.estimatedDuration !== previousPlanVersion.estimatedDuration) {
+      changes.modified.push(
+        `Duration changed from ${previousPlanVersion.estimatedDuration} to ${newPlanVersion.estimatedDuration}`
+      );
+    }
+
+    return changes;
+  };
+
+  const handleSelectPlan = (plan: SavedPlan) => {
+    setGeneratedPlan(plan);
+    setCurrentPlanId(plan.id);
+    if (profile?.tenant_id) {
+      setActivePlanId(profile.tenant_id, plan.id, currentProjectId);
+    }
+    setMode("agent");
+  };
+
+  const handleCreateNewPlan = () => {
+    setGeneratedPlan(null);
+    setCurrentPlanId(null);
+    setShowGettingStarted(false);
+    setForceAgentMode(true);
+    setUnsavedPlanName(undefined);
+    if (profile?.tenant_id) {
+      clearActivePlan(profile.tenant_id, currentProjectId);
+      // Clear any pending name-modal suppression for a fresh plan flow
+      try {
+        sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
+      } catch {}
+    }
+    setMode("agent");
+    // Kick off assistant reset and ensure left panel re-mounts expanded
+    setNewPlanSignal((s) => s + 1);
+    
+    // Reset the page to ensure clean state
+    setTimeout(() => {
+      window.scrollTo(0, 0);
+    }, 100);
+  };
+
+  const handleDeletePlan = (planId: string) => {
+    if (profile?.tenant_id) {
+      deletePlan(profile.tenant_id, planId, currentProjectId);
+      const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+      setSavedPlans(plans);
+      
+      // If deleting current plan, clear it
+      if (planId === currentPlanId) {
+        setGeneratedPlan(null);
+        setCurrentPlanId(null);
+        clearActivePlan(profile.tenant_id, currentProjectId);
+      }
+    }
   };
 
   useEffect(() => {
     if (allowAutoSwitch && runs.length && mode === "create" && !loading) {
-      setMode("playbook");
+      setMode("results");
       setAllowAutoSwitch(false);
     }
   }, [runs.length, mode, loading, allowAutoSwitch]);
 
+  // Show plan selector
+  if (mode === "plan-selector") {
+    return (
+      <>
+        <TopNav 
+          projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
+          currentProjectId={currentProjectId}
+          onProjectChange={(id) => {
+            setCurrentProjectId(id);
+            setCurrentPlanId(null);
+            if (profile?.tenant_id) clearActivePlan(profile.tenant_id, id);
+          }}
+          onCreateProject={async () => {
+            const name = window.prompt("New project name?")?.trim();
+            if (!name) return;
+            const created = await createProject(name);
+            if (created?.project_id) {
+              setCurrentProjectId(created.project_id);
+              setCurrentPlanId(null);
+              if (profile?.tenant_id) clearActivePlan(profile.tenant_id, created.project_id);
+            } else {
+              window.alert("Failed to create project. Please try again.");
+            }
+          }}
+        />
+        <PlanSelector
+          plans={savedPlans}
+          onSelectPlan={handleSelectPlan}
+          onCreateNew={handleCreateNewPlan}
+          onDeletePlan={handleDeletePlan}
+        />
+      </>
+    );
+  }
+
+  // Show results page after creating playbook
+  if (mode === "results" && lastCreatedPayload) {
+    return (
+      <PlaybookResultsPage
+        playbook={playbook}
+        originalPayload={lastCreatedPayload}
+        onRegenerate={handleRegenerate}
+        onViewFullPlan={handleViewFullPlan}
+        loading={loading}
+      />
+    );
+  }
+
   if (mode === "create") {
     return (
       <div className="min-h-screen flex flex-col bg-bg text-gray-900">
-        <TopNav />
+        <TopNav 
+          projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
+          currentProjectId={currentProjectId}
+          onProjectChange={(id) => {
+            setCurrentProjectId(id);
+            setCurrentPlanId(null);
+            if (profile?.tenant_id) clearActivePlan(profile.tenant_id, id);
+          }}
+          onCreateProject={async () => {
+            const name = window.prompt("New project name?")?.trim();
+            if (!name) return;
+            const created = await createProject(name);
+            if (created?.project_id) {
+              setCurrentProjectId(created.project_id);
+              setCurrentPlanId(null);
+              if (profile?.tenant_id) clearActivePlan(profile.tenant_id, created.project_id);
+            } else {
+              window.alert("Failed to create project. Please try again.");
+            }
+          }}
+        />
         <WelcomeModal
           open={showWelcome}
           onClose={handleCloseWelcome}
@@ -94,14 +538,26 @@ export const HomePage = () => {
         {!showGettingStarted && (
           <div className="max-w-6xl mx-auto w-full px-6 pt-6">
             <BusinessMetrics />
+            <div className="mt-4 flex items-center justify-between">
+              <div className="text-sm text-gray-600">Plan smarter in 3 steps: Describe your goal → Generate plan → Review & refine.</div>
+              <button
+                onClick={() => {
+                  const createSection = document.querySelector('[data-create-playbook]');
+                  createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-primary px-3 py-2 text-primary font-medium hover:bg-blue-50"
+              >
+                Start a plan
+              </button>
+            </div>
           </div>
         )}
 
         {/* Recommended Templates */}
         {!showGettingStarted && profile && (
           <RecommendedPlaybooks
-            onSelectPlaybook={(archetypeId) => {
-              setSelectedArchetypeId(archetypeId);
+            onSelectPlaybook={(templateId) => {
+              setSelectedTemplateId(templateId);
               const createSection = document.querySelector('[data-create-playbook]');
               createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }}
@@ -114,21 +570,103 @@ export const HomePage = () => {
             onSubmit={handleCreate}
             submitting={loading}
             projects={projects.map((project) => ({ project_id: project.project_id, name: project.name }))}
-            initialArchetypeId={selectedArchetypeId}
+            initialTemplateId={selectedTemplateId}
+            initialProjectId={currentProjectId || projects[0]?.project_id}
           />
         </div>
       </div>
     );
   }
 
+  // Agent-driven 3-panel view
+  const currentPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
+  
   return (
     <div className="min-h-screen flex flex-col bg-bg text-gray-900">
-      <TopNav />
+      {/* Unified Two-Level Header like Trip.com */}
+      <TopNav 
+        showPlanControls={!showGettingStarted || forceAgentMode}
+        planName={
+          unsavedPlanName
+            || (currentPlan ? (currentPlan.userProvidedName || currentPlan.title || "Untitled Plan")
+                : (generatedPlan?.title || "AI Business Planner"))
+        }
+        planVersion={currentPlan?.version}
+        planDraftKey={`dyocense-draft-planname-${profile?.tenant_id || 'anon'}-${currentPlanId || 'new'}`}
+        projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
+        currentProjectId={currentProjectId}
+        onProjectChange={(id) => {
+          setCurrentProjectId(id);
+          setCurrentPlanId(null);
+          if (profile?.tenant_id) clearActivePlan(profile.tenant_id, id);
+        }}
+        onCreateProject={async () => {
+          const name = window.prompt("New project name?")?.trim();
+          if (!name) return;
+          const created = await createProject(name);
+          if (created?.project_id) {
+            setCurrentProjectId(created.project_id);
+            setCurrentPlanId(null);
+            if (profile?.tenant_id) clearActivePlan(profile.tenant_id, created.project_id);
+          } else {
+            window.alert("Failed to create project. Please try again.");
+          }
+        }}
+        dataSourcesConnected={currentPlan?.dataSources?.length || (hasConnectors ? 1 : 0)}
+        onPlanNameChange={handleUpdatePlanName}
+        onMenuClick={() => setShowVersionsSidebar(true)}
+        onNewPlanClick={() => {
+          setAllowAutoSwitch(false);
+          handleCreateNewPlan();
+        }}
+        dataStatusPosition="left"
+        steps={{
+          preferences: !!(profile?.tenant_id && typeof window !== 'undefined' && localStorage.getItem(`dyocense-prefs-set-${profile.tenant_id}`) === 'true'),
+          data: !!(currentPlan?.dataSources?.length || hasConnectors),
+          generate: !!generatedPlan,
+          name: !!(currentPlan?.userProvidedName),
+        }}
+      />
+      
       <WelcomeModal
         open={showWelcome}
         onClose={handleCloseWelcome}
         companyName={profile?.name}
       />
+      <PlanNameModal
+        open={showPlanNameModal}
+        onClose={() => {
+          // If we're in a new unsaved plan flow and the user closes the modal, suppress for this session
+          if (!currentPlanId && profile?.tenant_id) {
+            try {
+              sessionStorage.setItem(`dyocense-skip-name-pending-${profile.tenant_id}` , "true");
+            } catch {}
+          }
+          setShowPlanNameModal(false);
+        }}
+        onSave={handleSavePlanName}
+        onSkip={handleSkipPlanName}
+        currentName={currentPlanId ? savedPlans.find(p => p.id === currentPlanId)?.userProvidedName : undefined}
+        aiGeneratedTitle={pendingPlan?.title}
+      />
+      
+      {/* Version Comparison Modal */}
+      {previousPlanVersion && newPlanVersion && (
+        <VersionComparisonModal
+          open={showVersionComparison}
+          onClose={() => {
+            setShowVersionComparison(false);
+            setPreviousPlanVersion(null);
+            setNewPlanVersion(null);
+          }}
+          onKeepNew={handleKeepNewVersion}
+          onReturnToPrevious={handleReturnToPreviousVersion}
+          previousVersion={previousPlanVersion}
+          newVersion={newPlanVersion}
+          changes={calculateChanges()}
+        />
+      )}
+      
       {profile && profile.status === "trial" && (
         <div className="px-6 pt-4">
           <TrialBanner
@@ -138,40 +676,96 @@ export const HomePage = () => {
           />
         </div>
       )}
-      <Header
-        title={playbook.title}
-        onOpenDrawer={() => setDrawerOpen(true)}
-        onOpenExport={() => setExportOpen(true)}
-        onNewPlaybook={() => {
-          setAllowAutoSwitch(false);
-          setMode("create");
-        }}
-      />
-      <div className="flex flex-1 overflow-hidden">
-        <AssistantPanel playbook={playbook} />
-        <div className="flex flex-1 flex-col min-w-0">
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 mx-6 mt-4 px-4 py-2 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-          <ItineraryColumn playbook={playbook} loading={loading} />
-        </div>
-        <InsightsPanel playbook={playbook} />
-      </div>
-      <PlanDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        runs={runs}
-        selectedRunId={selectedRunId}
-        onSelect={selectRun}
-        onCreateNew={() => {
-          setDrawerOpen(false);
-          setAllowAutoSwitch(false);
-          setMode("create");
-        }}
-      />
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} playbook={playbook} />
+      
+      {/* Show Getting Started Guide for new users */}
+      {showGettingStarted && !forceAgentMode ? (
+        <GettingStartedGuide
+          hasConnectors={hasConnectors}
+            onConnectData={() => {
+              // This will be handled by AgentAssistant when we show it
+              setForceAgentMode(true);
+              // Wait for render then trigger connector mode
+              setTimeout(() => {
+                const connectorsBtn = document.querySelector('[data-connectors-button]') as HTMLButtonElement;
+                connectorsBtn?.click();
+              }, 100);
+            }}
+            onStartChat={() => {
+              setForceAgentMode(true);
+              setShowGettingStarted(false);
+            }}
+          />
+      ) : (
+        <>
+          {/* Versions Sidebar */}
+          <PlanVersionsSidebar
+            open={showVersionsSidebar}
+            onClose={() => setShowVersionsSidebar(false)}
+            plans={savedPlans}
+            currentPlanId={currentPlanId}
+            onSelectPlan={handleSelectPlan}
+            onCreateNew={handleCreateNewPlan}
+            projectName={projects.find(p => p.project_id === currentProjectId)?.name}
+          />
+
+          {/* 3-Panel Layout with Collapsible Panels */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Left: AI Agent Assistant */}
+            <CollapsiblePanel
+              key={`left-${currentPlanId || 'new'}-${newPlanSignal}`}
+              position="left"
+              title="AI Assistant"
+              defaultWidth="400px"
+              minWidth="320px"
+              maxWidth="600px"
+              collapsible={true}
+              resizable={true}
+              defaultCollapsed={false}
+              showFullscreenButton={true}
+              onCollapseChange={setLeftPanelCollapsed}
+            >
+              <AgentAssistant 
+                key={`${currentPlanId || 'new-plan'}-${newPlanSignal}`} 
+                onPlanGenerated={handlePlanGenerated} 
+                profile={profile}
+                startNewPlanSignal={newPlanSignal}
+              />
+            </CollapsiblePanel>
+            
+            {/* Middle: Execution Playbook (fills remaining space) */}
+            <CollapsiblePanel
+              position="center"
+              title="Execution Plan"
+              collapsible={false}
+              resizable={false}
+              showFullscreenButton={true}
+            >
+              <ExecutionPanel
+                stages={generatedPlan?.stages || []}
+                title={generatedPlan ? "Execution Plan" : "Your Plan"}
+                estimatedDuration={generatedPlan?.estimatedDuration}
+                hideHeader={true}
+              />
+            </CollapsiblePanel>
+            
+            {/* Right: KPIs & Evidence */}
+            <CollapsiblePanel
+              position="right"
+              title="Metrics"
+              defaultWidth="380px"
+              minWidth="300px"
+              maxWidth="500px"
+              collapsible={true}
+              resizable={true}
+              defaultCollapsed={false}
+              showFullscreenButton={true}
+              onCollapseChange={setRightPanelCollapsed}
+            >
+              <MetricsPanel quickWins={generatedPlan?.quickWins} />
+            </CollapsiblePanel>
+          </div>
+        </>
+      )}
     </div>
   );
 };

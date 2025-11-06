@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://dyocense.dev/schemas/trip_planner.schema.json",
+  "title": "Trip Planner Schemas",
+  "description": "JSON Schemas for TripRequest, PlanDelta, and TripPlan",
+  "type": "object",
+  "definitions": {
+    "PlaceRef": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "enum": ["city", "poi", "region", "country"] },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" }
+      }
+    },
+    "TripRequest": {
+      "type": "object",
+      "required": ["origin", "destinations", "travel_window"],
+      "properties": {
+        "origin": { "$ref": "#/definitions/PlaceRef" },
+        "destinations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/PlaceRef" }
+        },
+        "travel_window": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["start_date", "end_date"],
+              "properties": {
+                "start_date": { "type": "string", "format": "date" },
+                "end_date": { "type": "string", "format": "date" }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["duration_days"],
+              "properties": {
+                "duration_days": { "type": "integer", "minimum": 1, "maximum": 60 }
+              }
+            }
+          ]
+        },
+        "party": {
+          "type": "object",
+          "properties": {
+            "adults": { "type": "integer", "minimum": 1, "default": 1 },
+            "children": { "type": "integer", "minimum": 0, "default": 0 },
+            "seniors": { "type": "integer", "minimum": 0, "default": 0 },
+            "with_whom": { "type": "string", "enum": ["solo", "family", "couple", "friends", "elderly"] }
+          },
+          "additionalProperties": false
+        },
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "styles": { "type": "array", "items": { "type": "string", "enum": ["cultural", "classic", "nature", "cityscape", "historical"] } },
+            "pace": { "type": "string", "enum": ["ambitious", "relaxed"] },
+            "accommodation": { "type": "string", "enum": ["comfort", "premium", "luxury"] },
+            "budget_total": { "type": "number", "minimum": 0 },
+            "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+            "other_needs": { "type": "string", "maxLength": 1000 }
+          },
+          "additionalProperties": false
+        },
+        "constraints": {
+          "type": "object",
+          "properties": {
+            "wheelchair_access": { "type": "boolean" },
+            "visa_free_only": { "type": "boolean" },
+            "dietary_notes": { "type": "string", "maxLength": 500 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanDelta": {
+      "type": "object",
+      "properties": {
+        "add_destinations": { "type": "array", "items": { "$ref": "#/$defs/PlaceRef" } },
+        "remove_destination_ids": { "type": "array", "items": { "type": "string" } },
+        "reorder_destination_ids": { "type": "array", "items": { "type": "string" } },
+        "change_dates": {
+          "oneOf": [
+            { "type": "object", "required": ["start_date", "end_date"], "properties": { "start_date": { "type": "string", "format": "date" }, "end_date": { "type": "string", "format": "date" } } },
+            { "type": "object", "required": ["duration_days"], "properties": { "duration_days": { "type": "integer", "minimum": 1, "maximum": 60 } } }
+          ]
+        },
+        "pace": { "type": "string", "enum": ["ambitious", "relaxed"] },
+        "styles": { "type": "array", "items": { "type": "string", "enum": ["cultural", "classic", "nature", "cityscape", "historical"] } },
+        "accommodation": { "type": "string", "enum": ["comfort", "premium", "luxury"] },
+        "budget_total": { "type": "number", "minimum": 0 },
+        "lock_activity_ids": { "type": "array", "items": { "type": "string" } },
+        "lock_lodging_ids": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "TripPlan": {
+      "type": "object",
+      "required": ["id", "summary", "currency", "days"],
+      "properties": {
+        "id": { "type": "string" },
+        "summary": { "type": "string" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+        "total_estimated_cost": { "type": "number" },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["date", "city", "activities"],
+            "properties": {
+              "date": { "type": "string", "format": "date" },
+              "city": { "$ref": "#/definitions/PlaceRef" },
+              "activities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "title", "category"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "title": { "type": "string" },
+                    "category": { "type": "string" },
+                    "time_window": { "type": "string" },
+                    "location": { "$ref": "#/definitions/PlaceRef" },
+                    "cost": { "type": "number" },
+                    "booking": { "type": "object", "properties": { "label": { "type": "string" }, "url": { "type": "string", "format": "uri" } }, "additionalProperties": false }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "travel_legs": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "from": { "$ref": "#/definitions/PlaceRef" }, "to": { "$ref": "#/definitions/PlaceRef" }, "mode": { "type": "string" }, "duration_minutes": { "type": "integer" } }, "additionalProperties": false }
+        },
+        "lodging": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "location": { "$ref": "#/definitions/PlaceRef" }, "price_per_night": { "type": "number" } }, "additionalProperties": false }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

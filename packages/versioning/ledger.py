@@ -32,7 +32,20 @@ class GoalVersionLedger:
         return version
 
     def get(self, version_id: str) -> Optional[GoalVersion]:
-        return self._versions.get(version_id)
+        version = self._versions.get(version_id)
+        if version is not None:
+            return version
+        # Try to hydrate from backing store if available (supports shared in-memory collections)
+        try:
+            if hasattr(self._collection, "find_one"):
+                doc = self._collection.find_one({"version_id": version_id})  # type: ignore[attr-defined]
+                if doc:
+                    doc.pop("_id", None)
+                    self._hydrate(doc)
+                    return self._versions.get(version_id)
+        except Exception:
+            pass
+        return None
 
     def list_for_project(self, tenant_id: str, project_id: str) -> List[GoalVersion]:
         project_key = self._project_key(tenant_id, project_id)

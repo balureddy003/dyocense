@@ -3,16 +3,19 @@ import { CalendarRange, ChevronDown, Layers, Sparkles } from "lucide-react";
 import { CreatePlaybookPayload } from "../hooks/usePlaybook";
 import { DataIngestionPanel } from "./DataIngestionPanel";
 import { Tooltip } from "./Tooltip";
-import { getArchetypes } from "../lib/api";
+import { getTemplates } from "../lib/api";
 
 interface CreatePlaybookProps {
   onSubmit: (payload: CreatePlaybookPayload) => Promise<void>;
   submitting: boolean;
   projects?: Array<{ project_id: string; name: string }>;
-  initialArchetypeId?: string;
+  initialTemplateId?: string;
+  initialArchetypeId?: string;  // Backward compatibility
+  initialGoal?: string;
+  initialProjectId?: string;
 }
 
-const FALLBACK_ARCHETYPES = [
+const FALLBACK_TEMPLATES = [
   { label: "Inventory optimization", id: "inventory_basic", description: "Balance stock levels to avoid stockouts and reduce costs" },
   { label: "Demand forecasting", id: "forecasting_basic", description: "Predict future sales to plan better" },
   { label: "Assortment planning", id: "assortment_optimizer", description: "Choose the right products for each location" },
@@ -29,13 +32,13 @@ const SAMPLE_DATA_INPUTS = {
   ],
 };
 
-export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialArchetypeId }: CreatePlaybookProps) => {
-  const [archetypes, setArchetypes] = useState(FALLBACK_ARCHETYPES);
-  const [selectedArchetype, setSelectedArchetype] = useState(FALLBACK_ARCHETYPES[0]);
-  const [showArchetypeList, setShowArchetypeList] = useState(false);
-  const [goal, setGoal] = useState("Keep enough stock on hand while minimizing storage costs.");
+export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialTemplateId, initialArchetypeId, initialGoal, initialProjectId }: CreatePlaybookProps) => {
+  const [templates, setTemplates] = useState(FALLBACK_TEMPLATES);
+  const [selectedTemplate, setSelectedTemplate] = useState(FALLBACK_TEMPLATES[0]);
+  const [showTemplateList, setShowTemplateList] = useState(false);
+  const [goal, setGoal] = useState(initialGoal || "Keep enough stock on hand while minimizing storage costs.");
   const [horizon, setHorizon] = useState<number>(4);
-  const [projectId, setProjectId] = useState<string>(`ui-${Date.now()}`);
+  const [projectId, setProjectId] = useState<string>(initialProjectId || (projects[0]?.project_id ?? `ui-${Date.now()}`));
   const [dataInputs, setDataInputs] = useState<Record<string, unknown>>(SAMPLE_DATA_INPUTS);
 
   const projectOptions = useMemo(
@@ -46,47 +49,56 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialArc
   useEffect(() => {
     if (!projectOptions.length) return;
     if (!projectOptions.find((option) => option.id === projectId)) {
-      setProjectId(projectOptions[0].id);
+      setProjectId(initialProjectId || projectOptions[0].id);
     }
   }, [projectOptions, projectId]);
 
-  // Update selected archetype when initialArchetypeId changes
+  // Update goal if initialGoal changes (e.g., when user confirms preferences in left panel)
   useEffect(() => {
-    if (initialArchetypeId && archetypes.length) {
-      const matchingArchetype = archetypes.find((arch) => arch.id === initialArchetypeId);
-      if (matchingArchetype) {
-        setSelectedArchetype(matchingArchetype);
+    if (initialGoal && initialGoal !== goal) {
+      setGoal(initialGoal);
+    }
+  }, [initialGoal]);
+
+  // Update selected template when initialTemplateId changes (or backward compat with initialArchetypeId)
+  useEffect(() => {
+    const templateId = initialTemplateId || initialArchetypeId;
+    if (templateId && templates.length) {
+      const matchingTemplate = templates.find((tpl) => tpl.id === templateId);
+      if (matchingTemplate) {
+        setSelectedTemplate(matchingTemplate);
       }
     }
-  }, [initialArchetypeId, archetypes]);
+  }, [initialTemplateId, initialArchetypeId, templates]);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadArchetypes() {
+    async function loadTemplates() {
       try {
-        const response = await getArchetypes<{
+        const response = await getTemplates<{
           items?: Array<{ id: string; name?: string; description?: string }>;
-          archetypes?: Array<{ id: string; name?: string; description?: string }>;
-        }>({ items: [] });
-        const collection = response.items ?? (response as any).archetypes ?? [];
+          templates?: Array<{ id: string; name?: string; description?: string }>;
+          archetypes?: Array<{ id: string; name?: string; description?: string }>;  // Backward compat
+        }>();
+        const collection = response.items ?? (response as any).templates ?? (response as any).archetypes ?? [];
         if (!cancelled && collection.length) {
           const mapped = collection.map((item: any) => ({
             id: item.id,
             label: item.name || item.id,
             description: item.description,
           }));
-          setArchetypes(mapped);
-          setSelectedArchetype((prev) => mapped.find((entry: any) => entry.id === prev.id) ?? mapped[0]);
+          setTemplates(mapped);
+          setSelectedTemplate((prev) => mapped.find((entry: any) => entry.id === prev.id) ?? mapped[0]);
         }
       } catch (err) {
-        console.warn("Using fallback archetypes", err);
+        console.warn("Using fallback templates", err);
         if (!cancelled) {
-          setArchetypes(FALLBACK_ARCHETYPES);
-          setSelectedArchetype((prev) => prev ?? FALLBACK_ARCHETYPES[0]);
+          setTemplates(FALLBACK_TEMPLATES);
+          setSelectedTemplate((prev) => prev ?? FALLBACK_TEMPLATES[0]);
         }
       }
     }
-    loadArchetypes();
+    loadTemplates();
     return () => {
       cancelled = true;
     };
@@ -108,7 +120,8 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialArc
     await onSubmit({
       goal,
       horizon: effectiveHorizon,
-      archetype_id: selectedArchetype.id,
+      template_id: selectedTemplate.id,
+      archetype_id: selectedTemplate.id,  // Backward compatibility
       project_id: projectId,
       data_inputs: Object.keys(cleanedDataInputs).length > 0 ? cleanedDataInputs : undefined,
     });
@@ -136,22 +149,22 @@ export const CreatePlaybook = ({ onSubmit, submitting, projects = [], initialArc
             </div>
             
             <div className="grid gap-3 md:grid-cols-3">
-              {archetypes.map((archetype) => (
+              {templates.map((template) => (
                 <button
-                  key={archetype.id}
+                  key={template.id}
                   className={`p-4 rounded-xl border-2 text-left transition ${
-                    selectedArchetype.id === archetype.id
+                    selectedTemplate.id === template.id
                       ? "border-primary bg-blue-50"
                       : "border-gray-200 hover:border-primary"
                   }`}
-                  onClick={() => setSelectedArchetype(archetype)}
+                  onClick={() => setSelectedTemplate(template)}
                 >
                   <div className="flex items-start gap-2 mb-2">
-                    <Layers size={18} className={selectedArchetype.id === archetype.id ? "text-primary" : "text-gray-400"} />
-                    <h3 className="text-sm font-semibold text-gray-900">{archetype.label}</h3>
+                    <Layers size={18} className={selectedTemplate.id === template.id ? "text-primary" : "text-gray-400"} />
+                    <h3 className="text-sm font-semibold text-gray-900">{template.label}</h3>
                   </div>
-                  {archetype.description && (
-                    <p className="text-xs text-gray-600">{archetype.description}</p>
+                  {template.description && (
+                    <p className="text-xs text-gray-600">{template.description}</p>
                   )}
                 </button>
               ))}

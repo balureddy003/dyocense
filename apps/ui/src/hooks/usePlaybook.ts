@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  createRun,
-  getEvidence,
-  getRun,
-  listEvidence,
-  listRuns,
-} from "../lib/api";
-import mockTrip from "../data/mockTrip.json";
+import { createRun, getEvidence, getRun, listEvidence, listRuns } from "../lib/api";
 
 export interface Activity {
   name: string;
@@ -70,7 +63,8 @@ export interface PlaybookStage {
 export interface CreatePlaybookPayload {
   goal: string;
   horizon: number;
-  archetype_id: string;
+  template_id: string;
+  archetype_id?: string;  // Backward compatibility
   project_id?: string;
   data_inputs?: Record<string, unknown>;
 }
@@ -100,11 +94,17 @@ interface DyocenseRunListResponse {
   items?: DyocenseRun[];
 }
 
-const FALLBACK_PLAYBOOK = mockTrip as Playbook;
-
-const FALLBACK_RUN: DyocenseRun = {
-  run_id: "mock-run",
-  goal: FALLBACK_PLAYBOOK.goal,
+const EMPTY_PLAYBOOK: Playbook = {
+  title: "",
+  goal: "",
+  summary: { context: "", primaryKpis: [], quickWins: [] },
+  plan: [],
+  whatIfs: [],
+  unscheduled: [],
+  notes: [],
+  itinerary: [],
+  history: [],
+  evidence: [],
 };
 
 function normaliseSummary(summary?: string | string[]): string {
@@ -112,7 +112,7 @@ function normaliseSummary(summary?: string | string[]): string {
   return Array.isArray(summary) ? summary.join(" ") : summary;
 }
 
-function formatKpis(kpis?: Record<string, number>, fallback = FALLBACK_PLAYBOOK.summary.primaryKpis) {
+function formatKpis(kpis?: Record<string, number>, fallback: { label: string; value: string }[] = []) {
   if (!kpis || !Object.keys(kpis).length) return fallback;
   return Object.entries(kpis)
     .slice(0, 3)
@@ -143,7 +143,7 @@ const parseDeltaText = (text: string): Record<string, string> => {
 
 function mapWhatIfs(
   source?: Array<string | { title?: string; summary?: string; delta?: Record<string, unknown>; deltas?: Record<string, unknown>; delta_kpis?: Record<string, unknown> }>,
-  fallback = FALLBACK_PLAYBOOK.whatIfs
+  fallback: WhatIfScenario[] = []
 ): WhatIfScenario[] {
   if (!source || !source.length) return fallback;
   return source.map((item, index) => {
@@ -208,27 +208,22 @@ function buildHistory(run: DyocenseRun): PlaybookHistoryEntry[] {
       author: "Dyocense",
     });
   }
-  return entries.length ? entries : FALLBACK_PLAYBOOK.history;
+  return entries;
 }
 
 function composePlaybook(run: DyocenseRun | null, evidenceItems: EvidenceItem[]): Playbook {
-  if (!run) {
-    return FALLBACK_PLAYBOOK;
-  }
+  if (!run) return EMPTY_PLAYBOOK;
   const explanation = run.result?.explanation;
   const solution = run.result?.solution;
 
   const summaryText = normaliseSummary(explanation?.summary || solution?.summary);
   const summary: PlaybookSummary = {
-    context: summaryText || FALLBACK_PLAYBOOK.summary.context,
+    context: summaryText || "",
     primaryKpis: formatKpis(solution?.kpis),
-    quickWins:
-      explanation?.highlights && explanation.highlights.length
-        ? explanation.highlights
-        : FALLBACK_PLAYBOOK.summary.quickWins,
+    quickWins: explanation?.highlights && explanation.highlights.length ? explanation.highlights : [],
   };
 
-  const evidence = evidenceItems.length ? evidenceItems : FALLBACK_PLAYBOOK.evidence;
+  const evidence = evidenceItems.length ? evidenceItems : [];
   const runHistory = buildHistory(run);
   const evidenceHistory: PlaybookHistoryEntry[] = evidence
     .filter((item) => item.storedAt)
@@ -244,15 +239,15 @@ function composePlaybook(run: DyocenseRun | null, evidenceItems: EvidenceItem[])
   });
 
   return {
-    title: run.goal || FALLBACK_PLAYBOOK.title,
-    goal: run.goal || FALLBACK_PLAYBOOK.goal,
+    title: run.goal || "",
+    goal: run.goal || "",
     summary,
-    plan: FALLBACK_PLAYBOOK.plan,
+    plan: [],
     whatIfs: mapWhatIfs(explanation?.what_ifs),
-    unscheduled: FALLBACK_PLAYBOOK.unscheduled,
-    notes: FALLBACK_PLAYBOOK.notes,
-    itinerary: FALLBACK_PLAYBOOK.itinerary,
-    history: history.length ? history : FALLBACK_PLAYBOOK.history,
+    unscheduled: [],
+    notes: [],
+    itinerary: [],
+    history,
     evidence,
   };
 }
@@ -264,26 +259,20 @@ export interface RunSummary {
   updatedAt?: string;
 }
 
-export const usePlaybook = () => {
+export const usePlaybook = (projectId?: string | null) => {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [playbook, setPlaybook] = useState<Playbook>(FALLBACK_PLAYBOOK);
+  const [playbook, setPlaybook] = useState<Playbook>(EMPTY_PLAYBOOK);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshRuns = useCallback(async () => {
     try {
-      const response = await listRuns<DyocenseRunListResponse>({ runs: [] });
+      const response = await listRuns<DyocenseRunListResponse>({ project_id: projectId || undefined });
       const data = response.runs ?? response.items ?? [];
       if (!data.length) {
-        setRuns([
-          {
-            id: FALLBACK_RUN.run_id,
-            goal: FALLBACK_PLAYBOOK.goal,
-            status: "mock",
-          },
-        ]);
-        setSelectedRunId(FALLBACK_RUN.run_id);
+        setRuns([]);
+        setSelectedRunId(null);
         return;
       }
       const summaries = data.map((run) => ({
@@ -295,51 +284,36 @@ export const usePlaybook = () => {
       setRuns(summaries);
       setSelectedRunId((prev) => prev ?? summaries[0]?.id ?? null);
     } catch (err) {
-      console.warn("Falling back to mock runs", err);
-      setRuns([
-        {
-          id: FALLBACK_RUN.run_id,
-          goal: FALLBACK_PLAYBOOK.goal,
-          status: "mock",
-        },
-      ]);
-      setSelectedRunId(FALLBACK_RUN.run_id);
+      console.warn("Failed to load runs", err);
+      setRuns([]);
+      setSelectedRunId(null);
     }
-  }, []);
+  }, [projectId]);
 
   const loadPlaybook = useCallback(
     async (runId: string) => {
       setLoading(true);
       setError(null);
       try {
-        const run = await getRun<DyocenseRun>(runId, FALLBACK_RUN);
+        const run = await getRun<DyocenseRun>(runId);
         let evidence: EvidenceItem[] = [];
         try {
           const evidenceResponse = await getEvidence<{
             artifacts?: Record<string, any>;
             stored_at?: string;
-          }>(runId, { artifacts: {} });
+          }>(runId);
           evidence = mapArtifacts(evidenceResponse.artifacts, {
             stored_at: (evidenceResponse as any).stored_at,
           });
         } catch (err) {
-          console.warn("Falling back to list evidence", err);
-          try {
-            const listResponse = await listEvidence<{
-              items?: Array<{ artifacts?: Record<string, any>; stored_at?: string; run_id?: string }>;
-            }>({ items: [] });
-            const matching = listResponse.items?.find((item: any) => item.run_id === runId);
-            evidence = mapArtifacts(matching?.artifacts, { stored_at: matching?.stored_at });
-          } catch (e) {
-            console.warn("Evidence fallback failed", e);
-            evidence = [];
-          }
+          console.warn("Failed to fetch evidence", err);
+          evidence = [];
         }
         setPlaybook(composePlaybook(run, evidence));
       } catch (err: any) {
         console.warn("Failed to load run detail", err);
         setError(err?.message || "Failed to load playbook");
-        setPlaybook(FALLBACK_PLAYBOOK);
+        setPlaybook(EMPTY_PLAYBOOK);
       } finally {
         setLoading(false);
       }
@@ -348,8 +322,11 @@ export const usePlaybook = () => {
   );
 
   useEffect(() => {
+    // Reset selection when project changes to avoid stale run selection
+    setSelectedRunId(null);
+    setRuns([]);
     refreshRuns();
-  }, [refreshRuns]);
+  }, [refreshRuns, projectId]);
 
   useEffect(() => {
     if (selectedRunId) {
@@ -362,14 +339,13 @@ export const usePlaybook = () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await createRun<{ run_id?: string }>(payload, { run_id: FALLBACK_RUN.run_id });
+        const response = await createRun<{ run_id?: string }>(payload);
         await refreshRuns();
         if (response.run_id) {
           setSelectedRunId(response.run_id);
         }
       } catch (err: any) {
-        console.warn("Failed to create run, using mock", err);
-        setSelectedRunId(FALLBACK_RUN.run_id);
+        console.warn("Failed to create run", err);
       } finally {
         setLoading(false);
       }

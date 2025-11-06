@@ -39,50 +39,86 @@ class AuthenticationError(RuntimeError):
 PLAN_CATALOG: List[SubscriptionPlan] = [
     SubscriptionPlan(
         tier=PlanTier.FREE,
-        name="Free",
-        price_per_month=0.0,
-        description="Starter tier for experimentation and trials.",
-        limits=PlanLimits(max_projects=1, max_playbooks=3, max_members=2, support_level="Community"),
-        features=["1 active project", "3 AI playbooks stored", "Community support"],
+        name="Starter",
+        price_per_month=49.0,
+        description="Perfect for single-location businesses getting started.",
+        limits=PlanLimits(
+            max_projects=1,  # 1 location/business unit
+            max_playbooks=10,  # 10 decisions per month
+            max_members=3,
+            support_level="Email"
+        ),
+        features=[
+            "1 location or business unit",
+            "10 business decisions per month",
+            "3 team members",
+            "Email support",
+            "Basic templates & integrations",
+            "7-day free trial",
+        ],
     ),
     SubscriptionPlan(
         tier=PlanTier.SILVER,
-        name="Silver",
-        price_per_month=149.0,
-        description="For focused teams adopting Dyocense playbooks within a business unit.",
-        limits=PlanLimits(max_projects=5, max_playbooks=25, max_members=15, support_level="Business-hours"),
+        name="Growth",
+        price_per_month=199.0,
+        description="For businesses ready to scale operations.",
+        limits=PlanLimits(
+            max_projects=3,  # 3 locations
+            max_playbooks=50,  # 50 decisions per month
+            max_members=10,
+            support_level="Priority + Chat"
+        ),
         features=[
-            "5 active projects",
-            "25 AI playbooks stored",
-            "Business-hours support",
-            "Evidence history export",
+            "Up to 3 locations",
+            "50 business decisions per month",
+            "10 team members",
+            "Priority support + chat",
+            "Advanced analytics & forecasting",
+            "API access for integrations",
+            "Custom data connectors",
         ],
     ),
     SubscriptionPlan(
         tier=PlanTier.GOLD,
-        name="Gold",
+        name="Business",
         price_per_month=499.0,
-        description="Cross-functional deployment with governance and success management.",
-        limits=PlanLimits(max_projects=20, max_playbooks=150, max_members=75, support_level="Priority"),
+        description="For multi-location operations with dedicated support.",
+        limits=PlanLimits(
+            max_projects=10,  # 10 locations
+            max_playbooks=200,  # 200 decisions per month
+            max_members=25,
+            support_level="Dedicated Success Manager"
+        ),
         features=[
-            "20 active projects",
-            "150 AI playbooks stored",
-            "Priority success manager",
-            "Single sign-on + SCIM",
+            "Up to 10 locations",
+            "200 business decisions per month",
+            "25 team members",
+            "Dedicated success manager",
+            "Custom integrations & workflows",
+            "SSO & advanced security",
+            "White-label options",
         ],
     ),
     SubscriptionPlan(
         tier=PlanTier.PLATINUM,
-        name="Platinum",
-        price_per_month=1299.0,
-        description="Global control tower roll-out with enterprise-grade guarantees.",
-        limits=PlanLimits(max_projects=100, max_playbooks=1000, max_members=500, support_level="24/7 Enterprise"),
+        name="Enterprise",
+        price_per_month=1999.0,
+        description="Unlimited scale with enterprise-grade support and customization.",
+        limits=PlanLimits(
+            max_projects=100,  # Unlimited for practical purposes
+            max_playbooks=1000,  # High limit
+            max_members=100,
+            support_level="24/7 Enterprise + Solution Architect"
+        ),
         features=[
-            "100 active projects",
-            "1000 AI playbooks stored",
-            "24/7 mission-critical support",
-            "Dedicated solution architects",
-            "Custom data residency",
+            "Unlimited locations",
+            "Unlimited business decisions",
+            "Unlimited team members",
+            "24/7 priority support",
+            "Dedicated solution architect",
+            "Custom development",
+            "SLA guarantees",
+            "On-premise deployment option",
         ],
     ),
 ]

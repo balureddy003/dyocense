@@ -1,4 +1,5 @@
-import { Bell, ChevronDown, CircleUserRound, Globe2, LayoutDashboard, LineChart, LogOut, Shield, Settings } from "lucide-react";
+import { Bell, ChevronDown, CircleUserRound, Globe2, LayoutDashboard, LineChart, LogOut, Shield, Settings, Menu } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Link, useLocation } from "react-router-dom";
 
@@ -10,15 +11,80 @@ const NAV_LINKS = [
   { label: "Reports", path: "/home" },
 ];
 
-export const TopNav = () => {
-  const { user, authenticated, login, logout, usingMock } = useAuth();
+interface TopNavProps {
+  // Plan-specific controls (optional - only shown in plan view)
+  planName?: string;
+  planVersion?: number;
+  planDraftKey?: string; // localStorage key for persisting draft plan name
+  projectOptions?: Array<{ id: string; name: string }>;
+  currentProjectId?: string | null;
+  onProjectChange?: (projectId: string) => void;
+  onCreateProject?: () => void;
+  dataSourcesConnected?: number;
+  onPlanNameChange?: (newName: string) => void;
+  onMenuClick?: () => void;
+  onNewPlanClick?: () => void;
+  showPlanControls?: boolean;
+  dataStatusPosition?: "left" | "right"; // optional layout control
+  steps?: {
+    preferences: boolean;
+    data: boolean;
+    generate: boolean;
+    name: boolean;
+  };
+}
+
+export const TopNav = ({ 
+  planName, 
+  planVersion, 
+  planDraftKey,
+  projectOptions = [],
+  currentProjectId = null,
+  onProjectChange,
+  onCreateProject,
+  dataSourcesConnected = 0, 
+  onPlanNameChange,
+  onMenuClick,
+  onNewPlanClick,
+  showPlanControls = false,
+  dataStatusPosition = "right",
+  steps
+}: TopNavProps = {}) => {
+  const { user, authenticated, login, logout } = useAuth();
   const displayName = user?.fullName || user?.username || "Guest";
   const location = useLocation();
   const adminTenantId = import.meta.env.VITE_ADMIN_TENANT_ID || "admin";
   const isAdmin = authenticated && user?.id === adminTenantId;
 
+  const [hasDraftName, setHasDraftName] = useState(false);
+  const [draftName, setDraftName] = useState("");
+
+  useEffect(() => {
+    if (!planDraftKey) {
+      setHasDraftName(false);
+      setDraftName("");
+      return;
+    }
+    try {
+      const cached = localStorage.getItem(planDraftKey) || "";
+      setDraftName(cached);
+      setHasDraftName(!!cached && cached.trim() !== (planName || "").trim());
+    } catch {}
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === planDraftKey) {
+        const v = e.newValue || "";
+        setDraftName(v);
+        setHasDraftName(!!v && v.trim() !== (planName || "").trim());
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [planDraftKey, planName]);
+
   return (
-    <div className="bg-white border-b shadow-sm">
+    <div className="bg-white border-b shadow-sm sticky top-0 z-40">
+      {/* Level 1: Global Navigation */}
       <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between text-sm text-gray-700">
         <div className="flex items-center gap-8">
           <Link to="/" className="flex items-center gap-2 text-primary font-semibold text-lg">
@@ -55,6 +121,29 @@ export const TopNav = () => {
           </nav>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          {projectOptions && projectOptions.length > 0 && (
+            <div className="hidden md:flex items-center gap-2">
+              <select
+                value={currentProjectId || ""}
+                onChange={(e) => onProjectChange && onProjectChange(e.target.value)}
+                className="text-sm border border-gray-200 rounded-md px-2 py-1 text-gray-700 hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                title="Select project"
+              >
+                {projectOptions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {onCreateProject && (
+                <button
+                  onClick={onCreateProject}
+                  className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50"
+                  title="Create new project"
+                >
+                  + New
+                </button>
+              )}
+            </div>
+          )}
           <button className="flex items-center gap-1 text-gray-600 hover:text-primary">
             <Globe2 size={16} /> EN
             <ChevronDown size={14} />
@@ -82,7 +171,7 @@ export const TopNav = () => {
               <button
                 className="flex items-center gap-1 text-gray-600 hover:text-primary"
                 onClick={() => void logout()}
-                title={usingMock ? "Sign out (mock)" : "Sign out"}
+                title="Sign out"
               >
                 <LogOut size={16} /> Logout
               </button>
@@ -98,6 +187,112 @@ export const TopNav = () => {
           )}
         </div>
       </div>
+      
+      {/* Level 2: Plan Controls (Trip.com style) */}
+      {showPlanControls && (
+        <div className="border-t border-gray-100 bg-white/90 supports-[backdrop-filter]:bg-white/70 backdrop-blur">
+          <div className="w-full px-4 sm:px-6 py-2.5 flex items-center justify-between">
+            <div className="flex-1 min-w-0 flex items-center gap-3">
+              {/* Menu Icon - Opens Versions Sidebar */}
+              <button
+                onClick={onMenuClick}
+                className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-gray-100 transition-colors"
+                title="My Plans"
+              >
+                <Menu size={18} className="text-gray-700" />
+              </button>
+              
+              {/* Editable Plan Name */}
+              {planName && onPlanNameChange && (
+                <InlineEditableTitle
+                  value={planName}
+                  onSave={onPlanNameChange}
+                  className="text-base font-semibold text-gray-900 truncate max-w-[40vw]"
+                  placeholder="Enter plan name"
+                  persistKey={planDraftKey}
+                  onDraftChange={(exists, val) => {
+                    setHasDraftName(exists);
+                    setDraftName(val);
+                  }}
+                />
+              )}
+              {hasDraftName && (
+                <span
+                  title={`Unsaved draft: ${draftName}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200"
+                >
+                  Draft
+                </span>
+              )}
+              
+              {/* Version Badge */}
+              {typeof planVersion === "number" && (
+                <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
+                  v{planVersion}
+                </span>
+              )}
+
+              {/* Data Connection Status (left) */}
+              {dataStatusPosition === "left" && dataSourcesConnected > 0 && (
+                <div className="hidden md:flex items-center gap-1.5 text-xs text-green-700 bg-green-50 px-2.5 py-1 rounded-md border border-green-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                  <span>
+                    {dataSourcesConnected} {dataSourcesConnected === 1 ? "data source" : "data sources"} connected
+                  </span>
+                </div>
+              )}
+
+              {/* Steps */}
+              {steps && (
+                <div className="hidden md:flex items-center gap-1.5 ml-2">
+                  {[
+                    { key: "preferences", label: "Preferences", done: steps.preferences },
+                    { key: "data", label: "Data", done: steps.data },
+                    { key: "generate", label: "Generate", done: steps.generate },
+                    { key: "name", label: "Name", done: steps.name },
+                  ].map((s) => (
+                    <span
+                      key={s.key}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                        s.done
+                          ? "bg-green-50 border-green-200 text-green-700"
+                          : "bg-gray-50 border-gray-200 text-gray-600"
+                      }`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${s.done ? "bg-green-500" : "bg-gray-400"}`}
+                      />
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            {/* Actions */}
+            <div className="shrink-0 flex items-center gap-3">
+              {/* Data Connection Status (right) */}
+              {dataStatusPosition === "right" && dataSourcesConnected > 0 && (
+                <div className="hidden sm:flex items-center gap-1.5 text-xs text-green-700 bg-green-50 px-2.5 py-1 rounded-md border border-green-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                  <span>
+                    {dataSourcesConnected} {dataSourcesConnected === 1 ? "data source" : "data sources"} connected
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={onNewPlanClick}
+                className="px-3.5 py-1.5 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
+              >
+                + New Plan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+// Import InlineEditableTitle component
+import { InlineEditableTitle } from "./InlineEditableTitle";

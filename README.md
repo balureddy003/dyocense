@@ -1,27 +1,85 @@
-<<<<<<< HEAD
-# 🧭 Dyocense Decision Kernel Platform (DDKP)
-**Open-standard Decision Intelligence for the Agent Economy**
+# 🧭 Dyocense - Your AI Business Agent
+**Smart Business Decisions for Small Businesses**
 
-Dyocense is a cloud-native framework that turns **natural-language goals** into **optimal, explainable, verifiable decisions** by combining **LLMs + Forecasting + Operational Research (OR)**.
+Dyocense helps small business owners make better decisions about inventory, staffing, and operations using AI—without the complexity or cost of enterprise software.
 
-**Core loop:** Goal → Forecast → Optimise → Explain → Learn
+**Primary Focus:** Small businesses (retail, restaurants, services) with 1-10 locations  
+**Platform Capabilities:** Enterprise features available for larger customers
 
-- **LLM Compiler**: translates goals + tables into an Optimization Problem Spec (**OPS**).
-- **Forecast Engine**: optional time-series predictions injected into parameters.
-- **OR Solver**: OR-Tools / Pyomo / HiGHS/Gurobi to find feasible/optimal plans.
-- **Explainer**: natural-language summary, trade-offs, and what-ifs.
-- **Evidence Graph**: plan→outcome lineage, KPIs, policy verification.
-- **APIs/SDKs/Tools**: REST, gRPC, LangChain Tool, ChatGPT/Copilot connectors.
+## 🎯 Two Deployment Modes
 
-Standards: **OpenAPI 3.1**, **JSON-Schema 2020-12**, **CloudEvents**, **OpenTelemetry**, **OCI**, **ONNX/PMML**.
+### SMB Mode (Primary Focus - Recommended)
+- **Target:** Small businesses, 1-10 locations
+- **Pricing:** $49-499/month
+- **Stack:** MongoDB + LLM (Azure OpenAI)
+- **Setup:** 5 minutes
+- **Cost:** ~$100-200/month to operate
 
-See `/docs` for full specifications and `vision.md` for the long-term manifesto.
+### Platform Mode (Enterprise)
+- **Target:** Enterprise customers, API developers
+- **Pricing:** $1999+/month
+- **Stack:** Full enterprise (MongoDB + Neo4j + Qdrant + Keycloak)
+- **Setup:** 1-2 hours
+- **Cost:** ~$1000-2500/month to operate
+
+See [DUAL_PATH_DEPLOYMENT.md](docs/DUAL_PATH_DEPLOYMENT.md) for details.
 
 ---
 
-## Phase 5 (Ecosystem & Marketplace)
+## 🚀 Quick Start (SMB Mode)
 
-We are now in **Phase 5**, expanding ecosystem integrations with SDKs, marketplace catalogues, and evidence dashboards while retaining the hardened control plane foundations from Phase 4.
+```bash
+# 1. Copy SMB configuration
+cp .env.smb .env
+
+# 2. Set your credentials
+# Edit .env: Add MongoDB URI and Azure OpenAI key
+
+# 3. Install dependencies
+pip install -r requirements-dev.txt
+
+# 4. Start the server
+PYTHONPATH=. uvicorn services.kernel.main:app --reload --port 8001
+```
+
+Open http://localhost:8001/docs to see the API
+
+---
+
+## 📦 What's Included
+
+### SMB Mode Features
+✅ Natural language goal understanding  
+✅ Inventory optimization (OR-Tools)  
+✅ Staff scheduling  
+✅ Demand forecasting  
+✅ Simple authentication  
+✅ MongoDB persistence  
+✅ Data import (CSV, Excel, APIs)  
+✅ Web UI for business owners  
+
+### Platform Mode Additional Features
+✅ Evidence graph (Neo4j) - Full audit trails  
+✅ Vector search (Qdrant) - Semantic queries  
+✅ Enterprise auth (Keycloak) - SSO, SAML  
+✅ Advanced solvers (Gurobi) - Commercial optimization  
+✅ API access for developers  
+✅ Custom integrations  
+
+---
+
+## 💰 Pricing (SMB Focus)
+
+| Tier | Price | Locations | Decisions/Month | Team Members |
+|------|-------|-----------|-----------------|--------------|
+| **Starter** | $49/mo | 1 | 10 | 3 |
+| **Growth** | $199/mo | 3 | 50 | 10 |
+| **Business** | $499/mo | 10 | 200 | 25 |
+| **Enterprise** | $1999+/mo | Unlimited | Unlimited | Unlimited |
+
+All plans include 7-day free trial.
+
+---
 
 ### Repository layout
 

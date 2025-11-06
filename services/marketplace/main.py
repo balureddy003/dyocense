@@ -28,17 +28,50 @@ def get_catalog(identity: dict = Depends(require_auth)) -> dict:
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "items": [
             {
-                "id": archetype.id,
-                "name": archetype.name,
-                "category": "archetype",
+                "id": template.id,
+                "name": template.name,
+                "category": "template",
                 "version": "0.1.0",
-                "description": archetype.description,
-                "data_inputs": archetype.data_inputs,
+                "description": template.description,
+                "data_inputs": template.data_inputs,
                 "artifact": {
                     "type": "oci",
-                    "uri": f"oci://registry.example.com/dyocense/archetypes/{archetype.id}:0.1.0",
+                    "uri": f"oci://registry.example.com/dyocense/templates/{template.id}:0.1.0",
                 },
             }
-            for archetype in REGISTRY.values()
+            for template in REGISTRY.values()
         ],
+    }
+
+
+@app.get("/v1/templates")
+def get_templates() -> dict:
+    """Return available templates for playbook creation."""
+    return {
+        "templates": [
+            {
+                "id": template.id,
+                "name": template.name,
+                "description": template.description,
+                "data_inputs": template.data_inputs,
+            }
+            for template in REGISTRY.values()
+        ]
+    }
+
+
+# Backward compatibility: keep /v1/archetypes as alias
+@app.get("/v1/archetypes")
+def get_archetypes() -> dict:
+    """Legacy endpoint - use /v1/templates instead."""
+    return {
+        "archetypes": [
+            {
+                "id": template.id,
+                "name": template.name,
+                "description": template.description,
+                "data_inputs": template.data_inputs,
+            }
+            for template in REGISTRY.values()
+        ]
     }

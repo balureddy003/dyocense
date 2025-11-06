@@ -1,19 +1,54 @@
-import { Loader2, MessageSquareMore, Send, Sparkles, Star } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, MessageSquareMore, Send, Sparkles, Star } from "lucide-react";
 import { Playbook } from "../hooks/usePlaybook";
 import { useChat } from "../hooks/useChat";
 import { useState } from "react";
 
 interface AssistantPanelProps {
   playbook: Playbook;
+  onPreferencesConfirm?: (summary: string) => void;
 }
 
-export const AssistantPanel = ({ playbook }: AssistantPanelProps) => {
+export const AssistantPanel = ({ playbook, onPreferencesConfirm }: AssistantPanelProps) => {
   const { messages, sendMessage, loading } = useChat();
   const [input, setInput] = useState("");
+  const [prefsOpen, setPrefsOpen] = useState<boolean>(false);
+  // Business-centric preferences for small businesses
+  const [prefs, setPrefs] = useState({
+    businessType: new Set<string>(),
+    objectiveFocus: new Set<string>(),
+    operatingPace: new Set<string>(),
+    budget: new Set<string>(),
+    markets: new Set<string>(),
+    otherNeeds: "",
+  });
   const suggestionPrompts =
     playbook.whatIfs.map((scenario) => scenario.title) ||
     playbook.plan.map((stage) => stage.title.slice(0, 60)) ||
     [];
+
+  function toggleSet<K extends keyof typeof prefs>(key: K, value: string) {
+    setPrefs((prev) => {
+      const next = new Set(prev[key] as unknown as Set<string>);
+      if (next.has(value)) next.delete(value); else next.add(value);
+      return { ...prev, [key]: next } as typeof prev;
+    });
+  }
+
+  function confirmPrefs() {
+    const parts: string[] = [];
+    if (prefs.businessType.size) parts.push(`business type: ${Array.from(prefs.businessType).join(", ")}`);
+    if (prefs.objectiveFocus.size) parts.push(`focus: ${Array.from(prefs.objectiveFocus).join(", ")}`);
+    if (prefs.operatingPace.size) parts.push(`pace: ${Array.from(prefs.operatingPace).join(", ")}`);
+    if (prefs.budget.size) parts.push(`budget: ${Array.from(prefs.budget).join(", ")}`);
+    if (prefs.markets.size) parts.push(`markets: ${Array.from(prefs.markets).join(", ")}`);
+    if (prefs.otherNeeds.trim()) parts.push(`other: ${prefs.otherNeeds.trim()}`);
+    const text = parts.length ? `My preferences → ${parts.join("; ")}` : "No specific preferences";
+    if (!loading) {
+      sendMessage(text);
+      onPreferencesConfirm?.(text);
+      setPrefsOpen(false);
+    }
+  }
 
   return (
     <aside className="hidden xl:flex xl:w-[360px] 2xl:w-[380px] flex-col border-r bg-white">
@@ -30,6 +65,118 @@ export const AssistantPanel = ({ playbook }: AssistantPanelProps) => {
           </p>
         </div>
       </header>
+
+      {/* Preferences - aligned to Dyocense small business needs */}
+      <section className="px-5 py-4 border-b">
+        <button
+          className="w-full flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2 text-left text-sm text-gray-700 hover:border-primary/60 hover:bg-blue-50/30"
+          onClick={() => setPrefsOpen((v) => !v)}
+        >
+          <span className="font-semibold">Preferences</span>
+          {prefsOpen ? <ChevronUp size={16} className="text-gray-500" /> : <ChevronDown size={16} className="text-gray-500" />}
+        </button>
+        {prefsOpen && (
+          <div className="mt-3 space-y-4">
+            {/* Business Type */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Business Type</div>
+              <div className="flex flex-wrap gap-2">
+                {["Restaurant", "Retail", "eCommerce", "Services", "Manufacturing"].map((opt) => (
+                  <Chip
+                    key={opt}
+                    label={opt}
+                    selected={prefs.businessType.has(opt)}
+                    onToggle={() => toggleSet("businessType", opt)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* Objective Focus */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Objective Focus</div>
+              <div className="flex flex-wrap gap-2">
+                {["Reduce Cost", "Increase Revenue", "Improve Service", "Reduce Carbon"].map((opt) => (
+                  <Chip
+                    key={opt}
+                    label={opt}
+                    selected={prefs.objectiveFocus.has(opt)}
+                    onToggle={() => toggleSet("objectiveFocus", opt)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* Operating Pace */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Operating Pace</div>
+              <div className="flex flex-wrap gap-2">
+                {["Ambitious", "Conservative", "Pilot-first"].map((opt) => (
+                  <Chip
+                    key={opt}
+                    label={opt}
+                    selected={prefs.operatingPace.has(opt)}
+                    onToggle={() => toggleSet("operatingPace", opt)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* Budget */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Budget</div>
+              <div className="flex flex-wrap gap-2">
+                {["Lean", "Standard", "Premium"].map((opt) => (
+                  <Chip
+                    key={opt}
+                    label={opt}
+                    selected={prefs.budget.has(opt)}
+                    onToggle={() => toggleSet("budget", opt)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* Markets */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Markets</div>
+              <div className="flex flex-wrap gap-2">
+                {["Local", "Multi-city", "Online", "US", "EU", "APAC"].map((opt) => (
+                  <Chip
+                    key={opt}
+                    label={opt}
+                    selected={prefs.markets.has(opt)}
+                    onToggle={() => toggleSet("markets", opt)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* Other Needs */}
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Other Needs</div>
+              <textarea
+                className="w-full border rounded-lg p-2 text-sm focus:outline-none"
+                rows={3}
+                maxLength={1000}
+                placeholder="Enter constraints, data gaps, or notes (e.g., supplier list missing, limited freezer capacity)"
+                value={prefs.otherNeeds}
+                onChange={(e) => setPrefs((p) => ({ ...p, otherNeeds: e.target.value }))}
+              />
+              <div className="text-[11px] text-gray-400 text-right">{prefs.otherNeeds.length}/1000</div>
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                className="text-sm text-gray-500 hover:text-gray-700"
+                onClick={() => setPrefs({ businessType: new Set(), objectiveFocus: new Set(), operatingPace: new Set(), budget: new Set(), markets: new Set(), otherNeeds: "" })}
+              >
+                Clear
+              </button>
+              <button
+                className="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold"
+                onClick={() => confirmPrefs()}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="px-5 py-4 border-b space-y-3">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Popular prompts</h3>
@@ -145,3 +292,16 @@ export const AssistantPanel = ({ playbook }: AssistantPanelProps) => {
     </aside>
   );
 };
+
+function Chip({ label, selected, onToggle }: { label: string; selected?: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`px-3 py-1.5 rounded-lg border text-sm ${selected ? "border-primary bg-blue-50 text-primary" : "border-gray-200 hover:bg-gray-50"}`}
+    >
+      {label}
+    </button>
+  );
+}
+

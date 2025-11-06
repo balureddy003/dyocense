@@ -45,6 +45,8 @@ class Neo4jGraphStore:
             config.uri,
             auth=(config.user, config.password),
             max_connection_lifetime=120,
+            max_retry_time=2.0,  # Fail fast if Neo4j unavailable (default is 30s)
+            connection_timeout=2.0,  # Short timeout for initial connection
         )
         logger.info("Connected to Neo4j at %s", config.uri)
 

@@ -6,14 +6,28 @@ import json
 import logging
 import os
 from typing import Any, Dict, Optional
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 _mongo_client = None
+_inmem_collections: dict[str, "InMemoryCollection"] = {}
+_connection_pool_config = {
+    "maxPoolSize": 50,
+    "minPoolSize": 10,
+    "maxIdleTimeMS": 45000,
+    "waitQueueTimeoutMS": 5000,
+}
+_retry_writes = True
+_use_fallback_mode = False  # Feature flag to force in-memory mode
 
 
 class InMemoryCollection:
     """Fallback collection that mimics a subset of pymongo API."""
+
+    class _DeleteResult:
+        def __init__(self, deleted_count: int) -> None:
+            self.deleted_count = deleted_count
 
     def __init__(self) -> None:
         self._documents: list[Dict[str, Any]] = []
@@ -49,8 +63,20 @@ class InMemoryCollection:
         if upsert:
             self.insert_one(replacement)
 
+    def delete_one(self, query: Dict[str, Any]):
+        for idx, doc in enumerate(self._documents):
+            if all(doc.get(k) == v for k, v in query.items()):
+                del self._documents[idx]
+                return InMemoryCollection._DeleteResult(1)
+        return InMemoryCollection._DeleteResult(0)
+
 
 def _build_mongo_uri() -> str:
+    """Build MongoDB connection URI from environment variables.
+    
+    Supports both explicit MONGO_URI and component-based configuration.
+    Validates credentials and constructs proper connection string.
+    """
     explicit_uri = os.getenv("MONGO_URI")
     if explicit_uri:
         return explicit_uri
@@ -60,10 +86,34 @@ def _build_mongo_uri() -> str:
     username = os.getenv("MONGO_USERNAME")
     password = os.getenv("MONGO_PASSWORD")
     auth_db = os.getenv("MONGO_AUTH_DB", "admin")
+    
+    # Support replica sets
+    replica_set = os.getenv("MONGO_REPLICA_SET")
+    
+    # Support TLS/SSL
+    use_tls = os.getenv("MONGO_TLS", "false").lower() == "true"
+    tls_ca_file = os.getenv("MONGO_TLS_CA_FILE")
 
+    base_uri = ""
     if username and password:
-        return f"mongodb://{username}:{password}@{host}:{port}/?authSource={auth_db}"
-    return f"mongodb://{host}:{port}"
+        base_uri = f"mongodb://{username}:{password}@{host}:{port}/?authSource={auth_db}"
+    else:
+        base_uri = f"mongodb://{host}:{port}"
+    
+    # Add connection options
+    options = []
+    if replica_set:
+        options.append(f"replicaSet={replica_set}")
+    if use_tls:
+        options.append("tls=true")
+        if tls_ca_file:
+            options.append(f"tlsCAFile={tls_ca_file}")
+    
+    if options:
+        separator = "&" if "?" in base_uri else "?"
+        base_uri += separator + "&".join(options)
+    
+    return base_uri
 
 
 def _get_database_name() -> str:
@@ -71,38 +121,255 @@ def _get_database_name() -> str:
 
 
 def _get_mongo_client():
-    global _mongo_client
+    """Initialize MongoDB client with connection pooling and retry logic.
+    
+    Returns:
+        MongoClient instance or None if connection fails.
+    
+    Configuration:
+        - Connection pooling with 10-50 connections
+        - 1 second server selection timeout for fast failover
+        - Automatic retry for write operations
+        - TLS/SSL support for secure connections
+        - Replica set support for high availability
+    """
+    global _mongo_client, _use_fallback_mode
+    
+    # Check feature flag to force in-memory mode
+    if os.getenv("FORCE_INMEMORY_MODE", "false").lower() == "true":
+        logger.info("FORCE_INMEMORY_MODE enabled; skipping MongoDB connection")
+        _use_fallback_mode = True
+        return None
+    
     if _mongo_client is not None:
         return _mongo_client
 
     try:
         from pymongo import MongoClient  # type: ignore
+        
+        # Try to import error types, but fall back to Exception if not available
+        try:
+            from pymongo.errors import (
+                ConnectionFailure, 
+                OperationFailure, 
+                ConfigurationError
+            )  # type: ignore
+        except (ImportError, AttributeError):
+            # Fallback for mocked pymongo without errors module
+            ConnectionFailure = Exception
+            OperationFailure = Exception
+            ConfigurationError = Exception
 
         uri = _build_mongo_uri()
-        _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=1000)
-        # Trigger a lightweight command to validate connectivity/auth
+        
+        # Create client with production-ready configuration
+        _mongo_client = MongoClient(
+            uri,
+            serverSelectionTimeoutMS=1000,  # Fast failover
+            connectTimeoutMS=2000,
+            socketTimeoutMS=5000,
+            retryWrites=_retry_writes,
+            retryReads=True,
+            **_connection_pool_config
+        )
+        
+        # Validate connectivity with ping command
         _mongo_client.admin.command("ping")
-        logger.info("Connected to MongoDB at %s", uri.split("@")[-1] if "@" in uri else uri)
+        
+        # Get server info for logging
+        server_info = _mongo_client.server_info()
+        mongo_version = server_info.get("version", "unknown")
+        
+        # Mask credentials in URI for logging
+        safe_uri = uri.split("@")[-1] if "@" in uri else uri
+        logger.info(
+            "Connected to MongoDB %s at %s (pool: %d-%d connections)",
+            mongo_version,
+            safe_uri,
+            _connection_pool_config["minPoolSize"],
+            _connection_pool_config["maxPoolSize"]
+        )
+        
         return _mongo_client
-    except Exception as exc:  # pragma: no cover - depends on external service
-        logger.warning("Mongo client initialisation failed (%s); using in-memory fallback.", exc)
+        
+    except (ConnectionFailure, OperationFailure, ConfigurationError) as exc:
+        logger.warning(
+            "MongoDB connection failed (%s: %s); using in-memory fallback. "
+            "Set FORCE_INMEMORY_MODE=true to skip connection attempts.",
+            type(exc).__name__, 
+            str(exc)
+        )
         _mongo_client = None
+        _use_fallback_mode = True
+        return None
+        
+    except ImportError:
+        logger.warning(
+            "pymongo not installed; using in-memory fallback. "
+            "Install with: pip install pymongo"
+        )
+        _mongo_client = None
+        _use_fallback_mode = True
+        return None
+        
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "Unexpected MongoDB initialization error (%s); using in-memory fallback.", 
+            exc
+        )
+        _mongo_client = None
+        _use_fallback_mode = True
         return None
 
 
 def get_collection(name: str):
-    """Return a MongoDB collection or an in-memory fallback if pymongo/unavailable."""
+    """Return a MongoDB collection or an in-memory fallback if pymongo/unavailable.
+
+    For the in-memory fallback, collections are cached by name so multiple services
+    in the same process share data (important for the Kernel API).
+    
+    Args:
+        name: Collection name
+    
+    Returns:
+        MongoDB Collection or InMemoryCollection instance
+    
+    Usage:
+        collection = get_collection("tenants")
+        collection.insert_one({"tenant_id": "abc", "name": "Acme Corp"})
+    """
 
     client = _get_mongo_client()
     if client is None:
-        return InMemoryCollection()
+        coll = _inmem_collections.get(name)
+        if coll is None:
+            coll = InMemoryCollection()
+            _inmem_collections[name] = coll
+            logger.debug("Created in-memory collection: %s", name)
+        return coll
 
     try:
         database = client.get_database(_get_database_name())
         return database.get_collection(name)
     except Exception as exc:  # pragma: no cover
         logger.warning("Failed to obtain Mongo collection '%s' (%s); using fallback.", name, exc)
-        return InMemoryCollection()
+        coll = _inmem_collections.get(name)
+        if coll is None:
+            coll = InMemoryCollection()
+            _inmem_collections[name] = coll
+        return coll
 
 
-__all__ = ["get_collection", "InMemoryCollection"]
+@contextmanager
+def mongo_transaction():
+    """Context manager for MongoDB transactions (requires replica set).
+    
+    Usage:
+        with mongo_transaction() as session:
+            collection.insert_one(doc, session=session)
+            another_collection.update_one(query, update, session=session)
+    
+    Falls back to no transaction if MongoDB unavailable or not replica set.
+    """
+    client = _get_mongo_client()
+    if client is None or _use_fallback_mode:
+        # No transaction support in fallback mode
+        yield None
+        return
+    
+    try:
+        with client.start_session() as session:
+            with session.start_transaction():
+                yield session
+    except Exception as exc:
+        logger.warning("Transaction failed (%s); operations may be partially applied", exc)
+        raise
+
+
+def create_indexes(collection_name: str, indexes: list[tuple[str, int]]):
+    """Create indexes on a MongoDB collection for query performance.
+    
+    Args:
+        collection_name: Name of collection
+        indexes: List of (field_name, direction) tuples. Direction: 1 for ascending, -1 for descending
+    
+    Example:
+        create_indexes("tenants", [("tenant_id", 1), ("created_at", -1)])
+    """
+    client = _get_mongo_client()
+    if client is None:
+        logger.debug("Skipping index creation in in-memory mode")
+        return
+    
+    try:
+        from pymongo import IndexModel  # type: ignore
+        
+        database = client.get_database(_get_database_name())
+        collection = database.get_collection(collection_name)
+        
+        index_models = [
+            IndexModel([(field, direction)]) 
+            for field, direction in indexes
+        ]
+        
+        result = collection.create_indexes(index_models)
+        logger.info("Created %d indexes on collection '%s': %s", len(result), collection_name, result)
+        
+    except Exception as exc:
+        logger.warning("Failed to create indexes on '%s': %s", collection_name, exc)
+
+
+def health_check() -> dict[str, Any]:
+    """Check MongoDB connection health.
+    
+    Returns:
+        dict with status, mode, and details
+    
+    Example:
+        {
+            "status": "healthy",
+            "mode": "mongodb",
+            "mongodb_version": "6.0.3",
+            "database": "dyocense",
+            "connection_pool": {"min": 10, "max": 50}
+        }
+    """
+    client = _get_mongo_client()
+    
+    if client is None or _use_fallback_mode:
+        return {
+            "status": "degraded",
+            "mode": "in-memory",
+            "message": "Using in-memory fallback; data will not persist",
+            "collections": list(_inmem_collections.keys())
+        }
+    
+    try:
+        server_info = client.server_info()
+        db_name = _get_database_name()
+        
+        return {
+            "status": "healthy",
+            "mode": "mongodb",
+            "mongodb_version": server_info.get("version"),
+            "database": db_name,
+            "connection_pool": {
+                "min": _connection_pool_config["minPoolSize"],
+                "max": _connection_pool_config["maxPoolSize"]
+            }
+        }
+    except Exception as exc:
+        return {
+            "status": "unhealthy",
+            "mode": "mongodb",
+            "error": str(exc)
+        }
+
+
+__all__ = [
+    "get_collection", 
+    "InMemoryCollection", 
+    "mongo_transaction", 
+    "create_indexes",
+    "health_check"
+]

@@ -1,0 +1,21 @@
+ingredient_name,unit_cost,current_stock_kg,min_stock_kg,max_stock_kg,supplier,lead_time_days,shelf_life_days
+Flour,0.50,100,20,200,Sysco,2,180
+Tomatoes,1.20,50,15,100,FreshProduce,1,7
+Mozzarella,3.50,30,10,60,DairyFarm,1,14
+Parmesan,5.20,15,5,30,DairyFarm,1,90
+Chicken Breast,4.00,40,15,80,MeatCo,2,5
+Veal,8.50,10,5,25,PremiumMeats,3,5
+Salmon,9.20,12,5,30,SeafoodDirect,1,3
+Pasta Dry,1.80,60,20,120,Barilla,3,365
+Lettuce,0.80,25,10,50,FreshProduce,1,5
+Olive Oil,4.50,20,5,40,ItalianImports,7,365
+Butter,2.80,15,5,30,DairyFarm,1,30
+Cream,3.20,20,8,40,DairyFarm,1,7
+Eggs,0.30,200,50,400,LocalFarm,1,21
+Garlic,1.50,10,3,20,FreshProduce,1,30
+Basil,2.80,5,2,10,HerbGarden,1,7
+Oregano,3.50,3,1,8,HerbGarden,2,180
+Bread,1.20,30,10,60,Bakery,1,3
+Mascarpone,4.80,8,3,15,DairyFarm,1,14
+Wine Red,8.50,15,5,30,Winery,7,730
+Wine White,7.50,15,5,30,Winery,7,730

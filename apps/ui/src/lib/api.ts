@@ -20,47 +20,93 @@ async function fetchJSON<T>(path: string, options: ApiOptions = {}): Promise<T> 
     }
     return (await response.json()) as T;
   } catch (error) {
-    if ("fallback" in options && options.fallback !== undefined) {
-      console.warn(`Falling back to mock for ${path}:`, error);
-      return options.fallback as T;
-    }
     throw error;
   }
 }
 
-export async function listRuns<T>(fallback: T): Promise<T> {
-  return fetchJSON<T>("/v1/runs?limit=10", { fallback });
+export async function listRuns<T = any>(opts?: { project_id?: string; limit?: number }): Promise<T> {
+  const params = new URLSearchParams();
+  params.set("limit", String(opts?.limit ?? 10));
+  if (opts?.project_id) params.set("project_id", opts.project_id);
+  const qs = params.toString();
+  return fetchJSON<T>(`/v1/runs${qs ? `?${qs}` : ""}`);
 }
 
-export async function getRun<T>(runId: string, fallback: T): Promise<T> {
-  return fetchJSON<T>(`/v1/runs/${runId}`, { fallback });
+export async function getRun<T = any>(runId: string): Promise<T> {
+  return fetchJSON<T>(`/v1/runs/${runId}`);
 }
 
-export async function listEvidence<T>(fallback: T): Promise<T> {
-  return fetchJSON<T>("/v1/evidence?limit=20", { fallback });
+export async function listEvidence<T = any>(): Promise<T> {
+  return fetchJSON<T>("/v1/evidence?limit=20");
 }
 
-export async function getEvidence<T>(runId: string, fallback: T): Promise<T> {
-  return fetchJSON<T>(`/v1/evidence/${runId}`, { fallback });
+export async function getEvidence<T = any>(runId: string): Promise<T> {
+  return fetchJSON<T>(`/v1/evidence/${runId}`);
 }
 
-export async function getArchetypes<T>(fallback: T): Promise<T> {
-  return fetchJSON<T>("/v1/archetypes", { fallback });
+export async function getTemplates<T = any>(): Promise<T> {
+  return fetchJSON<T>("/v1/templates");
 }
 
-export async function postChat<T>(body: unknown, fallback: T): Promise<T> {
+// Backward compatibility
+export async function getArchetypes<T = any>(): Promise<T> {
+  return getTemplates<T>();
+}
+
+export async function postChat<T = any>(body: unknown): Promise<T> {
   return fetchJSON<T>("/v1/chat", {
     method: "POST",
     body: JSON.stringify(body),
-    fallback,
   });
 }
 
-export async function createRun<T>(body: unknown, fallback: T): Promise<T> {
+// OpenAI-compatible Chat Completions API
+export type OAIRole = "system" | "user" | "assistant";
+
+export interface OAIMessage {
+  role: OAIRole;
+  content: string;
+}
+
+export interface OAIChatRequest {
+  model?: string;
+  messages: OAIMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+  user?: string;
+  // vendor extension for context passthrough (optional)
+  context?: Record<string, unknown>;
+}
+
+export interface OAIChatResponse {
+  id: string;
+  object: string; // "chat.completion"
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: { role: "assistant"; content: string };
+    finish_reason: string;
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+export async function postOpenAIChat(body: OAIChatRequest): Promise<OAIChatResponse> {
+  return fetchJSON<OAIChatResponse>("/v1/chat/completions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function createRun<T = any>(body: unknown): Promise<T> {
   return fetchJSON<T>("/v1/runs", {
     method: "POST",
     body: JSON.stringify(body),
-    fallback,
   });
 }
 
@@ -154,8 +200,8 @@ export interface ApiTokenCreateResponse extends ApiTokenSummary {
   secret: string;
 }
 
-export async function listPlans(fallback: SubscriptionPlan[] = []): Promise<SubscriptionPlan[]> {
-  return fetchJSON<SubscriptionPlan[]>("/v1/plans", { fallback });
+export async function listPlans(): Promise<SubscriptionPlan[]> {
+  return fetchJSON<SubscriptionPlan[]>("/v1/plans");
 }
 
 export async function registerTenant(payload: TenantRegistrationPayload): Promise<TenantRegistrationResponse> {
@@ -208,7 +254,8 @@ export interface PlaybookRecommendation {
   id: string;
   title: string;
   description: string;
-  archetype_id: string;
+  template_id: string;
+  archetype_id?: string;  // Backward compatibility
   icon: string;
   estimated_time: string;
   tags: string[];
@@ -227,7 +274,7 @@ export async function getPlaybookRecommendations(): Promise<{
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  return fetchJSON<ProjectSummary[]>("/v1/projects", { fallback: [] });
+  return fetchJSON<ProjectSummary[]>("/v1/projects");
 }
 
 export async function createProject(name: string, description?: string | null): Promise<ProjectSummary> {
@@ -266,7 +313,7 @@ export async function fetchUserProfile(): Promise<UserProfile> {
 }
 
 export async function listUserApiTokens(): Promise<ApiTokenSummary[]> {
-  return fetchJSON<ApiTokenSummary[]>("/v1/users/api-tokens", { fallback: [] });
+  return fetchJSON<ApiTokenSummary[]>("/v1/users/api-tokens");
 }
 
 export async function createUserApiToken(name: string): Promise<ApiTokenCreateResponse> {
@@ -301,7 +348,7 @@ export async function createInvitation(invitee_email: string): Promise<Invitatio
 }
 
 export async function listInvitations(): Promise<InvitationSummary[]> {
-  return fetchJSON<InvitationSummary[]>("/v1/invitations", { fallback: [] });
+  return fetchJSON<InvitationSummary[]>("/v1/invitations");
 }
 
 export async function revokeInvitation(inviteId: string): Promise<void> {
@@ -313,5 +360,115 @@ export async function revokeInvitation(inviteId: string): Promise<void> {
 export async function resendInvitation(inviteId: string): Promise<{ message: string; invite_id: string }> {
   return fetchJSON<{ message: string; invite_id: string }>(`/v1/invitations/${inviteId}/resend`, {
     method: "POST",
+  });
+}
+
+// ==================== Connector Management ====================
+
+export interface ConnectorMetadata {
+  total_records?: number;
+  last_sync_duration?: number;
+  error_message?: string;
+  last_error_at?: string;
+}
+
+export interface Connector {
+  connector_id: string;
+  tenant_id: string;
+  connector_type: string;
+  connector_name: string;
+  display_name: string;
+  category: string;
+  icon: string;
+  data_types: string[];
+  status: "active" | "inactive" | "error" | "syncing" | "testing";
+  last_sync?: string;
+  sync_frequency: "realtime" | "hourly" | "daily" | "weekly" | "manual";
+  metadata: ConnectorMetadata;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface CreateConnectorPayload {
+  connector_type: string;
+  display_name: string;
+  config: Record<string, any>;
+  sync_frequency?: "realtime" | "hourly" | "daily" | "weekly" | "manual";
+}
+
+export interface TestConnectorPayload {
+  connector_type: string;
+  config: Record<string, any>;
+}
+
+export interface TestConnectorResult {
+  success: boolean;
+  message: string;
+  details?: Record<string, any>;
+  error_code?: string;
+}
+
+/**
+ * Get the connector marketplace catalog
+ */
+export async function getConnectorCatalog(): Promise<any> {
+  return fetchJSON<any>("/v1/catalog", {
+    fallback: { connectors: [], total: 0 }
+  });
+}
+
+/**
+ * Create a new connector for the authenticated tenant
+ */
+export async function createConnector(payload: CreateConnectorPayload): Promise<Connector> {
+  return fetchJSON<Connector>("/v1/connectors", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * List all connectors for the authenticated tenant
+ */
+export async function listConnectors(statusFilter?: string): Promise<Connector[]> {
+  const params = statusFilter ? `?status=${statusFilter}` : "";
+  return fetchJSON<Connector[]>(`/v1/connectors${params}`, {
+    fallback: []
+  });
+}
+
+/**
+ * Get a specific connector by ID
+ */
+export async function getConnector(connectorId: string): Promise<Connector> {
+  return fetchJSON<Connector>(`/v1/connectors/${connectorId}`);
+}
+
+/**
+ * Delete a connector
+ */
+export async function deleteConnector(connectorId: string): Promise<void> {
+  await fetchJSON<void>(`/v1/connectors/${connectorId}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Test an existing connector's configuration
+ */
+export async function testConnector(connectorId: string): Promise<TestConnectorResult> {
+  return fetchJSON<TestConnectorResult>(`/v1/connectors/${connectorId}/test`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Test a connector configuration without saving it
+ */
+export async function testConnectorConfig(payload: TestConnectorPayload): Promise<TestConnectorResult> {
+  return fetchJSON<TestConnectorResult>("/v1/connectors/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

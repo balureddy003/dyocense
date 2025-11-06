@@ -1,0 +1,17 @@
+item_name,food_cost,menu_price,daily_demand,prep_time_mins,category
+Margherita Pizza,4.50,14.99,25,15,Pizza
+Pepperoni Pizza,5.20,16.99,30,15,Pizza
+Vegetarian Pizza,4.80,15.99,18,15,Pizza
+Spaghetti Carbonara,5.20,16.99,20,12,Pasta
+Fettuccine Alfredo,4.90,15.99,16,12,Pasta
+Lasagna,5.50,17.99,14,25,Pasta
+Chicken Parmigiana,6.80,19.99,15,20,Main
+Veal Marsala,8.50,24.99,8,20,Main
+Grilled Salmon,9.20,23.99,10,18,Main
+Caesar Salad,3.20,9.99,18,8,Salad
+Caprese Salad,4.50,11.99,12,10,Salad
+Minestrone Soup,2.80,7.99,15,5,Appetizer
+Bruschetta,3.50,8.99,14,10,Appetizer
+Tiramisu,2.50,7.99,12,5,Dessert
+Panna Cotta,2.20,6.99,10,5,Dessert
+Cannoli,2.80,7.99,11,5,Dessert

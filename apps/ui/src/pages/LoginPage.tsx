@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, NavigateFunction } from "react-router-dom";
-import { LogIn, ShieldCheck, Sparkles } from "lucide-react";
+import { LogIn, ShieldCheck, Sparkles, User } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { BrandedHeader } from "../components/BrandedHeader";
 import { BrandedFooter } from "../components/BrandedFooter";
@@ -19,11 +19,11 @@ export const LoginPage = () => {
     ready,
     authenticated,
     login,
-    loginDemo,
     loginWithCredentials,
     registerUserAccount,
     profile,
     supportsKeycloak,
+    logout,
   } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -45,9 +45,10 @@ export const LoginPage = () => {
 
   useEffect(() => {
     if (!ready) return;
-    if (authenticated) {
-      const next = profile ? redirectTarget : "/profile";
-      resolveRedirect(navigate, next);
+    // Only auto-redirect if user has completed profile setup
+    // If they don't have a profile yet, let them stay on login page (might want different account)
+    if (authenticated && profile) {
+      resolveRedirect(navigate, redirectTarget);
     }
   }, [authenticated, profile, ready, navigate, redirectTarget]);
 
@@ -187,6 +188,36 @@ export const LoginPage = () => {
       
       <div className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="max-w-md w-full bg-white border border-gray-100 rounded-2xl shadow-xl p-8 space-y-6">
+          {/* Show profile setup prompt if authenticated but no profile */}
+          {authenticated && !profile ? (
+            <div className="text-center space-y-4">
+              <div className="flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 mx-auto">
+                <User size={32} className="text-primary" />
+              </div>
+              <h1 className="text-2xl font-semibold text-gray-900">
+                Complete Your Profile
+              </h1>
+              <p className="text-gray-600">
+                You're logged in! Let's set up your business profile to get started.
+              </p>
+              <button
+                onClick={() => navigate("/profile")}
+                className="w-full px-6 py-3 rounded-lg bg-primary text-white font-semibold shadow-md hover:shadow-lg transition"
+              >
+                Continue to Profile Setup
+              </button>
+              <button
+                onClick={() => {
+                  logout();
+                  window.location.reload();
+                }}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                Sign in with different account
+              </button>
+            </div>
+          ) : (
+            <>
           <header className="space-y-2 text-center">
             <h1 className="text-2xl font-semibold text-gray-900">
               {registerMode ? "Get Started with Dyocense" : "Welcome Back"}
@@ -351,29 +382,12 @@ export const LoginPage = () => {
               </div>
             ) : null}
 
-            <div
-              className={`space-y-3 text-sm text-gray-700 ${
-                supportsKeycloak ? "border-t border-dashed border-gray-200 pt-4" : ""
-              }`}
-            >
-              <p className="flex items-center gap-2 font-semibold text-gray-900">
-                <Sparkles size={16} className="text-primary" />
-                Try it out with sample data
-              </p>
-              <p className="text-xs text-gray-500">
-                Explore how Dyocense works with demo data before connecting your own business information.
-              </p>
-              <button
-                className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-full border border-primary text-primary font-semibold bg-white shadow hover:bg-blue-50 transition"
-                onClick={() => void loginDemo()}
-              >
-                <Sparkles size={18} />
-                View demo
-              </button>
-            </div>
+            {/* Demo/sample data login removed to ensure only real authentication flows are used. */}
           </div>
         </div>
-      </div>
+            </>
+          )}
+        </div>
       </div>
       
       <BrandedFooter />

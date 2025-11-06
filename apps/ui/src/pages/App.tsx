@@ -8,7 +8,10 @@ import { PurchasePage } from "./PurchasePage";
 import { AdminDashboardPage } from "./AdminDashboardPage";
 import { AcceptInvitePage } from "./AcceptInvitePage";
 import { SettingsPage } from "./SettingsPage";
+import { BlogPage } from "./BlogPage";
+import { MarketplacePage } from "./MarketplacePage";
 import { useAuth } from "../context/AuthContext";
+ 
 
 const LoadingScreen = () => (
   <div className="min-h-screen flex items-center justify-center bg-white text-sm text-gray-500">
@@ -38,6 +41,9 @@ export const App = () => {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/blog" element={<BlogPage />} />
+      <Route path="/blog/:postId" element={<BlogPage />} />
+      <Route path="/marketplace" element={<MarketplacePage />} />
       <Route path="/accept-invite/:inviteId" element={<AcceptInvitePage />} />
       <Route
         path="/profile"
@@ -71,6 +77,7 @@ export const App = () => {
           </RequireAuth>
         }
       />
+      
       <Route path="/buy" element={<PurchasePage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

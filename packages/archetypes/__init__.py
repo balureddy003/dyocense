@@ -1,4 +1,4 @@
-"""Archetype registry and data-prep helpers."""
+"""Template registry and data-prep helpers."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from services.compiler.main import build_ops_document
 
 
 @dataclass
-class Archetype:
+class Template:
+    """Represents a playbook template (formerly called archetype)."""
     id: str
     name: str
     description: str
@@ -19,27 +20,28 @@ class Archetype:
     solver_hint: Optional[str] = None
 
 
-REGISTRY: Dict[str, Archetype] = {}
+REGISTRY: Dict[str, Template] = {}
 
 
 def load_registry(path: Path) -> None:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     for item in data.get("items", []):
-        archetype = Archetype(
+        template = Template(
             id=item["id"],
             name=item["name"],
             description=item.get("description", ""),
             data_inputs=item.get("data_inputs", []),
             solver_hint=item.get("solver_hint"),
         )
-        REGISTRY[archetype.id] = archetype
+        REGISTRY[template.id] = template
 
 
-def build_ops_from_archetype(archetype_id: str, goal: str, tenant_id: str, project_id: str, inputs: Dict[str, List[Dict[str, str]]]) -> dict:
-    archetype = REGISTRY.get(archetype_id)
-    if not archetype:
-        raise ValueError(f"Unknown archetype '{archetype_id}'")
+def build_ops_from_template(template_id: str, goal: str, tenant_id: str, project_id: str, inputs: Dict[str, List[Dict[str, str]]]) -> dict:
+    """Build ops document from a template (formerly archetype)."""
+    template = REGISTRY.get(template_id)
+    if not template:
+        raise ValueError(f"Unknown template '{template_id}'")
 
     ops, _goal_pack = build_ops_document(
         goal,
@@ -48,7 +50,7 @@ def build_ops_from_archetype(archetype_id: str, goal: str, tenant_id: str, proje
         data_inputs=inputs,
         use_llm=False,
     )
-    ops["metadata"]["archetype_id"] = archetype_id
+    ops["metadata"]["template_id"] = template_id
     return ops
 
 

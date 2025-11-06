@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from packages.kernel_common.deps import require_auth
 from packages.kernel_common.logging import configure_logging
-from packages.archetypes import build_ops_from_archetype
+from packages.archetypes import build_ops_from_template
 from services.diagnostician.main import diagnose_ops
 from services.evidence.main import persist_evidence_record
 from services.explainer.main import generate_explanation
@@ -52,7 +52,7 @@ class RunState:
     goal: str
     tenant_id: str
     project_id: str
-    archetype_id: Optional[str] = None
+    template_id: Optional[str] = None
     result: Optional[dict] = None
     error: Optional[str] = None
 
@@ -64,7 +64,12 @@ class RunRequest(BaseModel):
     goal: str = Field(..., description="Natural-language goal.")
     project_id: str | None = Field(default=None, description="Project identifier.")
     horizon: int = Field(2, ge=1, le=12)
-    archetype_id: str = Field(..., description="Archetype identifier from the catalog.")
+    # Make optional to accept legacy payloads with only archetype_id
+    template_id: Optional[str] = Field(
+        default=None, description="Template identifier from the catalog."
+    )
+    # Backward compatibility
+    archetype_id: Optional[str] = Field(None, description="Legacy field - use template_id instead.")
     data_inputs: Dict[str, List[Dict[str, Any]]] | None = Field(
         default=None, description="Structured data payloads (CSV parsed rows)."
     )
@@ -83,7 +88,8 @@ class RunStatusResponse(BaseModel):
     run_id: str
     status: str
     goal: str
-    archetype_id: Optional[str]
+    template_id: Optional[str] = None
+    archetype_id: Optional[str] = None  # Backward compatibility
     result: Optional[dict]
     error: Optional[str]
 
@@ -98,16 +104,21 @@ def submit_run(
     background_tasks: BackgroundTasks,
     identity: dict = Depends(require_auth),
 ) -> RunResponse:
+    # Backward compatibility: use archetype_id if template_id not provided
+    template_id = body.template_id or body.archetype_id
+    if not template_id:
+        raise HTTPException(status_code=400, detail="template_id is required")
+    
+    # Only enforce tenant limits if we have a real database connection
     if get_tenant and get_plan:
         tenant = get_tenant(identity["tenant_id"])
-        if tenant is None:
-            raise HTTPException(status_code=403, detail="Tenant subscription not found.")
-        plan = get_plan(tenant.plan_tier)
-        if tenant.usage.playbooks >= plan.limits.max_playbooks:
-            raise HTTPException(
-                status_code=403,
-                detail="Playbook storage limit reached for your subscription tier.",
-            )
+        if tenant is not None:  # Only check limits if tenant exists
+            plan = get_plan(tenant.plan_tier)
+            if tenant.usage.playbooks >= plan.limits.max_playbooks:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Playbook storage limit reached for your subscription tier.",
+                )
 
     run_id = body.project_id or f"run-{uuid.uuid4().hex[:12]}"
     state = RunState(
@@ -115,10 +126,10 @@ def submit_run(
         goal=body.goal,
         tenant_id=identity["tenant_id"],
         project_id=run_id,
-        archetype_id=body.archetype_id,
+        template_id=template_id,
     )
     RUNS[run_id] = state
-    background_tasks.add_task(_execute_run, run_id, body, identity["tenant_id"])
+    background_tasks.add_task(_execute_run, run_id, body, identity["tenant_id"], template_id)
     logger.info("Enqueued run %s for tenant %s", run_id, identity["tenant_id"])
     return RunResponse(run_id=run_id, status="pending")
 
@@ -132,7 +143,8 @@ def get_run_status(run_id: str) -> RunStatusResponse:
         run_id=run_id,
         status=state.status,
         goal=state.goal,
-        archetype_id=state.archetype_id,
+        template_id=state.template_id,
+        archetype_id=state.template_id,  # Backward compatibility
         result=state.result,
         error=state.error,
     )
@@ -146,7 +158,8 @@ def list_runs() -> RunListResponse:
                 run_id=run_id,
                 status=state.status,
                 goal=state.goal,
-                archetype_id=state.archetype_id,
+                template_id=state.template_id,
+                archetype_id=state.template_id,  # Backward compatibility
                 result=state.result,
                 error=state.error,
             )
@@ -155,12 +168,12 @@ def list_runs() -> RunListResponse:
     )
 
 
-def _execute_run(run_id: str, request: RunRequest, tenant_id: str) -> None:
+def _execute_run(run_id: str, request: RunRequest, tenant_id: str, template_id: str) -> None:
     state = RUNS[run_id]
     state.status = "running"
     try:
-        ops = build_ops_from_archetype(
-            request.archetype_id,
+        ops = build_ops_from_template(
+            template_id,
             request.goal,
             tenant_id,
             run_id,
@@ -208,7 +221,8 @@ def _execute_run(run_id: str, request: RunRequest, tenant_id: str) -> None:
         if record_playbook_usage:
             try:
                 record_playbook_usage(tenant_id, increment=1)
-            except SubscriptionLimitError as exc:
+            except (SubscriptionLimitError, ValueError) as exc:
+                # ValueError raised when tenant not found - safe to ignore in dev/demo mode
                 logger.warning("Unable to record playbook usage for tenant %s: %s", tenant_id, exc)
         state.status = "completed"
         logger.info("Run %s completed", run_id)

@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV = .venv
 VENV_BIN = $(VENV)/bin
 
-.PHONY: validate format lint setup install clean test run-kernel run-compiler run-optimiser run-forecast run-explainer run-policy run-diagnostician run-evidence run-marketplace run-orchestrator kind-up
+.PHONY: validate format lint setup install clean test run-kernel run-compiler run-optimiser run-forecast run-explainer run-policy run-diagnostician run-evidence run-marketplace run-orchestrator kind-up capture-trip-planner setup-browsers
 
 $(VENV):
 	$(PYTHON) -m venv $(VENV)
@@ -64,3 +64,13 @@ run-orchestrator: setup
 
 kind-up:
 	bash scripts/kind_bootstrap.sh
+
+# Install Playwright browsers (one-time) for recording scripts
+setup-browsers: setup
+	$(VENV_BIN)/python -m playwright install --with-deps
+
+# Capture a live Trip.com planner session: video, screenshots, and a trace
+ARGS ?=
+
+capture-trip-planner: setup
+	PYTHONPATH=. $(VENV_BIN)/python scripts/capture_trip_planner.py $(ARGS)

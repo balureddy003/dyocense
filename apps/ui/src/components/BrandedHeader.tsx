@@ -29,7 +29,7 @@ export const BrandedHeader = ({ showNav = false }: BrandedHeaderProps) => {
                 Dyocense
               </h1>
               <p className="text-xs text-gray-500 leading-none">
-                AI for Small Business
+                Your AI Business Agent
               </p>
             </div>
           </Link>
@@ -44,10 +44,16 @@ export const BrandedHeader = ({ showNav = false }: BrandedHeaderProps) => {
                 Dashboard
               </Link>
               <Link
-                to="/playbooks"
+                to="/marketplace"
                 className="text-gray-700 hover:text-blue-600 font-medium transition"
               >
-                Playbooks
+                Marketplace
+              </Link>
+              <Link
+                to="/blog"
+                className="text-gray-700 hover:text-blue-600 font-medium transition"
+              >
+                Blog
               </Link>
               <Link
                 to="/projects"

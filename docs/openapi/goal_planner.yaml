@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Goal Planner API
+  version: 0.1.0
+  description: Analyze business goals, compile and optimise plans, and refine via deltas.
+servers:
+  - url: http://localhost:8001
+    description: Kernel API gateway (to be extended)
+paths:
+  /v1/goal-planner/analyze:
+    post:
+      summary: Analyze a goal and produce an initial plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoalRequest'
+      responses:
+        '200':
+          description: Initial GoalPlan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalPlan'
+  /v1/goal-plans/{id}:
+    get:
+      summary: Get a plan by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: GoalPlan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalPlan'
+  /v1/goal-plans/{id}/refine:
+    post:
+      summary: Apply a refinement (PlanDelta) to an existing plan and recompile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanDelta'
+      responses:
+        '200':
+          description: Updated GoalPlan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalPlan'
+  /v1/goal-plans/{id}/save:
+    post:
+      summary: Save the plan version for later retrieval
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Saved
+  /v1/goal-plans/{id}/run:
+    post:
+      summary: Execute a plan run through the orchestrator
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Run started
+components:
+  schemas:
+    GoalRequest:
+      $ref: '../schemas/goal_planner.schema.json#/definitions/GoalRequest'
+    PlanDelta:
+      $ref: '../schemas/goal_planner.schema.json#/definitions/PlanDelta'
+    GoalPlan:
+      $ref: '../schemas/goal_planner.schema.json#/definitions/GoalPlan'

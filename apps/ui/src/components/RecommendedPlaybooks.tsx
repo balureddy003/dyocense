@@ -3,7 +3,7 @@ import { Sparkles, Clock, ArrowRight } from "lucide-react";
 import { getPlaybookRecommendations, PlaybookRecommendation } from "../lib/api";
 
 interface RecommendedPlaybooksProps {
-  onSelectPlaybook: (archetypeId: string) => void;
+  onSelectPlaybook: (templateId: string) => void;
 }
 
 export const RecommendedPlaybooks = ({ onSelectPlaybook }: RecommendedPlaybooksProps) => {
@@ -64,7 +64,7 @@ export const RecommendedPlaybooks = ({ onSelectPlaybook }: RecommendedPlaybooksP
         {recommendations.map((rec) => (
           <button
             key={rec.id}
-            onClick={() => onSelectPlaybook(rec.archetype_id)}
+            onClick={() => onSelectPlaybook(rec.template_id || rec.archetype_id || rec.id)}
             className="group text-left p-5 rounded-xl border-2 border-gray-200 hover:border-primary hover:shadow-lg transition-all bg-white"
           >
             <div className="space-y-3">

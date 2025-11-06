@@ -23,23 +23,26 @@ def test_get_collection_uses_env_uri(monkeypatch):
             return FakeCollection(name=name)
 
     class FakeClient:
-        def __init__(self, uri: str, serverSelectionTimeoutMS: int):
+        def __init__(self, uri: str, **kwargs):
             self.uri = uri
-            self.timeout = serverSelectionTimeoutMS
+            self.timeout = kwargs.get("serverSelectionTimeoutMS", 1000)
             self.admin = self
 
         def command(self, cmd: str):
             assert cmd == "ping"
+        
+        def server_info(self):
+            return {"version": "6.0.0"}
 
         def get_database(self, name: str):
             return FakeDatabase()
 
     state = {}
 
-    def fake_mongo_client(uri, serverSelectionTimeoutMS=1000):
+    def fake_mongo_client(uri, **kwargs):
         state["uri"] = uri
-        state["timeout"] = serverSelectionTimeoutMS
-        return FakeClient(uri, serverSelectionTimeoutMS)
+        state["timeout"] = kwargs.get("serverSelectionTimeoutMS", 1000)
+        return FakeClient(uri, **kwargs)
 
     monkeypatch.setitem(sys.modules, "pymongo", SimpleNamespace(MongoClient=fake_mongo_client))
     monkeypatch.setenv("MONGO_URI", "mongodb://user:pass@mongo:27017/?authSource=admin")

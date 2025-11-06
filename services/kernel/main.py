@@ -14,9 +14,15 @@ from services.evidence.main import app as evidence_app
 from services.marketplace.main import app as marketplace_app
 from services.orchestrator.main import app as orchestrator_app
 from services.accounts.main import app as accounts_app
+from services.chat.main import app as chat_app
+from services.connectors.main import app as connectors_app
+from packages.kernel_common import persistence
+from packages.kernel_common.auth import get_auth_health
 
 SUB_APPS = [
     accounts_app,
+    chat_app,
+    connectors_app,
     compiler_app,
     forecast_app,
     policy_app,
@@ -58,6 +64,29 @@ for sub_app in SUB_APPS:
 @app.get("/healthz", tags=["system"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health/detailed", tags=["system"])
+def detailed_health() -> dict:
+    """Comprehensive health check including external dependencies."""
+    health_data = {
+        "status": "ok",
+        "version": app.version,
+        "services": {
+            "persistence": persistence.health_check(),
+            "authentication": get_auth_health(),
+            # Add more health checks as other services are implemented
+        }
+    }
+    
+    # Determine overall status
+    service_statuses = [s.get("status") for s in health_data["services"].values()]
+    if any(s == "unhealthy" for s in service_statuses):
+        health_data["status"] = "unhealthy"
+    elif any(s == "degraded" for s in service_statuses):
+        health_data["status"] = "degraded"
+    
+    return health_data
 
 
 def custom_openapi():

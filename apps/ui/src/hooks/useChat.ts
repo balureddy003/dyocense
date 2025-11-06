@@ -17,22 +17,18 @@ export function useChat() {
 
   const sendMessage = async (msg: string) => {
     if (!msg.trim()) return;
-    const history = [...messages, { role: "user", content: msg }];
-    setMessages(history);
+  const history: ChatMessage[] = [...messages, { role: "user", content: msg } as ChatMessage];
+  setMessages(history);
     setLoading(true);
     try {
-      const response = await postChat<{ reply: string }>(
-        { messages: history },
-        { reply: "Here's a mock response while chat is being wired up." }
-      );
+      const response = await postChat<{ reply: string }>({ messages: history } as any, undefined as any);
       setMessages((m) => [...m, { role: "assistant", content: response.reply }]);
     } catch (error) {
-      console.warn("Falling back to simulated chat", error);
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
-          content: "Here's a quick idea—try running the 'Demand spike scenario' to see how safety stock shifts.",
+          content: "Sorry, I couldn't process that right now. Please try again.",
         },
       ]);
     } finally {

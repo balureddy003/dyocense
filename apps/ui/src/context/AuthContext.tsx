@@ -37,7 +37,6 @@ interface AuthContextValue {
   profile: BusinessProfile | null;
   loadingProfile: boolean;
   login: (redirectTo?: string) => Promise<void>;
-  loginDemo: () => Promise<void>;
   loginWithToken: (options: TokenLoginOptions) => Promise<void>;
   loginWithCredentials: (tenantId: string, email: string, password: string) => Promise<void>;
   registerUserAccount: (tenantId: string, email: string, fullName: string, password: string, temporaryPassword: string) => Promise<void>;
@@ -45,7 +44,6 @@ interface AuthContextValue {
   updateProfile: (profile: BusinessProfile) => Promise<void>;
   refreshProfile: () => Promise<void>;
   keycloak?: KeycloakInstance;
-  usingMock?: boolean;
   supportsKeycloak: boolean;
 }
 
@@ -115,7 +113,6 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [token, setToken] = useState<string | null>(null);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  const [mockSession, setMockSession] = useState(!supportsKeycloak);
   const [hydratedFromStorage, setHydratedFromStorage] = useState(false);
 
   useEffect(() => {
@@ -148,13 +145,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setToken(instance.token ?? null);
             setAuthToken(instance.token ?? null);
             setProfile(readStoredProfile(newUser.id));
-            setMockSession(false);
           } else {
             setUser(null);
             setToken(null);
             setAuthToken(null);
             setProfile(null);
-            setMockSession(false);
           }
         })
         .catch((error) => {
@@ -180,26 +175,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setToken(null);
             setAuthToken(null);
             setProfile(null);
-            setMockSession(false);
           });
       };
     }
   }, [keycloakConfig, supportsKeycloak]);
 
-  const loginDemo = useCallback(async () => {
-    const mockUser: AuthUser = {
-      id: "demo-user",
-      fullName: "Demo User",
-      email: "demo@dyocense.dev",
-      username: "demo",
-    };
-    setAuthenticated(true);
-    setUser(mockUser);
-    setToken("demo-mock");
-    setAuthToken("demo-mock");
-    setProfile(readStoredProfile(mockUser.id));
-    setMockSession(true);
-  }, []);
 
   const loginWithToken = useCallback(
     async ({ apiToken, tenantId, displayName, email, remember = true }: TokenLoginOptions) => {
@@ -218,8 +198,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       setAuthToken(trimmedToken);
       setToken(trimmedToken);
       setAuthenticated(true);
-      setUser(provisionalUser);
-      setMockSession(false);
+  setUser(provisionalUser);
 
       try {
         const tenantProfile = await getTenantProfile();
@@ -256,7 +235,6 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
           setToken(null);
           setAuthToken(null);
           setProfile(null);
-          setMockSession(false);
           throw new Error("Invalid or expired API token.");
         }
       }
@@ -287,8 +265,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       const response = await loginUser({ tenant_id: tenantId, email, password });
       setAuthToken(response.token);
       setToken(response.token);
-      setAuthenticated(true);
-      setMockSession(false);
+  setAuthenticated(true);
 
       if (typeof window !== "undefined") {
         window.localStorage.setItem("dyocense-api-token", response.token);
@@ -362,8 +339,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const login = useCallback(
     async (redirectTo?: string) => {
       if (!supportsKeycloak) {
-        await loginDemo();
-        return;
+        throw new Error("Authentication is not supported: Keycloak is not configured.");
       }
 
       if (keycloakRef.current) {
@@ -372,11 +348,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         });
       }
     },
-    [supportsKeycloak, loginDemo]
+  [supportsKeycloak]
   );
 
   const logout = useCallback(async () => {
-    if (mockSession || !supportsKeycloak) {
+  if (!supportsKeycloak) {
       if (user?.id) {
         clearStoredProfile(user.id);
       }
@@ -391,16 +367,30 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       setToken(null);
       setAuthToken(null);
       setProfile(null);
-      setMockSession(!supportsKeycloak);
       return;
     }
 
     if (keycloakRef.current) {
+      // Proactively clear local state and storage before redirecting to IdP logout,
+      // to avoid any stale Authorization headers or user state after redirect.
+      if (user?.id) {
+        clearStoredProfile(user.id);
+      }
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("dyocense-api-token");
+        window.localStorage.removeItem("dyocense-tenant-id");
+        window.localStorage.removeItem("dyocense-user-name");
+        window.localStorage.removeItem("dyocense-user-email");
+      }
+      setAuthenticated(false);
+      setUser(null);
+      setToken(null);
+      setAuthToken(null);
+      setProfile(null);
       const redirectUri = window.location.origin;
       await keycloakRef.current.logout({ redirectUri });
-      setMockSession(false);
     }
-  }, [mockSession, supportsKeycloak, user]);
+  }, [supportsKeycloak, user]);
 
   const refreshProfile = useCallback(async () => {
     if (!user?.id) return;
@@ -430,8 +420,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     token,
     profile,
     loadingProfile,
-    login,
-    loginDemo,
+  login,
     loginWithToken,
     loginWithCredentials,
     registerUserAccount,
@@ -439,7 +428,6 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     updateProfile,
     refreshProfile,
     keycloak: keycloakRef.current ?? undefined,
-    usingMock: mockSession,
     supportsKeycloak,
   };
 
