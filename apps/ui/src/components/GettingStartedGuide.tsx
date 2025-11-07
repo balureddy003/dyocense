@@ -4,17 +4,20 @@
  */
 
 import { Database, MessageSquare, Target, TrendingUp, ArrowRight, Sparkles } from "lucide-react";
+import { Industry } from "./IndustrySelector";
 
 type GettingStartedGuideProps = {
   onConnectData: () => void;
   onStartChat: () => void;
   hasConnectors: boolean;
+  selectedIndustry?: Industry;
 };
 
 export function GettingStartedGuide({
   onConnectData,
   onStartChat,
   hasConnectors,
+  selectedIndustry,
 }: GettingStartedGuideProps) {
   return (
     <div className="flex-1 flex items-center justify-center p-6">
@@ -25,50 +28,81 @@ export function GettingStartedGuide({
             <Sparkles className="text-white" size={32} />
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-3">
-            Welcome to Your AI Business Assistant
+            Ready to grow your business?
           </h1>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Get data-driven, measurable plans in minutes. I'll help you achieve your business goals with personalized strategies.
+            Just tell us your goal. We'll give you a clear plan with weekly tasks and show you the potential impact.
           </p>
         </div>
 
         {/* Quick Start Steps */}
         <div className="grid md:grid-cols-3 gap-6 mb-8">
-          {/* Step 1: Connect Data */}
+          {/* Step 1: Set Your Goal */}
+          <div className="bg-white rounded-xl border-2 border-blue-500 shadow-lg shadow-blue-100 p-6 transition-all">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center bg-blue-100">
+                <MessageSquare className="text-blue-600" size={24} />
+              </div>
+              <span className="text-xs font-semibold px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                Step 1
+              </span>
+            </div>
+            <h3 className="font-bold text-gray-900 mb-2">Set Your Goal</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              What do you want to achieve this month or quarter? Be specific!
+            </p>
+            <button
+              onClick={onStartChat}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            >
+              Start Now
+              <ArrowRight size={16} />
+            </button>
+            <p className="text-xs text-gray-500 mt-2 text-center">
+              Takes less than 2 minutes
+            </p>
+          </div>
+
+          {/* Step 2: Connect Data (Optional) */}
           <div className={`bg-white rounded-xl border-2 p-6 transition-all ${
-            !hasConnectors 
-              ? "border-blue-500 shadow-lg shadow-blue-100" 
-              : "border-green-500"
+            hasConnectors 
+              ? "border-green-500" 
+              : "border-gray-200"
           }`}>
             <div className="flex items-center justify-between mb-4">
               <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                hasConnectors ? "bg-green-100" : "bg-blue-100"
+                hasConnectors ? "bg-green-100" : "bg-gray-100"
               }`}>
-                <Database className={hasConnectors ? "text-green-600" : "text-blue-600"} size={24} />
+                <Database className={hasConnectors ? "text-green-600" : "text-gray-400"} size={24} />
               </div>
               <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
                 hasConnectors 
                   ? "bg-green-100 text-green-700" 
-                  : "bg-blue-100 text-blue-700"
+                  : "bg-gray-100 text-gray-500"
               }`}>
-                {hasConnectors ? "✓ Done" : "Step 1"}
+                {hasConnectors ? "✓ Done" : "Step 2"}
               </span>
             </div>
-            <h3 className="font-bold text-gray-900 mb-2">Connect Your Data</h3>
+            <h3 className="font-bold text-gray-900 mb-2">Connect Your Tools</h3>
             <p className="text-sm text-gray-600 mb-4">
               {hasConnectors 
-                ? "Great! Your data sources are connected."
-                : "Link Xero, Shopify, Google Drive, or other business tools for personalized insights."
+                ? "✓ Your tools are connected!"
+                : "Optional: Connect QuickBooks, Shopify, or Square to get personalized insights."
               }
             </p>
             {!hasConnectors ? (
-              <button
-                onClick={onConnectData}
-                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-              >
-                Connect Data
-                <ArrowRight size={16} />
-              </button>
+              <>
+                <button
+                  onClick={onConnectData}
+                  className="w-full border border-blue-600 text-blue-600 px-4 py-2 rounded-lg font-semibold hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  Connect Data
+                  <ArrowRight size={16} />
+                </button>
+                <p className="text-xs text-gray-500 mt-2 text-center">
+                  I'll do this later
+                </p>
+              </>
             ) : (
               <button
                 onClick={onConnectData}
@@ -79,45 +113,7 @@ export function GettingStartedGuide({
             )}
           </div>
 
-          {/* Step 2: Chat with AI */}
-          <div className={`bg-white rounded-xl border-2 p-6 transition-all ${
-            hasConnectors 
-              ? "border-blue-500 shadow-lg shadow-blue-100" 
-              : "border-gray-200"
-          }`}>
-            <div className="flex items-center justify-between mb-4">
-              <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                hasConnectors ? "bg-blue-100" : "bg-gray-100"
-              }`}>
-                <MessageSquare className={hasConnectors ? "text-blue-600" : "text-gray-400"} size={24} />
-              </div>
-              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                hasConnectors 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "bg-gray-100 text-gray-500"
-              }`}>
-                Step 2
-              </span>
-            </div>
-            <h3 className="font-bold text-gray-900 mb-2">Tell Me Your Goal</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Share what you want to achieve: reduce costs, increase revenue, improve efficiency, or any business goal.
-            </p>
-            <button
-              onClick={onStartChat}
-              disabled={!hasConnectors}
-              className={`w-full px-4 py-2 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2 ${
-                hasConnectors
-                  ? "bg-blue-600 text-white hover:bg-blue-700"
-                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              Start Chatting
-              <ArrowRight size={16} />
-            </button>
-          </div>
-
-          {/* Step 3: Get Your Plan */}
+          {/* Step 3: Execute & Track */}
           <div className="bg-white rounded-xl border-2 border-gray-200 p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
@@ -127,12 +123,12 @@ export function GettingStartedGuide({
                 Step 3
               </span>
             </div>
-            <h3 className="font-bold text-gray-900 mb-2">Execute & Track</h3>
+            <h3 className="font-bold text-gray-900 mb-2">Get Your Plan & Track Progress</h3>
             <p className="text-sm text-gray-600 mb-4">
-              I'll create a step-by-step plan with measurable milestones. Track progress and adjust as you go.
+              See your weekly tasks with estimated impact. Track what's working and adjust as you go.
             </p>
-            <div className="w-full border border-gray-200 text-gray-400 px-4 py-2 rounded-lg font-semibold text-center">
-              Coming soon...
+            <div className="w-full border border-gray-200 text-gray-400 px-4 py-2 rounded-lg font-semibold text-center text-sm">
+              After Step 1
             </div>
           </div>
         </div>
@@ -141,7 +137,7 @@ export function GettingStartedGuide({
         <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-100">
           <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
             <TrendingUp className="text-blue-600" size={20} />
-            What You'll Get
+            What you'll get (in plain English!)
           </h3>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="flex gap-3">
@@ -149,8 +145,8 @@ export function GettingStartedGuide({
                 ✓
               </div>
               <div>
-                <p className="font-semibold text-gray-900 text-sm">Data-Driven Insights</p>
-                <p className="text-xs text-gray-600">Based on your actual business data, not generic advice</p>
+                <p className="font-semibold text-gray-900 text-sm">Week-by-week to-do list</p>
+                <p className="text-xs text-gray-600">Clear tasks you can start today</p>
               </div>
             </div>
             <div className="flex gap-3">
@@ -158,8 +154,8 @@ export function GettingStartedGuide({
                 ✓
               </div>
               <div>
-                <p className="font-semibold text-gray-900 text-sm">SMART Goals</p>
-                <p className="text-xs text-gray-600">Specific, Measurable, Achievable, Relevant, Time-bound</p>
+                <p className="font-semibold text-gray-900 text-sm">See the dollar impact</p>
+                <p className="text-xs text-gray-600">Know what each action could save or earn</p>
               </div>
             </div>
             <div className="flex gap-3">
@@ -167,8 +163,8 @@ export function GettingStartedGuide({
                 ✓
               </div>
               <div>
-                <p className="font-semibold text-gray-900 text-sm">Actionable Steps</p>
-                <p className="text-xs text-gray-600">Clear tasks you can start working on today</p>
+                <p className="font-semibold text-gray-900 text-sm">Made for your business</p>
+                <p className="text-xs text-gray-600">Based on your industry and size</p>
               </div>
             </div>
             <div className="flex gap-3">
@@ -176,8 +172,8 @@ export function GettingStartedGuide({
                 ✓
               </div>
               <div>
-                <p className="font-semibold text-gray-900 text-sm">Progress Tracking</p>
-                <p className="text-xs text-gray-600">Monitor KPIs and adjust your strategy in real-time</p>
+                <p className="font-semibold text-gray-900 text-sm">Real-time progress tracking</p>
+                <p className="text-xs text-gray-600">See what's working, adjust what's not</p>
               </div>
             </div>
           </div>
@@ -185,40 +181,31 @@ export function GettingStartedGuide({
 
         {/* Example Questions */}
         <div className="mt-8 text-center">
-          <p className="text-sm text-gray-600 mb-3">Not sure what to ask? Try these:</p>
+          <p className="text-sm text-gray-600 mb-3">Try one of these popular goals:</p>
           <div className="flex flex-wrap justify-center gap-2">
             <button
-              onClick={() => {
-                onStartChat();
-                // Could auto-populate the chat with this question
-              }}
+              onClick={onStartChat}
               className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-700 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
             >
-              💰 "Reduce operating costs by 15%"
+              💰 Cut food costs 10%
             </button>
             <button
-              onClick={() => {
-                onStartChat();
-              }}
+              onClick={onStartChat}
               className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-700 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
             >
-              📈 "Increase monthly revenue by 20%"
+              📈 Boost sales 15%
             </button>
             <button
-              onClick={() => {
-                onStartChat();
-              }}
+              onClick={onStartChat}
               className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-700 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
             >
-              ⚡ "Improve cash flow cycle time"
+              ⚡ Get paid faster
             </button>
             <button
-              onClick={() => {
-                onStartChat();
-              }}
+              onClick={onStartChat}
               className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-700 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
             >
-              🎯 "Boost customer retention rate"
+              🎯 Cut labor costs
             </button>
           </div>
         </div>

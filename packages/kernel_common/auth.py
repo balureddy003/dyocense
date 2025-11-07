@@ -16,13 +16,26 @@ except Exception:  # pragma: no cover - accounts package optional during bootstr
     get_api_token = None
 
 try:
-    from packages.kernel_common.keycloak_auth import KeycloakClient, KeycloakAuthFallback
-    from packages.kernel_common.config import get_config
+    from packages.kernel_common.keycloak_auth import KeycloakClient, KeycloakAuthFallback  # type: ignore
+    from packages.kernel_common.config import get_config  # type: ignore
     _keycloak_available = True
 except ImportError:
     _keycloak_available = False
     KeycloakClient = None
     KeycloakAuthFallback = None
+
+    # Provide a minimal fallback shim when Keycloak libraries are unavailable
+class _SimpleAuthFallback:
+    def verify_token(self, token: str):
+        # Force downstream fallbacks (internal JWT / API token / anonymous)
+        raise Exception("no-keycloak")
+
+    def health_check(self) -> dict:
+        return {"status": "degraded", "mode": "fallback"}
+
+# Ensure a callable fallback is always available
+if 'KeycloakAuthFallback' in globals() and KeycloakAuthFallback is None:  # type: ignore
+    KeycloakAuthFallback = _SimpleAuthFallback  # type: ignore
 
 
 class AuthError(Exception):
@@ -43,7 +56,7 @@ def _get_auth_client():
     # Check if Keycloak should be used
     if not _keycloak_available:
         logger.warning("Keycloak libraries not available; using fallback authentication")
-        _auth_client = KeycloakAuthFallback()
+        _auth_client = _SimpleAuthFallback()
         return _auth_client
     
     try:
@@ -52,7 +65,7 @@ def _get_auth_client():
         # Check feature flag
         if not config.features.use_keycloak or config.features.force_inmemory:
             logger.info("Keycloak disabled by feature flag; using fallback authentication")
-            _auth_client = KeycloakAuthFallback()
+            _auth_client = _SimpleAuthFallback()
             return _auth_client
         
         # Try to initialize Keycloak client
@@ -73,7 +86,7 @@ def _get_auth_client():
                 "Keycloak health check failed; using fallback authentication. Error: %s",
                 health.get("error")
             )
-            _auth_client = KeycloakAuthFallback()
+            _auth_client = _SimpleAuthFallback()
         else:
             logger.info("Keycloak authentication initialized successfully")
         
@@ -81,7 +94,7 @@ def _get_auth_client():
         
     except Exception as exc:
         logger.warning("Failed to initialize Keycloak client (%s); using fallback", exc)
-        _auth_client = KeycloakAuthFallback()
+        _auth_client = _SimpleAuthFallback()
         return _auth_client
 
 
@@ -103,6 +116,10 @@ def validate_bearer_token(token: str) -> Tuple[str, str]:
         AuthError: if the token is missing or invalid.
     """
     if not token:
+        # Development convenience: allow anonymous when enabled, even with no token
+        if os.getenv("ALLOW_ANONYMOUS", "false").lower() == "true":
+            logger.warning("Anonymous access granted (no token)")
+            return "anonymous", "anonymous"
         raise AuthError("Missing bearer token")
 
     # Try Keycloak/fallback authentication first

@@ -209,13 +209,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
           username: tenantProfile.tenant_id,
         };
         setUser(enrichedUser);
-        setProfile({
-          companyName: tenantProfile.name || "",
-          industry: "",
-          teamSize: String(tenantProfile.usage?.members ?? ""),
-          primaryGoal: "",
-          timezone: "",
-        });
+        // Don't auto-populate profile - let user complete profile setup
+        setProfile(null);
         try {
           const profile = await fetchUserProfile();
           setUser({
@@ -286,18 +281,9 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setUser({ id: response.user_id, fullName: email, email, username: email });
       }
 
-      try {
-        const tenantProfile = await getTenantProfile();
-        setProfile({
-          companyName: tenantProfile.name,
-          industry: "",
-          teamSize: String(tenantProfile.usage?.members ?? ""),
-          primaryGoal: "",
-          timezone: "",
-        });
-      } catch (err) {
-        console.warn("Failed to fetch tenant profile", err);
-      }
+      // Don't auto-populate profile after login
+      // Let user complete profile setup explicitly
+      setProfile(null);
     },
     []
   );

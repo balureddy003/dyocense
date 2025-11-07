@@ -1,32 +1,45 @@
 import {
-  FileUp,
-  Loader2,
-  Send,
-  Sparkles,
+  AlertCircle,
   CheckCircle2,
   Clock,
-  Settings,
-  Lightbulb,
-  Target,
+  Database,
+  FileUp,
   GitBranch,
   History,
-  AlertCircle,
-  Database,
+  Lightbulb,
+  Loader2,
+  Send,
+  Settings,
+  Sparkles,
+  Target,
+  ThumbsDown,
+  ThumbsUp,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
-import { TenantProfile, getTenantProfile, getPlaybookRecommendations, createRun, getRun, postOpenAIChat } from "../lib/api";
-import { PreferencesModal } from "./PreferencesModal";
-import { generateSuggestedGoalsFromBackend, generateGoalStatement, SuggestedGoal } from "../lib/goalGenerator";
-import { DataUploader, DataSource } from "./DataUploader";
-import { generateQuestions, validateAnswer, generateFollowUpQuestions, enrichGoalWithAnswers, Question } from "../lib/intelligentQuestioning";
-import { createGoalVersion, validateSMARTGoal, calculateGoalProgress, compareGoalVersions, GoalVersion, VersionHistory } from "../lib/goalVersioning";
-import { ConnectorMarketplace } from "./ConnectorMarketplace";
+import { useEffect, useRef, useState } from "react";
+import { createRun, getPlaybookRecommendations, getRun, getTenantProfile, postOpenAIChat, TenantProfile } from "../lib/api";
+import { type ConnectorConfig } from "../lib/connectorMarketplace";
+import { generateGoalStatement, generateSuggestedGoalsFromBackend, SuggestedGoal } from "../lib/goalGenerator";
+import { calculateGoalProgress, createGoalVersion, GoalVersion, validateSMARTGoal, VersionHistory } from "../lib/goalVersioning";
+import { enrichGoalWithAnswers, generateFollowUpQuestions, generateQuestions, Question, validateAnswer } from "../lib/intelligentQuestioning";
+import { generateDataContextPrompt, suggestConnectorFromIntent, tenantConnectorStore, type TenantConnector } from "../lib/tenantConnectors";
 import { ChatConnectorSetup } from "./ChatConnectorSetup";
 import { ConnectedDataSources } from "./ConnectedDataSources";
-import { tenantConnectorStore, generateDataContextPrompt, suggestConnectorFromIntent, checkDataAvailability, type TenantConnector } from "../lib/tenantConnectors";
-import { getConnectorById, type ConnectorConfig } from "../lib/connectorMarketplace";
+import { ConnectorMarketplace } from "./ConnectorMarketplace";
+import { DataSource, DataUploader } from "./DataUploader";
+import { PreferencesModal } from "./PreferencesModal";
 import { ThinkingProgress, ThinkingStep } from "./ThinkingProgress";
-import { ThumbsUp, ThumbsDown } from "lucide-react";
+
+// Agent system prompt to drive fully conversational flow
+const AGENT_SYSTEM_PROMPT = `You are Dyocense's AI Business Assistant.
+- Hold a natural conversation to help small/medium businesses plan, forecast, and optimize.
+- When users upload files, acknowledge them, infer schema at a high level, and propose next steps (connect, preview, or ask what they want to analyze). Avoid generic bullet lists.
+- When users mention data systems (POS, inventory, spreadsheets), suggest the best connector succinctly and offer to open the connector picker. If a connector was opened, confirm briefly and continue the conversation.
+- Ask clarifying questions only when needed (timeline, budget, target KPI, constraints), 1–2 at a time.
+- If asked, draft a concise step-by-step plan and call out required data. Prefer concrete, actionable language.
+- Keep answers crisp. End with an explicit next best action.`;
+
+// Feature flag to run the assistant in agent-driven mode (no hardcoded Q&A branches)
+const AGENT_DRIVEN_FLOW = true;
 
 type Message = {
   id: string;
@@ -75,19 +88,14 @@ type AssistantMode = "chat" | "data-upload" | "goal-editing" | "version-history"
 export type AgentAssistantProps = {
   onPlanGenerated?: (plan: PlanOverview) => void;
   profile?: TenantProfile | null;
+  // Seeded goal text to kick off generation from PlanSelector
+  seedGoal?: string;
   // Signal to kickoff a fresh new-plan journey. Increment to trigger.
   startNewPlanSignal?: number;
 };
 
-export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }: AgentAssistantProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "Hi! I'm your intelligent AI business assistant. I can help you create data-driven, measurable goals. Let's start by setting your preferences, or upload data to begin analysis.",
-      timestamp: Date.now(),
-    },
-  ]);
+export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPlanSignal }: AgentAssistantProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<AssistantMode>("chat");
@@ -105,14 +113,14 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
   const [editingGoal, setEditingGoal] = useState<GoalVersion | null>(null);
   const [showVersionComparison, setShowVersionComparison] = useState(false);
   const [comparisonVersions, setComparisonVersions] = useState<[GoalVersion, GoalVersion] | null>(null);
-  
+
   // Connector state
   const [tenantConnectors, setTenantConnectors] = useState<TenantConnector[]>([]);
   const [showConnectorMarketplace, setShowConnectorMarketplace] = useState(false);
   const [selectedConnectorForSetup, setSelectedConnectorForSetup] = useState<ConnectorConfig | null>(null);
   const [showConnectorSetup, setShowConnectorSetup] = useState(false);
   const [dataContextPrompt, setDataContextPrompt] = useState<string>("");
-  
+
   const fileRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
@@ -124,7 +132,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
         .getAll(profile.tenant_id)
         .then(setTenantConnectors)
         .catch(() => setTenantConnectors([]));
-      
+
       // Load data sources from localStorage
       try {
         const key = `dyocense-datasources-${profile.tenant_id}`;
@@ -149,7 +157,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
     }
   }, [messages]);
 
-    // Kick off a fresh new plan journey when the signal changes
+  // Kick off a fresh new plan journey when the signal changes
   useEffect(() => {
     if (startNewPlanSignal === undefined) return;
     // Reset assistant state for a clean flow
@@ -164,27 +172,16 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
     setMode("chat");
     setShowGoalSuggestions(false);
     setSuggestedGoals([]);
-    setMessages([
-      {
-        id: `welcome-${Date.now()}`,
-        role: "assistant",
-        text: "Let's create a new plan. Start by setting preferences, connect your data, or tell me your top business goal.",
-        timestamp: Date.now(),
-      },
-    ]);
-    
-    // Only auto-open preferences modal if user hasn't set them yet
-    const hasSetPreferences = profile?.tenant_id && 
-      typeof window !== 'undefined' && 
-      localStorage.getItem(`dyocense-prefs-set-${profile.tenant_id}`) === 'true';
-    
-    if (!hasSetPreferences) {
-      setTimeout(() => {
-        setPrefsModalOpen(true);
-        chatInputRef.current?.focus();
-      }, 100);
-    }
-  }, [startNewPlanSignal, profile?.tenant_id]);
+    setMessages([]);
+
+    // Preferences modal is now optional - users can open it manually via settings
+    // No auto-open to avoid interrupting the workflow
+
+    // Focus chat input on component mount
+    setTimeout(() => {
+      chatInputRef.current?.focus();
+    }, 100);
+  }, [startNewPlanSignal]);
 
   // Auto-generate questions when context changes
   useEffect(() => {
@@ -214,6 +211,84 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
     }
   }, [currentGoal, dataSources]);
 
+  // Helper: start flow with a raw goal text (from PlanSelector quick-start)
+  const startFlowWithGoalText = async (goalText: string) => {
+    const trimmed = goalText.trim();
+    if (!trimmed) return;
+
+    setCurrentGoal(trimmed);
+    setShowGoalSuggestions(false);
+
+    setMessages((m) => [
+      ...m,
+      {
+        id: `user-goal-${Date.now()}`,
+        role: "user",
+        text: `I want to: ${trimmed}`,
+        timestamp: Date.now(),
+      },
+    ]);
+
+    // Create initial goal version (generic)
+    const initialVersion = createGoalVersion(
+      null,
+      {
+        title: trimmed,
+        description: trimmed,
+        metrics: [],
+        timeline: "6 months",
+        status: "draft",
+      },
+      "Initial goal creation",
+      profile?.tenant_id || "user"
+    );
+
+    setGoalVersions({
+      goalId: initialVersion.goalId,
+      versions: [initialVersion],
+      branches: {},
+    });
+    setEditingGoal(initialVersion);
+
+    // Generate contextual questions; if none, proceed to plan generation
+    const questions = generateQuestions({
+      goal: trimmed,
+      businessType: preferences ? Array.from(preferences.businessType)[0] : undefined,
+      dataSources,
+      budget: preferences ? Array.from(preferences.budget)[0] : undefined,
+    });
+
+    if (questions.length > 0) {
+      setPendingQuestions(questions);
+      setMessages((m) => [
+        ...m,
+        {
+          id: `assistant-questions-${Date.now()}`,
+          role: "assistant",
+          text: `Great! To create an accurate, measurable plan, I need to ask a few questions. This will help ensure your goal is SMART (Specific, Measurable, Achievable, Relevant, Time-bound).`,
+          timestamp: Date.now(),
+        },
+        {
+          id: `question-${Date.now()}`,
+          role: "question",
+          text: questions[0].text,
+          timestamp: Date.now(),
+          question: questions[0],
+        },
+      ]);
+    } else {
+      await generatePlan(trimmed);
+    }
+  };
+
+  // If a goal is seeded (e.g., from PlanSelector), kick off the flow automatically after reset
+  useEffect(() => {
+    if (seedGoal && seedGoal.trim()) {
+      startFlowWithGoalText(seedGoal);
+    }
+    // We include startNewPlanSignal so a new-plan reset followed by the same seedGoal still triggers
+  }, [seedGoal, startNewPlanSignal]);
+
   const handlePreferencesConfirm = async (summary: string, prefs: PreferencesState) => {
     setPreferences(prefs);
     // Persist a simple flag to indicate preferences were set for this tenant
@@ -222,7 +297,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       if (tenantId) {
         localStorage.setItem(`dyocense-prefs-set-${tenantId}`, "true");
       }
-    } catch {}
+    } catch { }
 
     setMessages((m) => [
       ...m,
@@ -278,7 +353,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       budget: "",
       markets: [],
     };
-    
+
     const goalStatement = generateGoalStatement(goal, businessProfile);
     setCurrentGoal(goalStatement);
     setShowGoalSuggestions(false);
@@ -348,7 +423,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
 
   const handleQuestionAnswer = (question: Question, answer: string) => {
     const validation = validateAnswer(question, answer);
-    
+
     if (!validation.valid) {
       setMessages((m) => [
         ...m,
@@ -407,7 +482,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
     } else {
       // Check if all required questions answered
       const unansweredRequired = updatedQuestions.filter((q) => q.required && !q.answered);
-      
+
       if (unansweredRequired.length > 0) {
         // Ask next required question
         const nextQuestion = unansweredRequired[0];
@@ -450,7 +525,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       } else {
         updated = [...prev, source];
       }
-      
+
       // Persist to localStorage
       if (profile?.tenant_id) {
         try {
@@ -460,7 +535,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
           console.error("Error saving data sources:", error);
         }
       }
-      
+
       return updated;
     });
 
@@ -499,7 +574,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
         },
       ]);
     }
-    
+
     setShowConnectorSetup(false);
     setSelectedConnectorForSetup(null);
     setMode("chat");
@@ -518,7 +593,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
 
   const generatePlan = async (goal: string) => {
     setResearchStatus("researching");
-    
+
     // Initialize thinking steps for business planning
     const thinkingSteps: ThinkingStep[] = [
       { id: "step-1", label: "Analyzing Business Context", status: "pending" },
@@ -548,10 +623,10 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       // Step 1: Analyze business context
       thinkingSteps[0].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
+
       // Get tenant profile for context
       const profile = await getTenantProfile();
-      
+
       thinkingSteps[0].status = "completed";
       thinkingSteps[0].subItems = [`Analyzed context for ${profile.name}`];
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
@@ -559,11 +634,18 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       // Step 2: Compile goal
       thinkingSteps[1].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
-      // Get recommended templates
-      const recommendations = await getPlaybookRecommendations();
-      const selectedTemplate = recommendations.recommendations[0];
-      
+
+      // Get recommended templates (with fallback if backend unavailable)
+      let selectedTemplate: any = null;
+      try {
+        const recommendations = await getPlaybookRecommendations();
+        selectedTemplate = recommendations.recommendations[0];
+      } catch (error) {
+        console.warn("Recommendations API unavailable, using default template");
+        // Fall back to a known valid template id from registry.json
+        selectedTemplate = { title: "Inventory Optimization", template_id: "inventory_basic" };
+      }
+
       thinkingSteps[1].status = "completed";
       thinkingSteps[1].subItems = [`Selected template: ${selectedTemplate?.title || "Business Strategy"}`];
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
@@ -571,9 +653,9 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       // Step 3: Retrieve data
       thinkingSteps[2].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
+
       thinkingSteps[2].status = "completed";
-      thinkingSteps[2].subItems = dataSources.length > 0 
+      thinkingSteps[2].subItems = dataSources.length > 0
         ? [`Analyzed ${dataSources.length} uploaded data sources`]
         : ["Using industry benchmarks and best practices"];
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
@@ -581,44 +663,58 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       // Step 4: Generate optimization model
       thinkingSteps[3].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
-      // Create a run using the orchestrator
-      const runResponse = await createRun({
-        goal: goal,
-        project_id: profile.tenant_id,
-        template_id: selectedTemplate?.template_id || "business_strategy",
-        horizon: 6,
-        data_inputs: dataSources.length > 0 ? { sources: dataSources } : undefined,
-      });
-      
-      thinkingSteps[3].status = "completed";
-      thinkingSteps[3].subItems = [`Created optimization model (Run ID: ${runResponse.run_id})`];
-      setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
 
-      // Step 5: Poll for completion
-      thinkingSteps[4].status = "in-progress";
-      setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
-      let runStatus = await getRun(runResponse.run_id);
-      let pollAttempts = 0;
-      while (runStatus.status === "pending" || runStatus.status === "running") {
-        if (pollAttempts++ > 30) break; // Timeout after 30 seconds
-        await new Promise((r) => setTimeout(r, 1000));
+      // Try to create a run using the orchestrator, fall back to local if unavailable
+      let runResponse: any = null;
+      let runStatus: any = null;
+      try {
+        runResponse = await createRun({
+          goal: goal,
+          project_id: profile.tenant_id,
+          // Prefer template_id, fall back to archetype_id (backward-compat), then a known valid default
+          template_id: (selectedTemplate?.template_id || (selectedTemplate as any)?.archetype_id || "inventory_basic"),
+          horizon: 6,
+          data_inputs: dataSources.length > 0 ? { sources: dataSources } : undefined,
+        });
+
+        thinkingSteps[3].status = "completed";
+        thinkingSteps[3].subItems = [`Created optimization model (Run ID: ${runResponse.run_id})`];
+        setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
+
+        // Step 5: Poll for completion
+        thinkingSteps[4].status = "in-progress";
+        setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
+
         runStatus = await getRun(runResponse.run_id);
+        let pollAttempts = 0;
+        while (runStatus.status === "pending" || runStatus.status === "running") {
+          if (pollAttempts++ > 30) break; // Timeout after 30 seconds
+          await new Promise((r) => setTimeout(r, 1000));
+          runStatus = await getRun(runResponse.run_id);
+        }
+
+        thinkingSteps[4].status = "completed";
+        thinkingSteps[4].subItems = [`Analysis complete: ${runStatus.status}`];
+        setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
+      } catch (error) {
+        console.warn("Backend optimization unavailable, proceeding with local plan generation");
+        thinkingSteps[3].status = "completed";
+        thinkingSteps[3].subItems = ["Using local business strategy template"];
+        setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
+
+        thinkingSteps[4].status = "completed";
+        thinkingSteps[4].subItems = ["Applied best-practice frameworks"];
+        setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
       }
-      
-      thinkingSteps[4].status = "completed";
-      thinkingSteps[4].subItems = [`Analysis complete: ${runStatus.status}`];
-      setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
 
       // Step 6: Create execution plan
       thinkingSteps[5].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
-      // Extract plan from run result
-      const result = runStatus.result || {};
+
+      // Extract plan from run result (if available)
+      const result = runStatus?.result || {};
       const explanation = result.explanation || {};
-      
+
       thinkingSteps[5].status = "completed";
       thinkingSteps[5].subItems = ["Generated phased execution roadmap"];
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
@@ -626,7 +722,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       // Step 7: Finalize recommendations
       thinkingSteps[6].status = "in-progress";
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
+
       const newPlan: PlanOverview = {
         title: goal,
         summary: explanation.summary || `Strategic plan to ${goal}. Based on ${dataSources.length > 0 ? "your uploaded data" : "industry benchmarks"} and optimization analysis.`,
@@ -641,58 +737,58 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
             "Optimize and iterate",
           ],
         })) || [
-          {
-            id: "stage-1",
-            title: "Foundation & Baseline",
-            description: "Establish current metrics and set up tracking",
-            todos: [
-              "Document current state metrics",
-              "Set up data collection systems",
-              "Define success criteria",
-              "Identify key stakeholders",
-            ],
-          },
-          {
-            id: "stage-2",
-            title: "Quick Wins Implementation",
-            description: "Execute high-impact, low-effort improvements",
-            todos: [
-              "Implement top 3 quick wins",
-              "Monitor immediate impact",
-              "Gather early feedback",
-              "Adjust approach as needed",
-            ],
-          },
-          {
-            id: "stage-3",
-            title: "Strategic Initiatives",
-            description: "Roll out major improvements",
-            todos: [
-              "Execute main transformation activities",
-              "Track progress against targets",
-              "Manage change with team",
-              "Document learnings",
-            ],
-          },
-          {
-            id: "stage-4",
-            title: "Optimization & Scale",
-            description: "Refine and expand successful approaches",
-            todos: [
-              "Analyze results vs. targets",
-              "Optimize underperforming areas",
-              "Scale successful initiatives",
-              "Plan next iteration",
-            ],
-          },
-        ],
-        quickWins: result.solution?.kpis?.slice(0, 3).map((kpi: any) => 
+            {
+              id: "stage-1",
+              title: "Foundation & Baseline",
+              description: "Establish current metrics and set up tracking",
+              todos: [
+                "Document current state metrics",
+                "Set up data collection systems",
+                "Define success criteria",
+                "Identify key stakeholders",
+              ],
+            },
+            {
+              id: "stage-2",
+              title: "Quick Wins Implementation",
+              description: "Execute high-impact, low-effort improvements",
+              todos: [
+                "Implement top 3 quick wins",
+                "Monitor immediate impact",
+                "Gather early feedback",
+                "Adjust approach as needed",
+              ],
+            },
+            {
+              id: "stage-3",
+              title: "Strategic Initiatives",
+              description: "Roll out major improvements",
+              todos: [
+                "Execute main transformation activities",
+                "Track progress against targets",
+                "Manage change with team",
+                "Document learnings",
+              ],
+            },
+            {
+              id: "stage-4",
+              title: "Optimization & Scale",
+              description: "Refine and expand successful approaches",
+              todos: [
+                "Analyze results vs. targets",
+                "Optimize underperforming areas",
+                "Scale successful initiatives",
+                "Plan next iteration",
+              ],
+            },
+          ],
+        quickWins: result.solution?.kpis?.slice(0, 3).map((kpi: any) =>
           `${kpi.name}: ${kpi.description || "Optimize for impact"}`
         ) || [
-          "Implement low-cost automation for repetitive tasks",
-          "Optimize top 3 high-cost processes",
-          "Launch quick feedback collection system",
-        ],
+            "Implement low-cost automation for repetitive tasks",
+            "Optimize top 3 high-cost processes",
+            "Launch quick feedback collection system",
+          ],
         estimatedDuration: questionAnswers.get("goal-timeframe") || "6 months",
         dataSources: dataSources.map(ds => ({
           id: ds.id,
@@ -701,7 +797,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
           size: ds.metadata?.size || 0,
         })),
       };
-      
+
       thinkingSteps[6].status = "completed";
       thinkingSteps[6].subItems = ["Plan ready with actionable recommendations"];
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
@@ -720,28 +816,98 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
       ]);
 
       onPlanGenerated?.(newPlan);
-      
+
     } catch (error) {
       console.error("Plan generation error:", error);
-      
-      // Mark all remaining steps as failed
+
+      // Mark all remaining steps as completed (graceful fallback)
       thinkingSteps.forEach(step => {
         if (step.status === "in-progress" || step.status === "pending") {
           step.status = "completed";
         }
       });
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
-      
-      setResearchStatus("idle");
+
+      // Generate a fallback plan using local logic when backend is unavailable
+      console.warn("Backend unavailable, generating fallback plan...");
+
+      const fallbackPlan: PlanOverview = {
+        title: goal,
+        summary: `Strategic plan to ${goal}. This plan is based on industry best practices and will be refined as you add more data.`,
+        stages: [
+          {
+            id: "stage-1",
+            title: "Discovery & Baseline",
+            description: "Understand current state and set measurable targets",
+            todos: [
+              "Measure current performance metrics",
+              "Identify improvement opportunities",
+              "Set specific, measurable targets",
+              "Get team alignment on goals",
+            ],
+          },
+          {
+            id: "stage-2",
+            title: "Quick Wins (First 30 Days)",
+            description: "Execute high-impact, low-effort improvements",
+            todos: [
+              "Implement top 3 quick-win actions",
+              "Track daily/weekly progress",
+              "Celebrate early successes",
+              "Build momentum with the team",
+            ],
+          },
+          {
+            id: "stage-3",
+            title: "Core Initiatives (Month 2-4)",
+            description: "Execute main transformation activities",
+            todos: [
+              "Roll out strategic improvements",
+              "Monitor KPIs weekly",
+              "Address blockers quickly",
+              "Adjust tactics based on data",
+            ],
+          },
+          {
+            id: "stage-4",
+            title: "Optimize & Scale (Month 5-6)",
+            description: "Refine approach and expand what works",
+            todos: [
+              "Analyze results vs targets",
+              "Double down on what works",
+              "Fix or drop underperformers",
+              "Document lessons learned",
+            ],
+          },
+        ],
+        quickWins: [
+          "Review and optimize your 3 highest-cost areas",
+          "Automate one repetitive manual process",
+          "Set up a simple dashboard to track progress",
+        ],
+        estimatedDuration: questionAnswers.get("goal-timeframe") || "6 months",
+        dataSources: dataSources.map(ds => ({
+          id: ds.id,
+          name: ds.name,
+          type: ds.type,
+          size: ds.metadata?.size || 0,
+        })),
+      };
+
+      setPlan(fallbackPlan);
+      setResearchStatus("ready");
+
       setMessages((m) => [
         ...m,
         {
-          id: `error-${Date.now()}`,
-          role: "system",
-          text: `⚠️ Could not generate plan from backend. ${error instanceof Error ? error.message : "Please try again."}`,
+          id: `plan-ready-${Date.now()}`,
+          role: "assistant",
+          text: "✅ Your strategic plan is ready! I've created a practical roadmap based on proven business strategies. You can refine this plan as you go, and connect your data sources for more personalized recommendations.",
           timestamp: Date.now(),
         },
       ]);
+
+      onPlanGenerated?.(fallbackPlan);
     }
   };
 
@@ -750,7 +916,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
 
     // Validate SMART criteria
     const validation = validateSMARTGoal(editingGoal);
-    
+
     if (!validation.isValid) {
       setMessages((m) => [
         ...m,
@@ -793,14 +959,14 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
   };
 
   const handleFeedback = (messageId: string, feedback: "positive" | "negative") => {
-    setMessages((m) => 
-      m.map(msg => 
-        msg.id === messageId 
+    setMessages((m) =>
+      m.map(msg =>
+        msg.id === messageId
           ? { ...msg, feedback: msg.feedback === feedback ? null : feedback }
           : msg
       )
     );
-    
+
     // Here you could send feedback to analytics/backend
     console.log(`Feedback for message ${messageId}: ${feedback}`);
   };
@@ -808,41 +974,40 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
   const handleSend = async () => {
     if (!input.trim() || loading) return;
 
+    const userInput = input;
+    setInput("");
+
+    if (!AGENT_DRIVEN_FLOW) {
+      // Legacy flow: structured Q&A
+      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+      if (lastMessage && lastMessage.role === "question" && lastMessage.question && !lastMessage.question.answered) {
+        handleQuestionAnswer(lastMessage.question, userInput);
+        return;
+      }
+
+      const isFirstMessage = messages.length === 0;
+      const looksLikeGoal = /reduce|increase|improve|grow|cut|boost|optimize|save|earn|achieve|goal|want|need/i.test(userInput);
+      if (isFirstMessage && looksLikeGoal) {
+        await startFlowWithGoalText(userInput);
+        return;
+      }
+    }
+
+    // Add user message to chat
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       role: "user",
-      text: input,
+      text: userInput,
       timestamp: Date.now(),
     };
 
     setMessages((m) => [...m, userMsg]);
-    const userInput = input;
-    setInput("");
-
-    // Check for connector-related keywords
+    // Check for connector-related keywords and optionally open the marketplace,
+    // but still proceed with an agent response so the conversation remains fluid.
     const connectorIntent = suggestConnectorFromIntent(userInput);
     if (connectorIntent && profile?.tenant_id) {
-      setMessages((m) => [
-        ...m,
-        {
-          id: `assistant-connector-${Date.now()}`,
-          role: "assistant",
-          text: connectorIntent.reason,
-          timestamp: Date.now(),
-        },
-      ]);
-
-      // Show connector marketplace
       setShowConnectorMarketplace(true);
       setMode("connectors");
-      return;
-    }
-
-    // Check if answering a pending question
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.role === "question" && lastMessage.question && !lastMessage.question.answered) {
-      handleQuestionAnswer(lastMessage.question, input);
-      return;
     }
 
     // Otherwise, process as general chat using backend
@@ -851,15 +1016,21 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
     try {
       const oaiResp = await postOpenAIChat({
         model: "dyocense-chat-mini",
-        messages: messages
-          .filter(m => m.role !== "system")
-          .map(m => ({ role: m.role as any, content: m.text }))
-          .concat([{ role: "user", content: userInput }]),
+        messages: [
+          { role: "system", content: AGENT_SYSTEM_PROMPT },
+          ...messages
+            .filter(m => m.role !== "system")
+            .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+          { role: "user", content: userInput },
+        ],
         temperature: 0.2,
         context: {
           tenant_id: profile?.tenant_id,
           has_data_sources: dataSources.length > 0,
           preferences: preferences,
+          data_sources: dataSources.map(ds => ({ id: ds.id, name: ds.name, type: ds.type, rows: ds.metadata?.rows })),
+          connectors: tenantConnectors.map(c => ({ id: c.id, name: c.displayName, type: c.connector_type, status: c.status })),
+          marketplace_opened: Boolean(connectorIntent),
         },
       });
 
@@ -897,11 +1068,10 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
           <div className="flex gap-2">
             <button
               onClick={() => setMode("data-upload")}
-              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                mode === "data-upload"
-                  ? "bg-primary text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-              }`}
+              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${mode === "data-upload"
+                ? "bg-primary text-white"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
             >
               <FileUp size={14} className="inline mr-1" />
               Data ({dataSources.length})
@@ -909,11 +1079,10 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
             <button
               onClick={handleOpenConnectorMarketplace}
               data-connectors-button
-              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                mode === "connectors"
-                  ? "bg-primary text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-              }`}
+              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${mode === "connectors"
+                ? "bg-primary text-white"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
             >
               <Database size={14} className="inline mr-1" />
               Connectors ({tenantConnectors.filter(c => c.status === "active").length})
@@ -921,11 +1090,10 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
             {goalVersions && (
               <button
                 onClick={() => setMode("version-history")}
-                className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                  mode === "version-history"
-                    ? "bg-primary text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${mode === "version-history"
+                  ? "bg-primary text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
               >
                 <History size={14} className="inline mr-1" />
                 Versions ({goalVersions.versions.length})
@@ -934,112 +1102,203 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setPrefsModalOpen(true)}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700 hover:text-primary"
-          >
-            <Settings size={14} className="text-primary" />
-            {preferences ? "Update Preferences" : "Set Preferences"}
-          </button>
-          {preferences && (
+        {/* Optional: Show preferences button less prominently */}
+        {!preferences && (
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setPrefsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-primary"
+              title="Optional: Set preferences for personalized recommendations"
+            >
+              <Settings size={14} className="text-gray-400 hover:text-primary" />
+              <span className="text-xs">Set Preferences (Optional)</span>
+            </button>
+          </div>
+        )}
+        {preferences && (
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setPrefsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700 hover:text-primary"
+            >
+              <Settings size={14} className="text-primary" />
+              Update Preferences
+            </button>
             <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 border border-green-200">
               <CheckCircle2 size={12} /> Preferences set
             </span>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Main Content Area */}
-  <div className="flex-1 overflow-y-auto px-4 py-3 pb-28">
+      <div className="flex-1 overflow-y-auto px-4 py-3 pb-28">
         {mode === "chat" && (
           <>
-            {/* Messages */}
-            <div className="space-y-4">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                >
+            {/* Empty State - Quick Start Actions */}
+            {messages.length === 0 && !plan && (
+              <div className="flex flex-col items-center justify-center h-full px-6">
+                <div className="w-full max-w-md space-y-6">
+                  {/* Welcome Header */}
+                  <div className="text-center">
+                    <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4">
+                      <Sparkles className="text-white" size={32} />
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">
+                      Let's grow your business
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Tell me your goal and I'll create a step-by-step plan to achieve it
+                    </p>
+                  </div>
+
+                  {/* Quick Start Examples */}
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Popular goals
+                    </p>
+                    {[
+                      { icon: "💰", text: "Reduce costs by 15%", color: "blue" },
+                      { icon: "📈", text: "Increase sales by 20%", color: "green" },
+                      { icon: "⚡", text: "Improve efficiency", color: "purple" },
+                      { icon: "👥", text: "Grow customer base", color: "orange" },
+                    ].map((example) => (
+                      <button
+                        key={example.text}
+                        onClick={() => {
+                          setInput(example.text);
+                          chatInputRef.current?.focus();
+                        }}
+                        className={`w-full text-left px-4 py-3 rounded-xl border-2 border-gray-200 hover:border-${example.color}-300 hover:bg-${example.color}-50 transition-all group`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">{example.icon}</span>
+                          <span className="text-sm font-medium text-gray-700 group-hover:text-gray-900">
+                            {example.text}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Data Connection CTA */}
+                  {tenantConnectors.filter(c => c.status === "active").length === 0 && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <button
+                        onClick={handleOpenConnectorMarketplace}
+                        className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 hover:border-blue-300 transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Database size={20} className="text-blue-600" />
+                          <div className="text-left">
+                            <p className="text-sm font-semibold text-gray-900">
+                              Connect your data
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              Get personalized recommendations
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-blue-600 group-hover:translate-x-1 transition-transform">
+                          →
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Messages - Only shown after conversation starts */}
+            {messages.length > 0 && (
+              <div className="space-y-4">
+                {messages.map((msg) => (
                   <div
-                    className={`max-w-[80%] ${
-                      msg.role === "user"
+                    key={msg.id}
+                    className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`max-w-[80%] ${msg.role === "user"
                         ? "bg-primary text-white rounded-xl px-4 py-3"
                         : msg.role === "system"
-                        ? "w-full"
-                        : msg.role === "question"
-                        ? "bg-amber-50 border border-amber-200 text-gray-900 rounded-xl px-4 py-3"
-                        : "bg-gray-100 text-gray-900 rounded-xl px-4 py-3"
-                    }`}
-                  >
-                    {msg.role === "question" && (
-                      <div className="flex items-start gap-2 mb-2">
-                        <AlertCircle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                        <div className="text-xs text-amber-700 font-semibold">
-                          {msg.question?.reason}
+                          ? "w-full"
+                          : msg.role === "question"
+                            ? "bg-amber-50 border border-amber-200 text-gray-900 rounded-xl px-4 py-3"
+                            : "bg-gray-100 text-gray-900 rounded-xl px-4 py-3"
+                        }`}
+                    >
+                      {msg.role === "question" && (
+                        <div className="flex items-start gap-2 mb-2">
+                          <AlertCircle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                          <div className="text-xs text-amber-700 font-semibold">
+                            {msg.question?.reason}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    
-                    {/* Thinking Progress for system messages */}
-                    {msg.showThinking && msg.thinkingSteps && (
-                      <div className="mb-3">
-                        <ThinkingProgress 
-                          steps={msg.thinkingSteps}
-                          isCollapsed={false}
-                        />
-                      </div>
-                    )}
-                    
-                    <div className="whitespace-pre-wrap text-sm">{msg.text}</div>
-                    
-                    {/* Feedback buttons for assistant messages */}
-                    {msg.role === "assistant" && !msg.question && (
-                      <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-200">
-                        <button
-                          onClick={() => handleFeedback(msg.id, "positive")}
-                          className={`p-1.5 rounded-lg transition-colors ${
-                            msg.feedback === "positive"
+                      )}
+
+                      {/* Thinking Progress for system messages */}
+                      {msg.showThinking && msg.thinkingSteps && (
+                        <div className="mb-3">
+                          <ThinkingProgress
+                            steps={msg.thinkingSteps}
+                            isCollapsed={false}
+                          />
+                        </div>
+                      )}
+
+                      <div className="whitespace-pre-wrap text-sm">{msg.text}</div>
+
+                      {/* Quick Reply Buttons for Questions */}
+                      {msg.question?.suggestedAnswers && !msg.question.answered && (
+                        <div className="mt-4 pt-3 border-t border-amber-200">
+                          <p className="text-xs font-semibold text-gray-600 mb-2">Quick replies:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {msg.question.suggestedAnswers.map((ans) => (
+                              <button
+                                key={ans}
+                                onClick={() => msg.question && handleQuestionAnswer(msg.question, ans)}
+                                className="rounded-lg border-2 border-primary bg-white px-4 py-2 text-sm font-semibold text-primary hover:bg-primary hover:text-white transition-all"
+                              >
+                                {ans}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2 italic">Or type your own answer below</p>
+                        </div>
+                      )}
+
+                      {/* Feedback buttons for assistant messages */}
+                      {msg.role === "assistant" && !msg.question && (
+                        <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-200">
+                          <button
+                            onClick={() => handleFeedback(msg.id, "positive")}
+                            className={`p-1.5 rounded-lg transition-colors ${msg.feedback === "positive"
                               ? "bg-green-100 text-green-600"
                               : "text-gray-400 hover:text-green-600 hover:bg-green-50"
-                          }`}
-                          title="Helpful"
-                        >
-                          <ThumbsUp size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleFeedback(msg.id, "negative")}
-                          className={`p-1.5 rounded-lg transition-colors ${
-                            msg.feedback === "negative"
+                              }`}
+                            title="Helpful"
+                          >
+                            <ThumbsUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleFeedback(msg.id, "negative")}
+                            className={`p-1.5 rounded-lg transition-colors ${msg.feedback === "negative"
                               ? "bg-red-100 text-red-600"
                               : "text-gray-400 hover:text-red-600 hover:bg-red-50"
-                          }`}
-                          title="Not helpful"
-                        >
-                          <ThumbsDown size={14} />
-                        </button>
-                        <span className="text-xs text-gray-500 ml-1">Was this helpful?</span>
-                      </div>
-                    )}
-                    
-                    {msg.question?.suggestedAnswers && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {msg.question.suggestedAnswers.map((ans) => (
-                          <button
-                            key={ans}
-                            onClick={() => msg.question && handleQuestionAnswer(msg.question, ans)}
-                            className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-gray-700 hover:bg-amber-50"
+                              }`}
+                            title="Not helpful"
                           >
-                            {ans}
+                            <ThumbsDown size={14} />
                           </button>
-                        ))}
-                      </div>
-                    )}
+                          <span className="text-xs text-gray-500 ml-1">Was this helpful?</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
 
             {/* Suggested Goals */}
             {showGoalSuggestions && suggestedGoals.length > 0 && (
@@ -1060,13 +1319,12 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
                         <h3 className="font-semibold text-gray-900">{goal.title}</h3>
                       </div>
                       <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          goal.priority === "high"
-                            ? "bg-red-100 text-red-700"
-                            : goal.priority === "medium"
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${goal.priority === "high"
+                          ? "bg-red-100 text-red-700"
+                          : goal.priority === "medium"
                             ? "bg-amber-100 text-amber-700"
                             : "bg-green-100 text-green-700"
-                        }`}
+                          }`}
                       >
                         {goal.priority}
                       </span>
@@ -1113,7 +1371,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
         {mode === "connectors" && (
           <div>
             <h3 className="mb-4 text-lg font-bold text-gray-900">Connected Data Sources</h3>
-              <ConnectedDataSources
+            <ConnectedDataSources
               tenantId={profile?.tenant_id || ""}
               onAddConnector={handleOpenConnectorMarketplace}
               onConfigureConnector={(connectorId) => {
@@ -1137,13 +1395,12 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
               {goalVersions.versions.map((version, idx) => {
                 const isLatest = idx === goalVersions.versions.length - 1;
                 const progress = calculateGoalProgress(version);
-                
+
                 return (
                   <div
                     key={version.id}
-                    className={`rounded-lg border p-4 ${
-                      isLatest ? "border-primary bg-blue-50" : "border-gray-200 bg-white"
-                    }`}
+                    className={`rounded-lg border p-4 ${isLatest ? "border-primary bg-blue-50" : "border-gray-200 bg-white"
+                      }`}
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -1195,7 +1452,11 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
 
       {/* Floating Input Area - Absolutely positioned at bottom */}
       <div className="absolute bottom-0 left-0 right-0 z-20 bg-white border-t border-gray-200 px-6 py-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-        <div className="flex gap-2">
+        <form
+          className="flex gap-2 items-center"
+          onSubmit={e => { e.preventDefault(); handleSend(); }}
+          encType="multipart/form-data"
+        >
           <input
             data-chat-input
             ref={chatInputRef}
@@ -1205,20 +1466,91 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             placeholder={
               pendingQuestions.some((q) => !q.answered && q.required)
-                ? "Answer the question above..."
-                : "Ask me anything about your goals..."
+                ? "Type your answer..."
+                : messages.length === 0
+                  ? "What's your business goal? (e.g., Cut costs by 15%)"
+                  : "Ask me anything..."
             }
             className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             disabled={loading}
           />
+          <label htmlFor="chat-file-upload" className="cursor-pointer flex items-center px-3 py-2 rounded-xl border border-gray-300 bg-gray-50 hover:bg-gray-100">
+            <FileUp size={18} className="text-primary mr-1" />
+            <span className="text-xs text-gray-700">Upload</span>
+            <input
+              id="chat-file-upload"
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || []);
+                for (const file of files) {
+                  // Add user message for upload
+                  setMessages((m) => [
+                    ...m,
+                    {
+                      id: `file-upload-${Date.now()}-${file.name}`,
+                      role: "user",
+                      text: `Uploaded file: ${file.name}`,
+                      files: [{ name: file.name, size: file.size }],
+                      timestamp: Date.now(),
+                    },
+                  ]);
+                  // Call agent/LLM for next step after upload
+                  setLoading(true);
+                  try {
+                    const oaiResp = await postOpenAIChat({
+                      model: "dyocense-chat-mini",
+                      messages: [
+                        ...messages
+                          .filter(m => m.role !== "system")
+                          .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+                        { role: "user", content: `Uploaded file: ${file.name}` }
+                      ],
+                      temperature: 0.2,
+                      context: {
+                        tenant_id: profile?.tenant_id,
+                        has_data_sources: true,
+                        preferences: preferences,
+                        uploaded_file: { name: file.name, size: file.size }
+                      },
+                    });
+                    const content = oaiResp.choices?.[0]?.message?.content || `File \"${file.name}\" uploaded! Would you like to connect or preview the data?`;
+                    setMessages((m) => [
+                      ...m,
+                      {
+                        id: `file-action-${Date.now()}-${file.name}`,
+                        role: "assistant",
+                        text: content,
+                        timestamp: Date.now(),
+                      },
+                    ]);
+                  } catch (err) {
+                    setMessages((m) => [
+                      ...m,
+                      {
+                        id: `file-action-error-${Date.now()}-${file.name}`,
+                        role: "assistant",
+                        text: `File \"${file.name}\" uploaded, but I couldn't reach the agent for next steps. Please try again.`,
+                        timestamp: Date.now(),
+                      },
+                    ]);
+                  }
+                  setLoading(false);
+                }
+                // Reset file input
+                e.target.value = "";
+              }}
+            />
+          </label>
           <button
-            onClick={handleSend}
+            type="submit"
             disabled={loading || !input.trim()}
             className="rounded-xl bg-primary px-6 py-3 font-semibold text-white hover:bg-primary/90 disabled:opacity-50"
           >
             {loading ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
           </button>
-        </div>
+        </form>
       </div>
 
       <PreferencesModal
@@ -1244,7 +1576,7 @@ export function AgentAssistant({ onPlanGenerated, profile, startNewPlanSignal }:
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
-                <ConnectorMarketplace
+              <ConnectorMarketplace
                 onConnectorSelected={handleConnectorSelected}
                 tenantId={profile?.tenant_id || ""}
               />

@@ -1,6 +1,6 @@
+import { ArrowRight, MessageSquare, Sparkles } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, MessageSquare, ArrowRight } from "lucide-react";
 import { BusinessProfile, useAuth } from "../context/AuthContext";
 
 const defaultProfile: BusinessProfile = {
@@ -25,15 +25,14 @@ export const ProfileSetupPage = () => {
       navigate("/login", { replace: true });
       return;
     }
-    if (profile) {
-      navigate("/home", { replace: true });
-    }
-  }, [authenticated, profile, ready, navigate]);
+    // Don't auto-redirect if they already have a profile
+    // Let them see this page if they navigate here directly
+  }, [authenticated, ready, navigate]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitted(true);
-    
+
     if (!businessDescription.trim()) {
       return;
     }
@@ -86,7 +85,7 @@ export const ProfileSetupPage = () => {
     if (teamMatch) {
       return `${teamMatch[1]} people`;
     }
-    
+
     // Look for team roles
     const roleMatch = text.match(/(?:with|including|for)\s+([^.,!?]*(?:sales|inventory|operations|kitchen|front desk|management)[^.,!?]*)/i);
     if (roleMatch) {
@@ -181,6 +180,13 @@ export const ProfileSetupPage = () => {
                   <ArrowRight size={20} />
                 </>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/home")}
+              className="w-full sm:w-auto px-8 py-4 rounded-full border-2 border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 transition-all"
+            >
+              Skip for now
             </button>
           </div>
         </form>

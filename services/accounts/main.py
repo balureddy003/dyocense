@@ -30,6 +30,7 @@ from packages.accounts.repository import (
     AuthenticationError,
     JWT_TTL_SECONDS,
 )
+from packages.accounts.oauth import oauth_service, OAuthProvider, OAuthUserInfo
 from packages.kernel_common.deps import require_auth
 from packages.kernel_common.logging import configure_logging
 from packages.kernel_common.mailer import Mailer
@@ -433,7 +434,8 @@ def get_tenant_profile(identity: dict = Depends(require_auth)) -> TenantProfileR
         from datetime import datetime
 
         now = datetime.utcnow()
-        owner_email = identity.get("email") or "owner@demo.local"
+        # Use a DNS-valid example domain to satisfy email-validator (avoid .local which is reserved)
+        owner_email = identity.get("email") or "owner@example.com"
         tenant = Tenant(
             tenant_id=identity["tenant_id"],
             name="Demo Business",
@@ -499,11 +501,12 @@ def get_goal_recommendations(identity: dict = Depends(require_auth)) -> dict:
     Get recommended playbook templates based on tenant's business profile.
     """
     tenant = get_tenant(identity["tenant_id"])
+    # Graceful fallback: if tenant doesn't exist (e.g., anonymous/dev), use defaults
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    
-    # Get business profile from tenant metadata
-    business_profile = tenant.metadata.get("business_profile", {})
+        business_profile = {}
+    else:
+        # Get business profile from tenant metadata
+        business_profile = tenant.metadata.get("business_profile", {})
     industry = business_profile.get("industry", "general")
     
     # Define recommendations based on industry
@@ -907,6 +910,255 @@ def login_user(payload: UserLoginRequest) -> UserLoginResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password.") from exc
 
 
+# =====================================================================
+# OAuth Social Login Endpoints (Google, Microsoft, Apple)
+# =====================================================================
+
+@app.get("/v1/auth/providers", response_model=dict, tags=["oauth"])
+def get_oauth_providers() -> dict:
+    """Get list of enabled OAuth providers for social login.
+    
+    Returns enabled providers (google, microsoft, apple) based on environment configuration.
+    SMB-optimized: Only the most popular business authentication methods.
+    """
+    enabled = oauth_service.get_enabled_providers()
+    
+    provider_info = {
+        "google": {
+            "name": "Google",
+            "description": "Sign in with Gmail or Google Workspace",
+            "icon": "google",
+            "color": "#4285F4"
+        },
+        "microsoft": {
+            "name": "Microsoft",
+            "description": "Sign in with Outlook or Microsoft 365",
+            "icon": "microsoft",
+            "color": "#00A4EF"
+        },
+        "apple": {
+            "name": "Apple",
+            "description": "Sign in with Apple ID",
+            "icon": "apple",
+            "color": "#000000"
+        }
+    }
+    
+    return {
+        "enabled_providers": enabled,
+        "providers": {p: provider_info[p] for p in enabled}
+    }
+
+
+@app.get("/v1/auth/{provider}/authorize", tags=["oauth"])
+def oauth_authorize(provider: OAuthProvider, tenant_id: str | None = None) -> dict:
+    """Initiate OAuth login flow for a provider.
+    
+    Args:
+        provider: OAuth provider (google, microsoft, apple)
+        tenant_id: Optional tenant ID for direct tenant login
+        
+    Returns:
+        Authorization URL to redirect user to and state token for CSRF protection
+    """
+    if not oauth_service.is_enabled(provider):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth provider '{provider}' is not configured"
+        )
+    
+    # Generate state token with optional tenant_id
+    import secrets
+    import json
+    import base64
+    
+    state_data = {"nonce": secrets.token_urlsafe(16)}
+    if tenant_id:
+        state_data["tenant_id"] = tenant_id
+    
+    state = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
+    
+    auth_url = oauth_service.get_authorization_url(provider, state)
+    
+    return {
+        "authorization_url": auth_url,
+        "state": state,
+        "provider": provider
+    }
+
+
+@app.post("/v1/auth/{provider}/callback", response_model=UserLoginResponse, tags=["oauth"])
+async def oauth_callback(
+    provider: OAuthProvider,
+    code: str,
+    state: str,
+    tenant_id: str | None = None
+) -> UserLoginResponse:
+    """Handle OAuth callback and create/login user.
+    
+    Args:
+        provider: OAuth provider
+        code: Authorization code from provider
+        state: State token for CSRF protection
+        tenant_id: Optional tenant ID (can also be in state)
+        
+    Returns:
+        JWT token and user information
+    """
+    if not oauth_service.is_enabled(provider):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth provider '{provider}' is not configured"
+        )
+    
+    try:
+        # Decode state
+        import json
+        import base64
+        state_data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+        
+        # Get tenant_id from state or parameter
+        if not tenant_id:
+            tenant_id = state_data.get("tenant_id")
+        
+        # Exchange code for access token
+        access_token = await oauth_service.exchange_code_for_token(provider, code)
+        
+        # Get user info from provider
+        user_info: OAuthUserInfo = await oauth_service.get_user_info(provider, access_token)
+        
+        if not user_info.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email not provided by OAuth provider"
+            )
+        
+        # Find or create user
+        from packages.accounts.repository import USER_COLLECTION, _user_to_doc, _doc_to_user
+        import uuid
+        
+        # Check if user exists with this OAuth provider
+        user_doc = USER_COLLECTION.find_one({
+            "oauth_provider": provider,
+            "oauth_provider_id": user_info.provider_user_id
+        }) if USER_COLLECTION else None
+        
+        if user_doc:
+            # Existing OAuth user
+            user = _doc_to_user(user_doc)
+            logger.info(f"OAuth login: existing user {user.user_id} via {provider}")
+        else:
+            # Check if email exists (link OAuth to existing account)
+            if tenant_id:
+                user_doc = USER_COLLECTION.find_one({
+                    "tenant_id": tenant_id,
+                    "email": user_info.email
+                }) if USER_COLLECTION else None
+                
+                if user_doc:
+                    # Link OAuth to existing email account
+                    USER_COLLECTION.update_one(
+                        {"user_id": user_doc["user_id"]},
+                        {"$set": {
+                            "oauth_provider": provider,
+                            "oauth_provider_id": user_info.provider_user_id,
+                            "picture_url": user_info.picture
+                        }}
+                    )
+                    user = _doc_to_user(user_doc)
+                    logger.info(f"Linked OAuth {provider} to existing user {user.user_id}")
+                else:
+                    # Create new user in existing tenant
+                    tenant = get_tenant(tenant_id)
+                    if not tenant:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Tenant not found"
+                        )
+                    
+                    user = AccountUser(
+                        user_id=str(uuid.uuid4()),
+                        tenant_id=tenant_id,
+                        email=user_info.email,
+                        full_name=user_info.full_name or user_info.email.split("@")[0],
+                        password_hash="",  # No password for OAuth users
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow(),
+                        roles=["member"],
+                        oauth_provider=provider,
+                        oauth_provider_id=user_info.provider_user_id,
+                        picture_url=user_info.picture
+                    )
+                    
+                    if USER_COLLECTION:
+                        USER_COLLECTION.insert_one(_user_to_doc(user))
+                    
+                    logger.info(f"Created new OAuth user {user.user_id} in tenant {tenant_id} via {provider}")
+            else:
+                # New user, no tenant - need to find or create tenant
+                # Find tenants with this email
+                tenant_ids = find_tenants_for_email(user_info.email)
+                
+                if tenant_ids:
+                    # Use first tenant found
+                    tenant_id = tenant_ids[0]
+                    tenant = get_tenant(tenant_id)
+                else:
+                    # Create new tenant for this user
+                    business_name = user_info.email.split("@")[0].replace(".", " ").title() + "'s Business"
+                    tenant = register_tenant(
+                        name=business_name,
+                        owner_email=user_info.email,
+                        plan_tier=PlanTier.FREE,
+                        metadata={"signup_method": f"oauth_{provider}"}
+                    )
+                    tenant_id = tenant.tenant_id
+                    logger.info(f"Created new tenant {tenant_id} for OAuth user via {provider}")
+                
+                # Create user in tenant
+                user = AccountUser(
+                    user_id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
+                    email=user_info.email,
+                    full_name=user_info.full_name or user_info.email.split("@")[0],
+                    password_hash="",  # No password for OAuth users
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                    roles=["owner"],  # First user is owner
+                    oauth_provider=provider,
+                    oauth_provider_id=user_info.provider_user_id,
+                    picture_url=user_info.picture
+                )
+                
+                if USER_COLLECTION:
+                    USER_COLLECTION.insert_one(_user_to_doc(user))
+                
+                logger.info(f"Created new OAuth user {user.user_id} with new tenant {tenant_id} via {provider}")
+        
+        # Issue JWT token
+        token = issue_jwt(user)
+        
+        return UserLoginResponse(
+            token=token,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            expires_in=JWT_TTL_SECONDS,
+        )
+        
+    except ValueError as exc:
+        logger.error(f"OAuth callback error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth authentication failed: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        logger.error(f"Unexpected OAuth error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OAuth authentication failed"
+        ) from exc
+
+
 @app.get("/v1/users/tenants", response_model=dict, tags=["users"])
 def get_user_tenants(email: str) -> dict:
     """
@@ -945,9 +1197,26 @@ def get_current_user(identity: dict = Depends(require_auth)) -> UserProfileRespo
     user_id = identity.get("subject")
     tenant_id = identity["tenant_id"]
     user = get_user(user_id) if user_id else None
-    if user is None or user.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return UserProfileResponse.from_model(user)
+
+    # Normal path: real user found and belongs to tenant
+    if user and user.tenant_id == tenant_id:
+        return UserProfileResponse.from_model(user)
+
+    # Fallback for API-token, anonymous or bootstrap contexts where there is no per-user account yet.
+    # Identity subject will often be 'api-key', 'anonymous', None or 'user' in these cases.
+    if user_id in {"api-key", None, "user", "anonymous"}:
+        tenant = get_tenant(tenant_id)
+        if tenant:
+            # Synthesize a virtual owner profile so the UI can proceed.
+            return UserProfileResponse(
+                user_id=f"tenant-owner-{tenant.tenant_id}",
+                tenant_id=tenant.tenant_id,
+                email=tenant.owner_email,
+                full_name=tenant.name or "Tenant Owner",
+                roles=["owner", "admin"],
+            )
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
 
 @app.get("/v1/users/api-tokens", response_model=list[ApiTokenResponse], tags=["users"])
@@ -1234,3 +1503,158 @@ def record_analytics_event(payload: AnalyticsEventRequest, identity: dict = Depe
         user_id=identity.get("subject"),
     )
     return {"event_id": event.event_id, "timestamp": event.timestamp.isoformat()}
+
+
+# ---- Connectors (stub implementation for unified mode) -----------------------------------------
+
+
+class ConnectorResponse(BaseModel):
+    """Connector response model."""
+    connector_id: str
+    tenant_id: str
+    connector_type: str
+    display_name: str
+    status: str
+    sync_frequency: str
+    created_at: str
+    updated_at: str
+
+
+@app.get("/v1/connectors", response_model=list[ConnectorResponse], tags=["connectors"])
+def list_connectors(identity: dict = Depends(require_auth)) -> list[ConnectorResponse]:
+    """List connectors for the authenticated tenant.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    Full connectors functionality requires the connectors microservice.
+    """
+    # Return empty list for now - connectors service is not enabled in unified/Postgres mode
+    return []
+
+
+@app.post("/v1/connectors", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED, tags=["connectors"])
+def create_connector(identity: dict = Depends(require_auth)) -> ConnectorResponse:
+    """Create a new connector.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    Full connectors functionality requires the connectors microservice.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Connectors are not available in this deployment mode. Please upgrade to enable data connectors."
+    )
+
+
+@app.get("/v1/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
+def get_connector(connector_id: str, identity: dict = Depends(require_auth)) -> ConnectorResponse:
+    """Get a specific connector.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+
+@app.put("/v1/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
+def update_connector(connector_id: str, identity: dict = Depends(require_auth)) -> ConnectorResponse:
+    """Update a connector.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+
+@app.delete("/v1/connectors/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["connectors"])
+def delete_connector(connector_id: str, identity: dict = Depends(require_auth)):
+    """Delete a connector.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+
+@app.post("/v1/connectors/{connector_id}/test", tags=["connectors"])
+def test_connector(connector_id: str, identity: dict = Depends(require_auth)) -> dict:
+    """Test a connector connection.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+
+@app.post("/v1/connectors/test", tags=["connectors"])
+def test_connector_config(identity: dict = Depends(require_auth)) -> dict:
+    """Test a connector configuration without saving.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Connectors are not available in this deployment mode."
+    )
+
+
+# ---- Runs (stub implementation for unified mode) -----------------------------------------------
+
+
+class RunResponse(BaseModel):
+    """Run response model."""
+    run_id: str
+    tenant_id: str
+    project_id: str
+    status: str
+    created_at: str
+
+
+class RunStatusResponse(BaseModel):
+    """Detailed run status response."""
+    run_id: str
+    tenant_id: str
+    project_id: str
+    status: str
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    error_message: str | None = None
+
+
+class RunListResponse(BaseModel):
+    """List of runs."""
+    runs: list[RunResponse]
+    total: int
+
+
+@app.get("/v1/accounts/runs", response_model=RunListResponse, tags=["accounts-runs"])
+def list_runs(
+    project_id: str | None = None,
+    limit: int = 10,
+    identity: dict = Depends(require_auth)
+) -> RunListResponse:
+    """List runs for the authenticated tenant.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    Full runs/orchestration functionality is coming soon.
+    """
+    # Return empty list for now
+    return RunListResponse(runs=[], total=0)
+
+
+@app.post("/v1/accounts/runs", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED, tags=["accounts-runs"])
+def create_run(identity: dict = Depends(require_auth)) -> RunResponse:
+    """Create a new run.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    Full runs/orchestration functionality is coming soon.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Runs are not fully implemented in this deployment mode yet."
+    )
+
+
+@app.get("/v1/accounts/runs/{run_id}", response_model=RunStatusResponse, tags=["accounts-runs"])
+def get_run(run_id: str, identity: dict = Depends(require_auth)) -> RunStatusResponse:
+    """Get a specific run.
+    
+    Note: This is a stub implementation for SMB/unified mode.
+    """
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+

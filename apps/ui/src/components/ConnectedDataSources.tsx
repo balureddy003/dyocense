@@ -3,21 +3,21 @@
  * Shows active tenant connectors and allows management
  */
 
-import React, { useState, useEffect } from "react";
 import {
-  Database,
-  CheckCircle2,
   AlertCircle,
-  Loader2,
-  RefreshCw,
-  Trash2,
-  Settings,
-  Plus,
+  CheckCircle2,
   Clock,
+  Database,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Settings,
+  Trash2,
   TrendingUp,
 } from "lucide-react";
-import { tenantConnectorStore, type TenantConnector, syncAllConnectors } from "../lib/tenantConnectors";
+import { useEffect, useState } from "react";
 import { getConnectorById } from "../lib/connectorMarketplace";
+import { syncAllConnectors, tenantConnectorStore, type TenantConnector } from "../lib/tenantConnectors";
 
 type ConnectedDataSourcesProps = {
   tenantId: string;
@@ -38,15 +38,21 @@ export function ConnectedDataSources({
     loadConnectors();
   }, [tenantId]);
 
-  const loadConnectors = () => {
-    const loaded = tenantConnectorStore.getAll(tenantId);
-    setConnectors(loaded);
+  const loadConnectors = async () => {
+    try {
+      const loaded = await tenantConnectorStore.getAll(tenantId);
+      // Defensive: ensure it's always an array
+      setConnectors(Array.isArray(loaded) ? loaded : []);
+    } catch (e) {
+      console.warn("Failed to load connectors", e);
+      setConnectors([]);
+    }
   };
 
   const handleSyncAll = async () => {
     setSyncing(true);
     setSyncResult(null);
-    
+
     try {
       const result = await syncAllConnectors(tenantId);
       setSyncResult(result);
@@ -161,21 +167,24 @@ function ConnectorRow({ connector, onDelete, onConfigure }: ConnectorRowProps) {
     inactive: AlertCircle,
     error: AlertCircle,
     syncing: Loader2,
-  }[connector.status];
+    testing: Loader2,
+  }[connector.status] || AlertCircle;
 
   const statusColor = {
     active: "text-green-600",
     inactive: "text-gray-400",
     error: "text-red-600",
     syncing: "text-blue-600",
-  }[connector.status];
+    testing: "text-blue-600",
+  }[connector.status] || "text-gray-400";
 
   const statusBgColor = {
     active: "bg-green-50",
     inactive: "bg-gray-50",
     error: "bg-red-50",
     syncing: "bg-blue-50",
-  }[connector.status];
+    testing: "bg-blue-50",
+  }[connector.status] || "bg-gray-50";
 
   return (
     <div className="px-6 py-4 hover:bg-gray-50 transition-colors">
@@ -191,13 +200,12 @@ function ConnectorRow({ connector, onDelete, onConfigure }: ConnectorRowProps) {
             <div className="flex items-center gap-2 mb-1">
               <h4 className="font-medium text-gray-900 truncate">{connector.displayName}</h4>
               <span
-                className={`text-xs px-2 py-0.5 rounded-full ${
-                  connector.status === "active"
-                    ? "bg-green-100 text-green-700"
-                    : connector.status === "error"
+                className={`text-xs px-2 py-0.5 rounded-full ${connector.status === "active"
+                  ? "bg-green-100 text-green-700"
+                  : connector.status === "error"
                     ? "bg-red-100 text-red-700"
                     : "bg-gray-100 text-gray-700"
-                }`}
+                  }`}
               >
                 {connector.status}
               </span>

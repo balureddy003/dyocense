@@ -22,6 +22,33 @@ _retry_writes = True
 _use_fallback_mode = False  # Feature flag to force in-memory mode
 
 
+def _mongo_disabled_by_env() -> bool:
+    """Determine if MongoDB should be disabled based on environment.
+
+    Rules:
+    - If PERSISTENCE_BACKEND is set to 'postgres' or 'in-memory' or 'unified' -> disable Mongo
+    - If USE_MONGODB is explicitly set to a falsy value -> disable Mongo
+    - If DEPLOYMENT_MODE is 'unified' or 'smb' and USE_MONGODB is not explicitly true -> disable Mongo
+    """
+    # Explicit override: if MONGO_URI is provided, always attempt a Mongo path.
+    # This lets tests or power users force the Mongo branch even in unified/postgres modes.
+    if os.getenv("MONGO_URI"):
+        return False
+    backend = os.getenv("PERSISTENCE_BACKEND", "").lower()
+    if backend in ("postgres", "postgre", "pg", "in-memory", "unified"):
+        return True
+
+    use_mongodb = os.getenv("USE_MONGODB")
+    if use_mongodb is not None and use_mongodb.lower() not in ("1", "true", "yes", "on"):
+        return True
+
+    deployment_mode = os.getenv("DEPLOYMENT_MODE", "").lower()
+    if deployment_mode in ("unified", "smb") and (use_mongodb is None or use_mongodb.lower() not in ("1", "true", "yes", "on")):
+        return True
+
+    return False
+
+
 class InMemoryCollection:
     """Fallback collection that mimics a subset of pymongo API."""
 
@@ -135,6 +162,13 @@ def _get_mongo_client():
     """
     global _mongo_client, _use_fallback_mode
     
+    # Respect environment to disable Mongo in SMB/unified mode
+    if _mongo_disabled_by_env():
+        if not _use_fallback_mode:
+            logger.info("MongoDB disabled by config (PERSISTENCE_BACKEND/USE_MONGODB/DEPLOYMENT_MODE); using in-memory fallback")
+        _use_fallback_mode = True
+        return None
+
     # Check feature flag to force in-memory mode
     if os.getenv("FORCE_INMEMORY_MODE", "false").lower() == "true":
         logger.info("FORCE_INMEMORY_MODE enabled; skipping MongoDB connection")

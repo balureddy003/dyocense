@@ -3,17 +3,17 @@
  * Guides users through connector setup conversationally
  */
 
-import React, { useState } from "react";
 import {
-  X,
-  CheckCircle2,
   AlertCircle,
-  Loader2,
+  CheckCircle2,
   ExternalLink,
-  Shield,
   Key,
   Link as LinkIcon,
+  Loader2,
+  Shield,
+  X,
 } from "lucide-react";
+import React, { useState } from "react";
 import type { ConnectorConfig, ConnectorField } from "../lib/connectorMarketplace";
 import { tenantConnectorStore } from "../lib/tenantConnectors";
 
@@ -108,7 +108,7 @@ export function ChatConnectorSetup({
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Save connector to tenant
-      const savedConnector = tenantConnectorStore.add({
+      const savedConnector = await tenantConnectorStore.add({
         tenantId,
         connectorId: connector.id,
         connectorName: connector.name,
@@ -240,7 +240,7 @@ export function ChatConnectorSetup({
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
               >
                 {currentStep === "field_collection" &&
-                currentFieldIndex === connector.fields.length - 1
+                  currentFieldIndex === connector.fields.length - 1
                   ? "Connect"
                   : "Continue"}
               </button>
@@ -261,9 +261,8 @@ type ChatMessageProps = {
 function ChatMessage({ type, content, icon }: ChatMessageProps) {
   return (
     <div
-      className={`flex gap-3 ${
-        type === "user" ? "justify-end" : "justify-start"
-      }`}
+      className={`flex gap-3 ${type === "user" ? "justify-end" : "justify-start"
+        }`}
     >
       {type !== "user" && (
         <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -274,13 +273,12 @@ function ChatMessage({ type, content, icon }: ChatMessageProps) {
         </div>
       )}
       <div
-        className={`rounded-lg px-4 py-3 max-w-[80%] ${
-          type === "user"
+        className={`rounded-lg px-4 py-3 max-w-[80%] ${type === "user"
             ? "bg-blue-600 text-white"
             : type === "system"
-            ? "bg-gray-100 text-gray-700 border border-gray-200"
-            : "bg-gray-50 text-gray-800"
-        }`}
+              ? "bg-gray-100 text-gray-700 border border-gray-200"
+              : "bg-gray-50 text-gray-800"
+          }`}
       >
         <div className="text-sm">{content}</div>
       </div>

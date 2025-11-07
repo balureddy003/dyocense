@@ -1,16 +1,16 @@
+import { Check, CheckCircle2, Copy, Headset, Mail, Shield } from "lucide-react";
 import { useEffect, useState } from "react";
-import { CheckCircle2, Headset, Mail, Shield, Copy, Check } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { BrandedHeader } from "../components/BrandedHeader";
 import { BrandedFooter } from "../components/BrandedFooter";
+import { BrandedHeader } from "../components/BrandedHeader";
+import { useAuth } from "../context/AuthContext";
 import {
-  listPlans,
-  registerTenant,
   getOnboardingDetails,
+  listPlans,
+  OnboardingDetails,
+  registerTenant,
   SubscriptionPlan,
   TenantRegistrationPayload,
-  OnboardingDetails,
 } from "../lib/api";
 import { setAuthToken } from "../lib/config";
 
@@ -37,7 +37,7 @@ type Step = "plans" | "details" | "success";
 
 export const PurchasePage = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loginWithToken } = useAuth();
   const [searchParams] = useSearchParams();
   const [step, setStep] = useState<Step>("plans");
   const [plans, setPlans] = useState<SubscriptionPlan[]>(FALLBACK_PLANS);
@@ -58,13 +58,13 @@ export const PurchasePage = () => {
       setSelectedTier("free");
       setStep("details");
     }
-    
-    listPlans(FALLBACK_PLANS)
+
+    listPlans()
       .then((data) => {
         if (data.length) setPlans(data);
       })
       .catch((err) => {
-        console.warn("Failed to load plans", err);
+        console.warn("Failed to load plans, using fallback", err);
       });
   }, [searchParams]);
 
@@ -94,7 +94,7 @@ export const PurchasePage = () => {
       };
 
       const registrationResponse = await registerTenant(payload);
-      
+
       // Check if tenant already exists
       if (registrationResponse.already_exists) {
         // Show a friendly message - they already registered this organization
@@ -106,14 +106,24 @@ export const PurchasePage = () => {
         setLoading(false);
         return;
       }
-      
+
       // Store the API token so subsequent calls are authenticated
       setAuthToken(registrationResponse.api_token);
 
       // Fetch onboarding details (now authenticated with the token)
       const details = await getOnboardingDetails();
       setOnboarding(details);
-      setStep("success");
+
+      // Auto-login the user with the token
+      await loginWithToken({
+        apiToken: registrationResponse.api_token,
+        tenantId: registrationResponse.tenant_id,
+        email: formData.email,
+        remember: true,
+      });
+
+      // Redirect directly to home page
+      navigate("/home", { replace: true });
     } catch (err: any) {
       console.error("Registration failed:", err);
       setError(err?.message || "Registration failed. Please try again.");
@@ -131,7 +141,7 @@ export const PurchasePage = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 to-white">
       <BrandedHeader showNav={false} />
-      
+
       <div className="flex-1 max-w-3xl mx-auto px-6 py-12">
         {/* Header */}
         <div className="text-center mb-12">
@@ -307,7 +317,7 @@ export const PurchasePage = () => {
           </div>
         </div>
       </div>
-      
+
       <BrandedFooter />
     </div>
   );

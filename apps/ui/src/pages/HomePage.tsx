@@ -1,26 +1,24 @@
 import { useEffect, useState } from "react";
-import { TopNav } from "../components/TopNav";
-import { Header } from "../components/Header";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AgentAssistant } from "../components/AgentAssistant";
+import { BusinessMetrics } from "../components/BusinessMetrics";
+import { CollapsiblePanel } from "../components/CollapsiblePanel";
+import { CreatePlaybook } from "../components/CreatePlaybook";
 import { ExecutionPanel } from "../components/ExecutionPanel";
 import { MetricsPanel } from "../components/MetricsPanel";
-import { CreatePlaybook } from "../components/CreatePlaybook";
-import { TrialBanner } from "../components/TrialBanner";
-import { WelcomeModal } from "../components/WelcomeModal";
-import { RecommendedPlaybooks } from "../components/RecommendedPlaybooks";
-import { PlaybookResultsPage } from "./PlaybookResultsPage";
-import { GettingStartedGuide } from "../components/GettingStartedGuide";
-import { CollapsiblePanel } from "../components/CollapsiblePanel";
-import { PlanSelector, SavedPlan } from "../components/PlanSelector";
 import { PlanNameModal } from "../components/PlanNameModal";
+import { PlanSelector, SavedPlan } from "../components/PlanSelector";
 import { PlanVersionsSidebar } from "../components/PlanVersionsSidebar";
+import { RecommendedPlaybooks } from "../components/RecommendedPlaybooks";
+import { TopNav } from "../components/TopNav";
+import { TrialBanner } from "../components/TrialBanner";
 import { VersionComparisonModal } from "../components/VersionComparisonModal";
-import { CreatePlaybookPayload, usePlaybook } from "../hooks/usePlaybook";
-import { useAccount } from "../hooks/useAccount";
 import { useAuth } from "../context/AuthContext";
-import { BusinessMetrics } from "../components/BusinessMetrics";
+import { useAccount } from "../hooks/useAccount";
+import { CreatePlaybookPayload, usePlaybook } from "../hooks/usePlaybook";
+import { clearActivePlan, deletePlan, getActivePlanId, getSavedPlans, savePlan, setActivePlanId } from "../lib/planPersistence";
 import { tenantConnectorStore } from "../lib/tenantConnectors";
-import { getSavedPlans, savePlan, deletePlan, getActivePlanId, setActivePlanId, clearActivePlan } from "../lib/planPersistence";
+import { PlaybookResultsPage } from "./PlaybookResultsPage";
 
 type PlanOverview = {
   title: string;
@@ -42,6 +40,9 @@ type PlanOverview = {
 };
 
 export const HomePage = () => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
   // Current project context (tenant -> project -> plan hierarchy)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const { playbook, runs, selectedRunId, loading, error, selectRun, createPlaybook } = usePlaybook(currentProjectId);
@@ -50,8 +51,6 @@ export const HomePage = () => {
   const [lastCreatedPayload, setLastCreatedPayload] = useState<CreatePlaybookPayload | null>(null);
   const { profile, projects, createProject } = useAccount();
   const { user } = useAuth();
-  const [showWelcome, setShowWelcome] = useState(false);
-  const [showGettingStarted, setShowGettingStarted] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(undefined);
   const [generatedPlan, setGeneratedPlan] = useState<PlanOverview | null>(null);
   const [hasConnectors, setHasConnectors] = useState(false);
@@ -67,10 +66,27 @@ export const HomePage = () => {
   const [unsavedPlanName, setUnsavedPlanName] = useState<string | undefined>(undefined);
   // Signal to reinitialize assistant and left panel for a fresh new plan flow
   const [newPlanSignal, setNewPlanSignal] = useState(0);
+  // Seed goal passed from PlanSelector quick-start
+  const [seedGoal, setSeedGoal] = useState<string | null>(null);
   // Version comparison state
   const [showVersionComparison, setShowVersionComparison] = useState(false);
   const [previousPlanVersion, setPreviousPlanVersion] = useState<SavedPlan | null>(null);
   const [newPlanVersion, setNewPlanVersion] = useState<SavedPlan | null>(null);
+
+  // Welcome modal removed - users get direct access after login
+  // No need for additional welcome screens that interrupt workflow
+
+  // Handle mode from URL parameter
+  useEffect(() => {
+    const modeParam = searchParams.get("mode");
+    if (modeParam === "agent") {
+      setMode("agent");
+      setForceAgentMode(true);
+    } else if (modeParam === "connectors") {
+      // Open connectors view - you can add this mode or navigate to settings
+      setMode("agent");
+    }
+  }, [searchParams]);
 
   // (moved up) currentProjectId state declared above to pass into usePlaybook
 
@@ -98,7 +114,7 @@ export const HomePage = () => {
     if (profile?.tenant_id) {
       const plans = getSavedPlans(profile.tenant_id, currentProjectId);
       setSavedPlans(plans);
-      
+
       // Check for active plan
       const activePlanId = getActivePlanId(profile.tenant_id, currentProjectId);
       if (activePlanId) {
@@ -107,16 +123,13 @@ export const HomePage = () => {
           setCurrentPlanId(activePlanId);
           setGeneratedPlan(activePlan);
           setMode("agent");
-          setShowGettingStarted(false);
         } else {
           // Active plan not found, show selector
           setMode(plans.length > 0 ? "plan-selector" : "agent");
-          setShowGettingStarted(plans.length === 0);
         }
       } else {
         // No active plan, show selector if plans exist
         setMode(plans.length > 0 ? "plan-selector" : "agent");
-        setShowGettingStarted(plans.length === 0);
       }
     }
   }, [profile?.tenant_id, currentProjectId]);
@@ -136,30 +149,7 @@ export const HomePage = () => {
     }
   }, [profile?.tenant_id]);
 
-  // Check if user has seen the welcome modal
-  useEffect(() => {
-    if (user?.id && profile) {
-      const hasSeenWelcome = localStorage.getItem(`dyocense-welcome-${user.id}`);
-      if (!hasSeenWelcome) {
-        setShowWelcome(true);
-      }
-    }
-  }, [user?.id, profile]);
-
-  // Check if user has created any playbooks
-  useEffect(() => {
-    if (runs.length > 0 || projects.length > 1 || generatedPlan || savedPlans.length > 0) {
-      setShowGettingStarted(false);
-    }
-  }, [runs.length, projects.length, generatedPlan, savedPlans.length]);
-
-  const handleCloseWelcome = () => {
-    if (user?.id) {
-      localStorage.setItem(`dyocense-welcome-${user.id}`, "true");
-    }
-    setShowWelcome(false);
-  };
-
+  // Handler functions for playbook creation and management
   const handleCreate = async (payload: CreatePlaybookPayload) => {
     setLastCreatedPayload(payload);
     await createPlaybook(payload);
@@ -195,12 +185,12 @@ export const HomePage = () => {
           createdAt: existingPlan.createdAt,
           updatedAt: new Date().toISOString(),
         };
-        
+
         // Store both versions for comparison
         setPreviousPlanVersion(existingPlan);
         setNewPlanVersion(updatedPlan);
         setShowVersionComparison(true);
-        
+
         // Don't auto-save yet - let user decide via comparison modal
         return;
       }
@@ -224,10 +214,10 @@ export const HomePage = () => {
 
   const handleSavePlanName = (userProvidedName: string) => {
     if (!pendingPlan || !profile?.tenant_id) return;
-    
+
     // Get existing plan if updating
     const existingPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
-    
+
     const savedPlan: SavedPlan = {
       id: currentPlanId || `plan-${Date.now()}`,
       projectId: currentProjectId || undefined,
@@ -237,7 +227,7 @@ export const HomePage = () => {
       createdAt: existingPlan?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    
+
     savePlan(profile.tenant_id, savedPlan, currentProjectId);
     setActivePlanId(profile.tenant_id, savedPlan.id, currentProjectId);
     setCurrentPlanId(savedPlan.id);
@@ -245,12 +235,12 @@ export const HomePage = () => {
     try {
       localStorage.removeItem(`dyocense-skip-name-${profile.tenant_id}-${savedPlan.id}`);
       sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
-    } catch {}
-    
+    } catch { }
+
     // Refresh saved plans list
-  const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+    const plans = getSavedPlans(profile.tenant_id, currentProjectId);
     setSavedPlans(plans);
-    
+
     setPendingPlan(null);
     // Clear any unsaved header override once saved
     setUnsavedPlanName(undefined);
@@ -258,10 +248,10 @@ export const HomePage = () => {
 
   const handleSkipPlanName = () => {
     if (!pendingPlan || !profile?.tenant_id) return;
-    
+
     // Save without user-provided name
     const existingPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
-    
+
     const savedPlan: SavedPlan = {
       id: currentPlanId || `plan-${Date.now()}`,
       projectId: currentProjectId || undefined,
@@ -270,7 +260,7 @@ export const HomePage = () => {
       createdAt: existingPlan?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    
+
     savePlan(profile.tenant_id, savedPlan, currentProjectId);
     setActivePlanId(profile.tenant_id, savedPlan.id, currentProjectId);
     setCurrentPlanId(savedPlan.id);
@@ -278,12 +268,12 @@ export const HomePage = () => {
     try {
       localStorage.setItem(`dyocense-skip-name-${profile.tenant_id}-${savedPlan.id}`, "true");
       sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
-    } catch {}
-    
+    } catch { }
+
     // Refresh saved plans list
-  const plans = getSavedPlans(profile.tenant_id, currentProjectId);
+    const plans = getSavedPlans(profile.tenant_id, currentProjectId);
     setSavedPlans(plans);
-    
+
     setPendingPlan(null);
     // Clear any unsaved header override once saved
     setUnsavedPlanName(undefined);
@@ -318,17 +308,17 @@ export const HomePage = () => {
 
   const handleKeepNewVersion = () => {
     if (!newPlanVersion || !profile?.tenant_id) return;
-    
+
     savePlan(profile.tenant_id, newPlanVersion, currentProjectId);
     setActivePlanId(profile.tenant_id, newPlanVersion.id, currentProjectId);
-    
+
     // Refresh saved plans list
     const plans = getSavedPlans(profile.tenant_id, currentProjectId);
     setSavedPlans(plans);
-    
+
     // Update local state
     setGeneratedPlan(newPlanVersion);
-    
+
     // Close modal
     setShowVersionComparison(false);
     setPreviousPlanVersion(null);
@@ -337,10 +327,10 @@ export const HomePage = () => {
 
   const handleReturnToPreviousVersion = () => {
     if (!previousPlanVersion) return;
-    
+
     // Revert to previous version
     setGeneratedPlan(previousPlanVersion);
-    
+
     // Close modal
     setShowVersionComparison(false);
     setPreviousPlanVersion(null);
@@ -403,7 +393,6 @@ export const HomePage = () => {
   const handleCreateNewPlan = () => {
     setGeneratedPlan(null);
     setCurrentPlanId(null);
-    setShowGettingStarted(false);
     setForceAgentMode(true);
     setUnsavedPlanName(undefined);
     if (profile?.tenant_id) {
@@ -411,12 +400,12 @@ export const HomePage = () => {
       // Clear any pending name-modal suppression for a fresh plan flow
       try {
         sessionStorage.removeItem(`dyocense-skip-name-pending-${profile.tenant_id}`);
-      } catch {}
+      } catch { }
     }
     setMode("agent");
     // Kick off assistant reset and ensure left panel re-mounts expanded
     setNewPlanSignal((s) => s + 1);
-    
+
     // Reset the page to ensure clean state
     setTimeout(() => {
       window.scrollTo(0, 0);
@@ -428,7 +417,7 @@ export const HomePage = () => {
       deletePlan(profile.tenant_id, planId, currentProjectId);
       const plans = getSavedPlans(profile.tenant_id, currentProjectId);
       setSavedPlans(plans);
-      
+
       // If deleting current plan, clear it
       if (planId === currentPlanId) {
         setGeneratedPlan(null);
@@ -449,7 +438,7 @@ export const HomePage = () => {
   if (mode === "plan-selector") {
     return (
       <>
-        <TopNav 
+        <TopNav
           projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
           currentProjectId={currentProjectId}
           onProjectChange={(id) => {
@@ -475,6 +464,12 @@ export const HomePage = () => {
           onSelectPlan={handleSelectPlan}
           onCreateNew={handleCreateNewPlan}
           onDeletePlan={handleDeletePlan}
+          currentProjectName={projects.find(p => p.project_id === currentProjectId)?.name}
+          tenantName={profile?.name}
+          onStartWithGoal={(goal) => {
+            setSeedGoal(goal);
+            handleCreateNewPlan();
+          }}
         />
       </>
     );
@@ -496,7 +491,7 @@ export const HomePage = () => {
   if (mode === "create") {
     return (
       <div className="min-h-screen flex flex-col bg-bg text-gray-900">
-        <TopNav 
+        <TopNav
           projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
           currentProjectId={currentProjectId}
           onProjectChange={(id) => {
@@ -517,12 +512,7 @@ export const HomePage = () => {
             }
           }}
         />
-        <WelcomeModal
-          open={showWelcome}
-          onClose={handleCloseWelcome}
-          companyName={profile?.name}
-        />
-        
+
         {/* Trial Banner - only if in trial */}
         {profile && profile.status === "trial" && (
           <div className="max-w-6xl mx-auto w-full px-6 pt-4">
@@ -535,26 +525,24 @@ export const HomePage = () => {
         )}
 
         {/* Business Metrics - simplified header */}
-        {!showGettingStarted && (
-          <div className="max-w-6xl mx-auto w-full px-6 pt-6">
-            <BusinessMetrics />
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-sm text-gray-600">Plan smarter in 3 steps: Describe your goal → Generate plan → Review & refine.</div>
-              <button
-                onClick={() => {
-                  const createSection = document.querySelector('[data-create-playbook]');
-                  createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
-                className="inline-flex items-center gap-2 rounded-lg border border-primary px-3 py-2 text-primary font-medium hover:bg-blue-50"
-              >
-                Start a plan
-              </button>
-            </div>
+        <div className="max-w-6xl mx-auto w-full px-6 pt-6">
+          <BusinessMetrics />
+          <div className="mt-4 flex items-center justify-between">
+            <div className="text-sm text-gray-600">Plan smarter in 3 steps: Describe your goal → Generate plan → Review & refine.</div>
+            <button
+              onClick={() => {
+                const createSection = document.querySelector('[data-create-playbook]');
+                createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-primary px-3 py-2 text-primary font-medium hover:bg-blue-50"
+            >
+              Start a plan
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Recommended Templates */}
-        {!showGettingStarted && profile && (
+        {profile && (
           <RecommendedPlaybooks
             onSelectPlaybook={(templateId) => {
               setSelectedTemplateId(templateId);
@@ -580,16 +568,16 @@ export const HomePage = () => {
 
   // Agent-driven 3-panel view
   const currentPlan = currentPlanId ? savedPlans.find(p => p.id === currentPlanId) : null;
-  
+
   return (
     <div className="min-h-screen flex flex-col bg-bg text-gray-900">
       {/* Unified Two-Level Header like Trip.com */}
-      <TopNav 
-        showPlanControls={!showGettingStarted || forceAgentMode}
+      <TopNav
+        showPlanControls={true}
         planName={
           unsavedPlanName
-            || (currentPlan ? (currentPlan.userProvidedName || currentPlan.title || "Untitled Plan")
-                : (generatedPlan?.title || "AI Business Planner"))
+          || (currentPlan ? (currentPlan.userProvidedName || currentPlan.title || "Untitled Plan")
+            : (generatedPlan?.title || "AI Business Planner"))
         }
         planVersion={currentPlan?.version}
         planDraftKey={`dyocense-draft-planname-${profile?.tenant_id || 'anon'}-${currentPlanId || 'new'}`}
@@ -621,26 +609,21 @@ export const HomePage = () => {
         }}
         dataStatusPosition="left"
         steps={{
-          preferences: !!(profile?.tenant_id && typeof window !== 'undefined' && localStorage.getItem(`dyocense-prefs-set-${profile.tenant_id}`) === 'true'),
-          data: !!(currentPlan?.dataSources?.length || hasConnectors),
+          goal: !!(generatedPlan || currentPlanId),
           generate: !!generatedPlan,
-          name: !!(currentPlan?.userProvidedName),
+          refine: !!(currentPlan?.version && currentPlan.version > 1),
+          save: !!(currentPlan?.userProvidedName),
         }}
       />
-      
-      <WelcomeModal
-        open={showWelcome}
-        onClose={handleCloseWelcome}
-        companyName={profile?.name}
-      />
+
       <PlanNameModal
         open={showPlanNameModal}
         onClose={() => {
           // If we're in a new unsaved plan flow and the user closes the modal, suppress for this session
           if (!currentPlanId && profile?.tenant_id) {
             try {
-              sessionStorage.setItem(`dyocense-skip-name-pending-${profile.tenant_id}` , "true");
-            } catch {}
+              sessionStorage.setItem(`dyocense-skip-name-pending-${profile.tenant_id}`, "true");
+            } catch { }
           }
           setShowPlanNameModal(false);
         }}
@@ -649,7 +632,7 @@ export const HomePage = () => {
         currentName={currentPlanId ? savedPlans.find(p => p.id === currentPlanId)?.userProvidedName : undefined}
         aiGeneratedTitle={pendingPlan?.title}
       />
-      
+
       {/* Version Comparison Modal */}
       {previousPlanVersion && newPlanVersion && (
         <VersionComparisonModal
@@ -666,7 +649,7 @@ export const HomePage = () => {
           changes={calculateChanges()}
         />
       )}
-      
+
       {profile && profile.status === "trial" && (
         <div className="px-6 pt-4">
           <TrialBanner
@@ -676,96 +659,76 @@ export const HomePage = () => {
           />
         </div>
       )}
-      
-      {/* Show Getting Started Guide for new users */}
-      {showGettingStarted && !forceAgentMode ? (
-        <GettingStartedGuide
-          hasConnectors={hasConnectors}
-            onConnectData={() => {
-              // This will be handled by AgentAssistant when we show it
-              setForceAgentMode(true);
-              // Wait for render then trigger connector mode
-              setTimeout(() => {
-                const connectorsBtn = document.querySelector('[data-connectors-button]') as HTMLButtonElement;
-                connectorsBtn?.click();
-              }, 100);
-            }}
-            onStartChat={() => {
-              setForceAgentMode(true);
-              setShowGettingStarted(false);
-            }}
-          />
-      ) : (
-        <>
-          {/* Versions Sidebar */}
-          <PlanVersionsSidebar
-            open={showVersionsSidebar}
-            onClose={() => setShowVersionsSidebar(false)}
-            plans={savedPlans}
-            currentPlanId={currentPlanId}
-            onSelectPlan={handleSelectPlan}
-            onCreateNew={handleCreateNewPlan}
-            projectName={projects.find(p => p.project_id === currentProjectId)?.name}
-          />
 
-          {/* 3-Panel Layout with Collapsible Panels */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Left: AI Agent Assistant */}
-            <CollapsiblePanel
-              key={`left-${currentPlanId || 'new'}-${newPlanSignal}`}
-              position="left"
-              title="AI Assistant"
-              defaultWidth="400px"
-              minWidth="320px"
-              maxWidth="600px"
-              collapsible={true}
-              resizable={true}
-              defaultCollapsed={false}
-              showFullscreenButton={true}
-              onCollapseChange={setLeftPanelCollapsed}
-            >
-              <AgentAssistant 
-                key={`${currentPlanId || 'new-plan'}-${newPlanSignal}`} 
-                onPlanGenerated={handlePlanGenerated} 
-                profile={profile}
-                startNewPlanSignal={newPlanSignal}
-              />
-            </CollapsiblePanel>
-            
-            {/* Middle: Execution Playbook (fills remaining space) */}
-            <CollapsiblePanel
-              position="center"
-              title="Execution Plan"
-              collapsible={false}
-              resizable={false}
-              showFullscreenButton={true}
-            >
-              <ExecutionPanel
-                stages={generatedPlan?.stages || []}
-                title={generatedPlan ? "Execution Plan" : "Your Plan"}
-                estimatedDuration={generatedPlan?.estimatedDuration}
-                hideHeader={true}
-              />
-            </CollapsiblePanel>
-            
-            {/* Right: KPIs & Evidence */}
-            <CollapsiblePanel
-              position="right"
-              title="Metrics"
-              defaultWidth="380px"
-              minWidth="300px"
-              maxWidth="500px"
-              collapsible={true}
-              resizable={true}
-              defaultCollapsed={false}
-              showFullscreenButton={true}
-              onCollapseChange={setRightPanelCollapsed}
-            >
-              <MetricsPanel quickWins={generatedPlan?.quickWins} />
-            </CollapsiblePanel>
-          </div>
-        </>
-      )}
+      {/* Versions Sidebar */}
+      <PlanVersionsSidebar
+        open={showVersionsSidebar}
+        onClose={() => setShowVersionsSidebar(false)}
+        plans={savedPlans}
+        currentPlanId={currentPlanId}
+        onSelectPlan={handleSelectPlan}
+        onCreateNew={handleCreateNewPlan}
+        projectName={projects.find(p => p.project_id === currentProjectId)?.name}
+      />
+
+      {/* 3-Panel Layout with Collapsible Panels */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: AI Agent Assistant */}
+        <CollapsiblePanel
+          key={`left-${currentPlanId || 'new'}-${newPlanSignal}`}
+          position="left"
+          title="AI Assistant"
+          defaultWidth="400px"
+          minWidth="320px"
+          maxWidth="600px"
+          collapsible={true}
+          resizable={true}
+          defaultCollapsed={false}
+          showFullscreenButton={true}
+          onCollapseChange={setLeftPanelCollapsed}
+        >
+          {/* AI Agent Assistant */}
+          <AgentAssistant
+            key={`${currentPlanId || 'new-plan'}-${newPlanSignal}`}
+            onPlanGenerated={handlePlanGenerated}
+            profile={profile}
+            seedGoal={seedGoal || undefined}
+            startNewPlanSignal={newPlanSignal}
+          />
+        </CollapsiblePanel>
+
+        {/* Middle: Execution Playbook (fills remaining space) */}
+        <CollapsiblePanel
+          position="center"
+          title="Execution Plan"
+          collapsible={false}
+          resizable={false}
+          showFullscreenButton={true}
+        >
+          <ExecutionPanel
+            stages={generatedPlan?.stages || []}
+            title={generatedPlan ? "Execution Plan" : "Your Plan"}
+            estimatedDuration={generatedPlan?.estimatedDuration}
+            hideHeader={true}
+          />
+        </CollapsiblePanel>
+
+        {/* Right: KPIs & Evidence */}
+        <CollapsiblePanel
+          position="right"
+          title="Metrics"
+          defaultWidth="380px"
+          minWidth="300px"
+          maxWidth="500px"
+          collapsible={true}
+          resizable={true}
+          defaultCollapsed={false}
+          showFullscreenButton={true}
+          onCollapseChange={setRightPanelCollapsed}
+        >
+          <MetricsPanel quickWins={generatedPlan?.quickWins} />
+        </CollapsiblePanel>
+      </div>
     </div>
   );
 };

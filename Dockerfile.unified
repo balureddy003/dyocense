@@ -1,0 +1,134 @@
+# =====================================================================
+# Multi-stage Dockerfile for Dyocense Kernel (SMB-Optimized)
+# =====================================================================
+# Purpose: Single-process container with all services
+# Size: ~500MB (optimized with multi-stage build)
+# Deployment: Supports Railway, Render, Fly.io, or any container platform
+# =====================================================================
+
+# Stage 1: Build stage with all dependencies
+FROM python:3.11-slim as builder
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements
+WORKDIR /app
+COPY requirements-dev.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements-dev.txt
+
+# Install additional dependencies for SMB deployment
+RUN pip install --no-cache-dir \
+    psycopg2-binary \
+    fastapi \
+    uvicorn[standard] \
+    python-multipart \
+    pydantic \
+    pydantic-settings \
+    httpx \
+    aiofiles
+
+# =====================================================================
+# Stage 2: Runtime stage (minimal)
+# =====================================================================
+FROM python:3.11-slim
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create app user (security best practice)
+RUN useradd -m -u 1000 dyocense && \
+    mkdir -p /app/data /app/logs && \
+    chown -R dyocense:dyocense /app
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=dyocense:dyocense packages/ ./packages/
+COPY --chown=dyocense:dyocense services/ ./services/
+COPY --chown=dyocense:dyocense examples/ ./examples/
+COPY --chown=dyocense:dyocense infra/ ./infra/
+
+# Add packages to Python path
+ENV PYTHONPATH="/app/packages:${PYTHONPATH}"
+
+# Switch to non-root user
+USER dyocense
+
+# Expose port
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8001/healthz || exit 1
+
+# Default command (can be overridden)
+CMD ["python", "-m", "uvicorn", "services.kernel.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8001", \
+     "--workers", "2", \
+     "--log-level", "info"]
+
+# =====================================================================
+# Build & Run Instructions
+# =====================================================================
+#
+# Build:
+#   docker build -f Dockerfile.unified -t dyocense-kernel:smb .
+#
+# Run:
+#   docker run -d \
+#     -p 8001:8001 \
+#     -e DEPLOYMENT_MODE=unified \
+#     -e PERSISTENCE_BACKEND=postgres \
+#     -e POSTGRES_HOST=host.docker.internal \
+#     -e POSTGRES_PASSWORD=your_password \
+#     dyocense-kernel:smb
+#
+# Run with environment file:
+#   docker run -d -p 8001:8001 --env-file .env dyocense-kernel:smb
+#
+# Development mode (with hot reload):
+#   docker run -d \
+#     -p 8001:8001 \
+#     -v $(pwd):/app \
+#     -e RELOAD=true \
+#     dyocense-kernel:smb
+#
+# =====================================================================
+# Deployment Platforms
+# =====================================================================
+#
+# Railway:
+#   railway up
+#
+# Render:
+#   Create Web Service, select Docker, deploy
+#
+# Fly.io:
+#   fly deploy
+#
+# Docker Compose:
+#   docker-compose -f docker-compose.smb.yml up -d
+#
+# =====================================================================

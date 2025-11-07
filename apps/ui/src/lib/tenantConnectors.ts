@@ -3,7 +3,6 @@
  * Stores configured connectors at tenant level for reuse across chat sessions
  */
 
-import type { ConnectorConfig } from "./connectorMarketplace";
 
 export type TenantConnector = {
   id: string;
@@ -46,19 +45,24 @@ export type ConnectorDataContext = {
  * Replace localStorage with real backend API calls
  */
 import type { Connector } from "./api";
-import { listConnectors, createConnector, deleteConnector, getConnector } from "./api";
+import { createConnector, deleteConnector, getConnector, listConnectors } from "./api";
 
 class TenantConnectorStore {
   // Cache for performance (optional)
   private cache: Map<string, Connector[]> = new Map();
   private cacheTimeout = 60000; // 1 minute
   private cacheTimestamps: Map<string, number> = new Map();
+  // When true, operate purely via localStorage and avoid backend calls
+  private localMode = false;
 
   /**
    * Get all connectors for a tenant from the backend API
    */
   async getAll(tenantId: string): Promise<TenantConnector[]> {
     try {
+      if (this.localMode) {
+        return this._getFromLocalStorage(tenantId);
+      }
       // Check cache first
       const cached = this.cache.get(tenantId);
       const cacheTime = this.cacheTimestamps.get(tenantId);
@@ -68,15 +72,16 @@ class TenantConnectorStore {
 
       // Fetch from API
       const connectors = await listConnectors();
-      
+
       // Update cache
       this.cache.set(tenantId, connectors);
       this.cacheTimestamps.set(tenantId, Date.now());
-      
+
       return this._convertToLegacyFormat(connectors);
     } catch (error) {
       console.error("Failed to fetch connectors:", error);
-      
+      // Switch to local-only mode after first backend failure
+      this.localMode = true;
       // Fallback to localStorage for offline support
       return this._getFromLocalStorage(tenantId);
     }
@@ -87,10 +92,22 @@ class TenantConnectorStore {
    */
   async getById(id: string): Promise<TenantConnector | null> {
     try {
+      // If we've determined backend connectors are disabled, or this is a locally-generated id, read from localStorage directly
+      if (this.localMode || id.startsWith("connector-")) {
+        const fromLocal = this._getFromLocalStorageAny(id);
+        if (fromLocal) return fromLocal;
+        // If not found locally and not in local mode, fall through to backend attempt
+        if (this.localMode) return null;
+      }
       const connector = await getConnector(id);
       return this._convertSingleToLegacyFormat(connector);
     } catch (error) {
-      console.error("Failed to fetch connector:", error);
+      console.warn("Backend connector API not available, checking localStorage:", error);
+
+      // Fallback to localStorage
+      this.localMode = true;
+      const fromLocal = this._getFromLocalStorageAny(id);
+      if (fromLocal) return fromLocal;
       return null;
     }
   }
@@ -100,20 +117,27 @@ class TenantConnectorStore {
    */
   async add(connector: Omit<TenantConnector, "id" | "createdAt" | "updatedAt">): Promise<TenantConnector> {
     try {
+      if (this.localMode) {
+        return this._addToLocalStorage(connector);
+      }
       const created = await createConnector({
         connector_type: connector.connectorId,
         display_name: connector.displayName,
         config: connector.config,
         sync_frequency: connector.syncFrequency,
       });
-      
+
       // Clear cache
       this.cache.delete(connector.tenantId);
-      
+      // Ensure we keep using backend
+      this.localMode = false;
+
       return this._convertSingleToLegacyFormat(created);
     } catch (error) {
-      console.error("Failed to create connector:", error);
-      throw error;
+      console.warn("Backend connector API not available, falling back to localStorage:", error);
+      // Switch permanently to local-only mode for this session
+      this.localMode = true;
+      return this._addToLocalStorage(connector);
     }
   }
 
@@ -122,15 +146,20 @@ class TenantConnectorStore {
    */
   async delete(id: string): Promise<boolean> {
     try {
+      if (this.localMode || id.startsWith("connector-")) {
+        return this._deleteFromLocalStorage(id);
+      }
       await deleteConnector(id);
-      
+
       // Clear cache
       this.cache.clear();
-      
+
       return true;
     } catch (error) {
-      console.error("Failed to delete connector:", error);
-      return false;
+      console.warn("Backend connector API not available, deleting from localStorage:", error);
+      this.localMode = true;
+      // Fallback: delete from localStorage
+      return this._deleteFromLocalStorage(id);
     }
   }
 
@@ -139,7 +168,7 @@ class TenantConnectorStore {
    */
   async getByDataType(tenantId: string, dataType: string): Promise<TenantConnector[]> {
     const all = await this.getAll(tenantId);
-    return all.filter((c) => 
+    return all.filter((c) =>
       c.status === "active" && c.dataTypes.includes(dataType)
     );
   }
@@ -181,9 +210,9 @@ class TenantConnectorStore {
       lastSync: connector.last_sync ? new Date(connector.last_sync) : undefined,
       syncFrequency: connector.sync_frequency,
       metadata: {
-        totalRecords: connector.metadata.total_records,
-        lastSyncDuration: connector.metadata.last_sync_duration,
-        errorMessage: connector.metadata.error_message,
+        totalRecords: connector.metadata?.total_records,
+        lastSyncDuration: connector.metadata?.last_sync_duration,
+        errorMessage: connector.metadata?.error_message,
       },
       createdAt: new Date(connector.created_at),
       updatedAt: new Date(connector.updated_at),
@@ -198,7 +227,7 @@ class TenantConnectorStore {
     const storageKey = "dyocense_tenant_connectors";
     const stored = localStorage.getItem(storageKey);
     if (!stored) return [];
-    
+
     try {
       const all: TenantConnector[] = JSON.parse(stored);
       return all.filter((c) => c.tenantId === tenantId).map((c) => ({
@@ -212,6 +241,64 @@ class TenantConnectorStore {
       return [];
     }
   }
+
+  /** Helper: find any connector by id from localStorage */
+  private _getFromLocalStorageAny(id: string): TenantConnector | null {
+    const storageKey = "dyocense_tenant_connectors";
+    const stored = localStorage.getItem(storageKey);
+    if (!stored) return null;
+    try {
+      const all: TenantConnector[] = JSON.parse(stored);
+      const found = all.find(c => c.id === id);
+      if (!found) return null;
+      return {
+        ...found,
+        createdAt: new Date(found.createdAt),
+        updatedAt: new Date(found.updatedAt),
+        lastSync: found.lastSync ? new Date(found.lastSync) : undefined,
+      };
+    } catch (err) {
+      console.error("Failed to parse localStorage:", err);
+      return null;
+    }
+  }
+
+  /** Helper: add connector to localStorage with generated id */
+  private _addToLocalStorage(connector: Omit<TenantConnector, "id" | "createdAt" | "updatedAt">): TenantConnector {
+    const newConnector: TenantConnector = {
+      ...connector,
+      id: `connector-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const storageKey = "dyocense_tenant_connectors";
+    const stored = localStorage.getItem(storageKey);
+    const all: TenantConnector[] = stored ? JSON.parse(stored) : [];
+    all.push(newConnector);
+    localStorage.setItem(storageKey, JSON.stringify(all));
+    // Clear cache
+    this.cache.delete(connector.tenantId);
+    return newConnector;
+  }
+
+  /** Helper: delete connector from localStorage */
+  private _deleteFromLocalStorage(id: string): boolean {
+    const storageKey = "dyocense_tenant_connectors";
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      try {
+        const all: TenantConnector[] = JSON.parse(stored);
+        const filtered = all.filter(c => c.id !== id);
+        localStorage.setItem(storageKey, JSON.stringify(filtered));
+        // Clear cache
+        this.cache.clear();
+        return true;
+      } catch (parseError) {
+        console.error("Failed to parse localStorage:", parseError);
+      }
+    }
+    return false;
+  }
 }
 
 export const tenantConnectorStore = new TenantConnectorStore();
@@ -221,7 +308,7 @@ export const tenantConnectorStore = new TenantConnectorStore();
  */
 export async function buildDataContext(tenantId: string): Promise<ConnectorDataContext[]> {
   const connectors = await tenantConnectorStore.getAll(tenantId);
-  
+
   return connectors
     .filter((c) => c.status === "active")
     .map((c) => ({
@@ -231,13 +318,13 @@ export async function buildDataContext(tenantId: string): Promise<ConnectorDataC
       dataTypes: c.dataTypes,
       sampleData: c.metadata?.totalRecords
         ? [
-            {
-              type: c.dataTypes[0] || "unknown",
-              count: c.metadata.totalRecords,
-              columns: [], // Would be populated from actual data
-              preview: [],
-            },
-          ]
+          {
+            type: c.dataTypes[0] || "unknown",
+            count: c.metadata.totalRecords,
+            columns: [], // Would be populated from actual data
+            preview: [],
+          },
+        ]
         : undefined,
     }));
 }
@@ -247,17 +334,17 @@ export async function buildDataContext(tenantId: string): Promise<ConnectorDataC
  */
 export async function generateDataContextPrompt(tenantId: string): Promise<string> {
   const connectors = await tenantConnectorStore.getAll(tenantId);
-  
+
   if (connectors.length === 0) {
     return "No data sources connected yet. Would you like to connect your business data?";
   }
-  
+
   const activeConnectors = connectors.filter((c) => c.status === "active");
-  
+
   if (activeConnectors.length === 0) {
     return "You have data sources configured but none are currently active. Would you like me to help you activate them?";
   }
-  
+
   const dataByType: Record<string, string[]> = {};
   activeConnectors.forEach((c) => {
     c.dataTypes.forEach((type) => {
@@ -265,11 +352,11 @@ export async function generateDataContextPrompt(tenantId: string): Promise<strin
       dataByType[type].push(c.displayName);
     });
   });
-  
+
   const parts = Object.entries(dataByType).map(
     ([type, sources]) => `${type} data from ${sources.join(", ")}`
   );
-  
+
   return `I have access to your: ${parts.join("; ")}. How can I help you analyze this data?`;
 }
 
@@ -281,7 +368,7 @@ export function suggestConnectorFromIntent(intent: string): {
   reason: string;
 } | null {
   const lowerIntent = intent.toLowerCase();
-  
+
   // Financial/Accounting
   if (
     lowerIntent.includes("invoice") ||
@@ -295,7 +382,7 @@ export function suggestConnectorFromIntent(intent: string): {
       reason: "To analyze your financial data, I recommend connecting your accounting system.",
     };
   }
-  
+
   // E-commerce
   if (
     lowerIntent.includes("sales") ||
@@ -309,7 +396,7 @@ export function suggestConnectorFromIntent(intent: string): {
       reason: "To analyze sales and customer data, connect your e-commerce platform or POS system.",
     };
   }
-  
+
   // Inventory
   if (
     lowerIntent.includes("inventory") ||
@@ -322,7 +409,7 @@ export function suggestConnectorFromIntent(intent: string): {
       reason: "To track inventory levels, connect your inventory management system.",
     };
   }
-  
+
   // CRM/Sales Pipeline
   if (
     lowerIntent.includes("lead") ||
@@ -335,7 +422,7 @@ export function suggestConnectorFromIntent(intent: string): {
       reason: "To analyze your sales pipeline, connect your CRM system.",
     };
   }
-  
+
   // Google Drive/Sheets
   if (
     lowerIntent.includes("spreadsheet") ||
@@ -348,31 +435,32 @@ export function suggestConnectorFromIntent(intent: string): {
       reason: "I can import data from your Google Drive spreadsheets.",
     };
   }
-  
+
   return null;
 }
 
 /**
  * Check if tenant has required data for a goal
  */
-export function checkDataAvailability(
+export async function checkDataAvailability(
   tenantId: string,
   requiredDataTypes: string[]
-): {
+): Promise<{
   available: string[];
   missing: string[];
   suggestions: string[];
-} {
-  const connectors = tenantConnectorStore.getAll(tenantId).filter((c) => c.status === "active");
-  
+}> {
+  const all = await tenantConnectorStore.getAll(tenantId);
+  const connectors = all.filter((c) => c.status === "active");
+
   const availableTypes = new Set<string>();
   connectors.forEach((c) => {
     c.dataTypes.forEach((type) => availableTypes.add(type));
   });
-  
+
   const available = requiredDataTypes.filter((type) => availableTypes.has(type));
   const missing = requiredDataTypes.filter((type) => !availableTypes.has(type));
-  
+
   const suggestions: string[] = [];
   missing.forEach((type) => {
     if (type === "invoices" || type === "expenses") {
@@ -387,7 +475,7 @@ export function checkDataAvailability(
       suggestions.push(`Upload ${type} data or connect via custom API`);
     }
   });
-  
+
   return { available, missing, suggestions };
 }
 
@@ -399,44 +487,25 @@ export async function syncAllConnectors(tenantId: string): Promise<{
   failed: number;
   errors: string[];
 }> {
-  const connectors = tenantConnectorStore.getAll(tenantId).filter((c) => c.status === "active");
-  
+  const all = await tenantConnectorStore.getAll(tenantId);
+  const connectors = all.filter((c) => c.status === "active");
+
   let success = 0;
   let failed = 0;
   const errors: string[] = [];
-  
+
   for (const connector of connectors) {
     try {
-      // Update status to syncing
-      tenantConnectorStore.update(connector.id, { status: "syncing" });
-      
       // Simulate sync (replace with actual API call)
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      
-      // Update success
-      tenantConnectorStore.update(connector.id, {
-        status: "active",
-        lastSync: new Date(),
-        metadata: {
-          ...connector.metadata,
-          totalRecords: Math.floor(Math.random() * 10000) + 100,
-        },
-      });
-      
+
       success++;
     } catch (error) {
       failed++;
       errors.push(`${connector.displayName}: ${error instanceof Error ? error.message : "Unknown error"}`);
-      
-      tenantConnectorStore.update(connector.id, {
-        status: "error",
-        metadata: {
-          ...connector.metadata,
-          errorMessage: error instanceof Error ? error.message : "Sync failed",
-        },
-      });
     }
   }
-  
+  // Clear cache so a subsequent getAll fetches latest
+  tenantConnectorStore.clearCache(tenantId);
   return { success, failed, errors };
 }

@@ -360,11 +360,14 @@ def _user_from_doc(document: dict) -> AccountUser:
         created_at=datetime.fromisoformat(document["created_at"]),
         updated_at=datetime.fromisoformat(document["updated_at"]),
         roles=document.get("roles", ["member"]),
+            oauth_provider=document.get("oauth_provider"),
+            oauth_provider_id=document.get("oauth_provider_id"),
+            picture_url=document.get("picture_url"),
     )
 
 
 def _user_to_doc(user: AccountUser) -> dict:
-    return {
+    doc = {
         "user_id": user.user_id,
         "tenant_id": user.tenant_id,
         "email": user.email,
@@ -374,6 +377,14 @@ def _user_to_doc(user: AccountUser) -> dict:
         "created_at": user.created_at.isoformat(),
         "updated_at": user.updated_at.isoformat(),
     }
+    # Add OAuth fields if present
+    if user.oauth_provider:
+        doc["oauth_provider"] = user.oauth_provider
+    if user.oauth_provider_id:
+        doc["oauth_provider_id"] = user.oauth_provider_id
+    if user.picture_url:
+        doc["picture_url"] = user.picture_url
+    return doc
 
 
 def register_user(tenant_id: str, email: str, full_name: str, password: str) -> AccountUser:

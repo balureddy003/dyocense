@@ -1,5 +1,5 @@
-import { X, FileText, Clock, Calendar, GitBranch } from "lucide-react";
-import { useEffect, useRef, useCallback } from "react";
+import { Calendar, FileText, GitBranch, X } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
 import { SavedPlan } from "./PlanSelector";
 
 type PlanVersionsSidebarProps = {
@@ -111,36 +111,43 @@ export function PlanVersionsSidebar({
         tabIndex={-1}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <FileText size={20} className="text-primary" />
-            <span>My Plans ({plans.length})</span>
-            {projectName && (
-              <span className="ml-2 text-xs font-medium text-gray-500">in {projectName}</span>
-            )}
-          </h2>
-          <button
-            ref={closeBtnRef}
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded"
-          >
-            <X size={20} />
-          </button>
+        <div className="p-4 border-b bg-gradient-to-r from-blue-50 to-purple-50">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+              <FileText size={20} className="text-primary" />
+              <span>My Plans</span>
+            </h2>
+            <button
+              ref={closeBtnRef}
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          {/* Hierarchy breadcrumb */}
+          <div className="flex items-center gap-2 text-xs text-gray-600 bg-white/60 px-3 py-2 rounded-md border border-gray-200/50">
+            <span className="font-semibold text-gray-500">📊 Workspace</span>
+            <span className="text-gray-400">→</span>
+            <span className="font-semibold text-primary">{projectName || "Project"}</span>
+            <span className="text-gray-400">→</span>
+            <span className="font-semibold text-gray-700">{plans.length} {plans.length === 1 ? 'Plan' : 'Plans'}</span>
+          </div>
         </div>
 
         {/* Create New Button */}
-        <div className="p-4 border-b">
+        <div className="p-4 border-b bg-white">
           <button
             onClick={() => {
               onCreateNew();
               onClose();
             }}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white font-semibold rounded-lg hover:bg-primary/90 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white font-semibold rounded-lg hover:bg-primary/90 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 shadow-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            Create New Plan
+            Create New Plan in {projectName || "Project"}
           </button>
         </div>
 
@@ -158,11 +165,10 @@ export function PlanVersionsSidebar({
                     onSelectPlan(plan);
                     onClose();
                   }}
-                  className={`w-full text-left p-3 rounded-lg transition-all group focus:outline-none focus:ring-2 focus:ring-primary/40 ${
-                    plan.id === currentPlanId
+                  className={`w-full text-left p-3 rounded-lg transition-all group focus:outline-none focus:ring-2 focus:ring-primary/40 ${plan.id === currentPlanId
                       ? "bg-blue-50 border border-primary"
                       : "hover:bg-gray-50 border border-transparent"
-                  }`}
+                    }`}
                 >
                   {/* Plan Header */}
                   <div className="flex items-start gap-3 mb-2">
@@ -193,10 +199,10 @@ export function PlanVersionsSidebar({
                   <div className="flex items-center gap-3 text-xs text-gray-500 ml-15">
                     <span className="flex items-center gap-1">
                       <Calendar size={12} />
-                      {new Date(plan.createdAt).toLocaleDateString('en-US', { 
-                        month: 'short', 
-                        day: 'numeric', 
-                        year: 'numeric' 
+                      {new Date(plan.createdAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
                       })}
                     </span>
                     <span className="text-gray-400">Auto-saved</span>

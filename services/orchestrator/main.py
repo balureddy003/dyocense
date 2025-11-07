@@ -77,6 +77,7 @@ class RunRequest(BaseModel):
         default=None,
         description="Optional time-series data; if omitted, demand parameters drive forecasts.",
     )
+    mode: str = Field("legacy", description="Execution mode: 'legacy' for direct pipeline, 'plan' to use PlanPack planner.")
 
 
 class RunResponse(BaseModel):
@@ -129,8 +130,12 @@ def submit_run(
         template_id=template_id,
     )
     RUNS[run_id] = state
-    background_tasks.add_task(_execute_run, run_id, body, identity["tenant_id"], template_id)
-    logger.info("Enqueued run %s for tenant %s", run_id, identity["tenant_id"])
+    if body.mode == "plan":
+        background_tasks.add_task(_execute_plan_run, run_id, body, identity["tenant_id"], template_id)
+        logger.info("Enqueued plan-mode run %s for tenant %s", run_id, identity["tenant_id"])
+    else:
+        background_tasks.add_task(_execute_run, run_id, body, identity["tenant_id"], template_id)
+        logger.info("Enqueued legacy run %s for tenant %s", run_id, identity["tenant_id"])
     return RunResponse(run_id=run_id, status="pending")
 
 
@@ -228,6 +233,57 @@ def _execute_run(run_id: str, request: RunRequest, tenant_id: str, template_id: 
         logger.info("Run %s completed", run_id)
     except Exception as exc:  # pragma: no cover - ensures failure surfaced
         logger.exception("Run %s failed: %s", run_id, exc)
+        state.status = "failed"
+        state.error = str(exc)
+
+
+# Plan-mode execution using planner service components
+def _execute_plan_run(run_id: str, request: RunRequest, tenant_id: str, template_id: str) -> None:
+    state = RUNS[run_id]
+    state.status = "running"
+    try:
+        from packages.agent.schemas import PlanPack, Step
+        from packages.agent.executor import PlanExecutor, STORE as PLAN_STORE
+
+        # Build OPS spec for reuse in steps
+        ops = build_ops_from_template(
+            template_id,
+            request.goal,
+            tenant_id,
+            run_id,
+            request.data_inputs or {},
+        )
+
+        # Draft plan steps (subset for plan mode)
+        steps: List[Step] = []
+        series = request.series or []
+        steps.append(Step(step_id="forecast_1", type="forecast", tool="forecast_service", inputs={"horizon": request.horizon, "series": [s.model_dump() if hasattr(s, "model_dump") else s for s in series]}, rationale="Generate forecast."))
+        steps.append(Step(step_id="policy_1", type="policy_eval", tool="policy_service", depends_on=["forecast_1"], inputs={"ops": ops, "tenant_id": tenant_id}, rationale="Evaluate policy constraints."))
+        steps.append(Step(step_id="optimise_1", type="optimise", tool="optimiser_service", depends_on=["forecast_1"], inputs={"ops": ops}, rationale="Optimise using OPS & forecast."))
+        steps.append(Step(step_id="diagnostics_1", type="diagnostics", tool="diagnostician_service", depends_on=["optimise_1"], inputs={"ops": ops, "tenant_id": tenant_id, "solution": {"ref": "optimise_1"}}, rationale="Diagnose solution & constraints."))
+        steps.append(Step(step_id="explain_1", type="explain", tool="explainer_service", depends_on=["optimise_1", "forecast_1"], inputs={"goal": request.goal, "solution": {"ref": "optimise_1"}, "forecasts": {"ref": "forecast_1"}}, rationale="Explain outcome."))
+        steps.append(Step(step_id="persist_1", type="persist", tool="evidence_service", depends_on=["optimise_1", "explain_1"], inputs={"payload": {"run_id": run_id, "tenant_id": tenant_id, "ops": ops}}, rationale="Persist artifacts & evidence."))
+
+        plan = PlanPack(id=run_id, goal=request.goal, context={"tenant_id": tenant_id, "template_id": template_id, "horizon": request.horizon}, steps=steps)
+        PLAN_STORE.put(plan)
+
+        executor = PlanExecutor()
+        executor.execute(plan)
+
+        # Collect artifacts from plan directory to state.result for backward compatibility
+        artifacts_dir = ARTIFACT_ROOT.parent / "plans" / run_id
+        result_bundle = {"plan": plan.model_dump(), "artifacts": []}
+        if artifacts_dir.exists():
+            for f in artifacts_dir.glob("*.json"):
+                try:
+                    result_bundle["artifacts"].append({"name": f.name, "content": json.loads(f.read_text(encoding="utf-8"))})
+                except Exception:  # pragma: no cover
+                    pass
+        state.result = result_bundle
+        state.status = "completed" if plan.status == "completed" else plan.status
+        logger.info("Plan-mode run %s completed with status %s", run_id, state.status)
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Plan-mode run %s failed: %s", run_id, exc)
         state.status = "failed"
         state.error = str(exc)
 

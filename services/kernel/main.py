@@ -13,6 +13,7 @@ from services.explainer.main import app as explainer_app
 from services.evidence.main import app as evidence_app
 from services.marketplace.main import app as marketplace_app
 from services.orchestrator.main import app as orchestrator_app
+from services.plan.main import app as planner_app
 from services.accounts.main import app as accounts_app
 from services.chat.main import app as chat_app
 from services.connectors.main import app as connectors_app
@@ -32,6 +33,7 @@ SUB_APPS = [
     evidence_app,
     marketplace_app,
     orchestrator_app,
+    planner_app,
 ]
 
 app = FastAPI(
@@ -54,11 +56,23 @@ for sub_app in SUB_APPS:
     try:
         service_tag = getattr(sub_app, "title", None) or sub_app.__class__.__name__
         app.include_router(sub_app.router, tags=[service_tag])
+        # Additionally, expose accounts routes at root for direct access
+        if sub_app is accounts_app:
+            app.include_router(accounts_app.router)
+        # Mount each sub-app at /api/{service} for backward compatibility
+        service_name = service_tag.lower().replace(' ', '_').replace('service', '').replace('api', '').strip('_')
+        app.mount(f"/api/{service_name}", sub_app)
     except Exception as e:
-        # Fail-soft: if a sub-app fails to attach (e.g., optional deps), continue with others
-        # This mirrors the platform's graceful degradation pattern.
         import logging
         logging.getLogger("kernel").warning(f"Skipping router for sub-app due to error: {e}")
+
+# Back-compat: also expose Accounts under /api/accounts for UIs expecting this prefix
+try:
+    # accounts_app is imported above
+    app.mount("/api/accounts", accounts_app)
+except Exception as e:  # pragma: no cover
+    import logging
+    logging.getLogger("kernel").warning(f"Failed to mount accounts under /api/accounts: {e}")
 
 
 @app.get("/healthz", tags=["system"])

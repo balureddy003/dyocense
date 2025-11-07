@@ -68,6 +68,10 @@ class AccountUser(BaseModel):
     created_at: datetime
     updated_at: datetime
     roles: List[str] = Field(default_factory=lambda: ["member"])
+    # OAuth fields
+    oauth_provider: Optional[str] = None  # "google", "microsoft", "apple"
+    oauth_provider_id: Optional[str] = None  # Provider's unique user ID
+    picture_url: Optional[str] = None  # Profile picture from OAuth provider
 
 
 class ApiTokenRecord(BaseModel):

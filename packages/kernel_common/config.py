@@ -221,7 +221,8 @@ class FeatureFlags:
             return cls(
                 deployment_mode="smb",
                 force_inmemory=os.getenv("FORCE_INMEMORY_MODE", "false").lower() == "true",
-                use_mongodb=os.getenv("USE_MONGODB", "true").lower() == "true",
+                # Default to not using MongoDB in SMB mode to avoid unnecessary connection attempts
+                use_mongodb=os.getenv("USE_MONGODB", "false").lower() == "true",
                 use_neo4j=os.getenv("USE_NEO4J", "false").lower() == "true",
                 use_qdrant=os.getenv("USE_QDRANT", "false").lower() == "true",
                 use_keycloak=os.getenv("USE_KEYCLOAK", "false").lower() == "true",

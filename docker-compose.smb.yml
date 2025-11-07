@@ -1,0 +1,272 @@
+version: "3.9"
+
+# =====================================================================
+# SMB-Optimized Docker Compose Configuration
+# =====================================================================
+# Purpose: Cost-efficient deployment for 10-50 SMB tenants
+# Architecture: Single Postgres + Unified Kernel
+# Expected Cost: $50-150/month on managed services
+# Resource Usage: ~2-4 vCPU, 4-8GB RAM total
+# =====================================================================
+
+services:
+  # PostgreSQL Database (All data consolidated)
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: dyocense-postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_DB: dyocense
+      POSTGRES_USER: dyocense
+      POSTGRES_PASSWORD: pass@1234
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dyocense"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    # Resource limits (adjust based on load)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    networks:
+      - dyocense
+
+  # Unified Kernel (All services in one process)
+  kernel:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    
+    container_name: dyocense-kernel
+    restart: unless-stopped
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    environment:
+      # Deployment mode
+      DEPLOYMENT_MODE: unified
+      PERSISTENCE_BACKEND: postgres
+      USE_MONGODB: "false"
+      
+      # Database connection
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: dyocense
+      POSTGRES_USER: dyocense
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dyocense_dev_password_change_in_prod}
+      POSTGRES_MIN_POOL_SIZE: 2
+      POSTGRES_MAX_POOL_SIZE: 10
+      
+      # Server configuration
+      HOST: 0.0.0.0
+      PORT: 8001
+      WORKER_COUNT: ${WORKER_COUNT:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      
+      # Performance tuning
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-10}
+      EVENT_PROCESSING_INTERVAL: 1
+      ORCHESTRATION_INTERVAL: 2
+      
+      # Feature flags (SMB defaults)
+      ENABLE_ACCOUNTS_SERVICE: "true"
+      ENABLE_CHAT_SERVICE: "true"
+      ENABLE_COMPILER_SERVICE: "true"
+      ENABLE_FORECAST_SERVICE: "true"
+      ENABLE_POLICY_SERVICE: "true"
+      ENABLE_OPTIMISER_SERVICE: "true"
+      ENABLE_DIAGNOSTICIAN_SERVICE: "true"
+      ENABLE_EXPLAINER_SERVICE: "true"
+      # Connectors depend on MongoDB (disabled for SMB/Postgres)
+      ENABLE_CONNECTORS_SERVICE: "false"
+      ENABLE_KNOWLEDGE_SERVICE: "true"
+      ENABLE_EVIDENCE_SERVICE: "true"
+      ENABLE_MARKETPLACE_SERVICE: "true"
+      ENABLE_SCENARIO_SERVICE: "true"
+      
+      # Observability
+      ENABLE_TELEMETRY: ${ENABLE_TELEMETRY:-true}
+      ENABLE_METRICS: ${ENABLE_METRICS:-true}
+      
+      # External services
+      ENABLE_EMAIL: ${ENABLE_EMAIL:-true}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-change_this_in_production}
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production}
+    
+    ports:
+      - "${KERNEL_PORT:-8001}:8001"
+    
+    volumes:
+      # Local file storage (for artifacts, logs)
+      - kernel_data:/app/data
+      - kernel_logs:/app/logs
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    
+    networks:
+      - dyocense
+
+  # Optional: Nginx reverse proxy (for production)
+  nginx:
+    image: nginx:alpine
+    container_name: dyocense-nginx
+    restart: unless-stopped
+    
+    depends_on:
+      - kernel
+    
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    
+    networks:
+      - dyocense
+    
+    profiles:
+      - production
+
+  # Optional: Grafana for monitoring (free tier)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dyocense-grafana
+    restart: unless-stopped
+    
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    
+    networks:
+      - dyocense
+    
+    profiles:
+      - monitoring
+
+# =====================================================================
+# Volumes
+# =====================================================================
+volumes:
+  postgres_data:
+    driver: local
+  kernel_data:
+    driver: local
+  kernel_logs:
+    driver: local
+  grafana_data:
+    driver: local
+  nginx_logs:
+    driver: local
+
+# =====================================================================
+# Networks
+# =====================================================================
+networks:
+  dyocense:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# =====================================================================
+# Usage Instructions
+# =====================================================================
+# 
+# Quick Start (Development):
+#   docker-compose -f docker-compose.smb.yml up -d
+# 
+# With Monitoring:
+#   docker-compose -f docker-compose.smb.yml --profile monitoring up -d
+# 
+# Production (with Nginx):
+#   docker-compose -f docker-compose.smb.yml --profile production up -d
+# 
+# Scale Workers:
+#   WORKER_COUNT=4 docker-compose -f docker-compose.smb.yml up -d
+# 
+# View Logs:
+#   docker-compose -f docker-compose.smb.yml logs -f kernel
+# 
+# Stop Services:
+#   docker-compose -f docker-compose.smb.yml down
+# 
+# Reset Data:
+#   docker-compose -f docker-compose.smb.yml down -v
+# 
+# =====================================================================
+# Environment Variables (create .env file)
+# =====================================================================
+#
+# # Database
+# POSTGRES_PASSWORD=secure_password_here
+# 
+# # Server
+# KERNEL_PORT=8001
+# WORKER_COUNT=2
+# LOG_LEVEL=INFO
+# 
+# # Security
+# SECRET_KEY=your_secret_key_here
+# JWT_SECRET=your_jwt_secret_here
+# 
+# # Email (optional)
+# ENABLE_EMAIL=true
+# SENDGRID_API_KEY=your_sendgrid_key
+# 
+# # Monitoring (optional)
+# GRAFANA_USER=admin
+# GRAFANA_PASSWORD=secure_grafana_password
+#
+# =====================================================================

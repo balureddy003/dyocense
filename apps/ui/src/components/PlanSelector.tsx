@@ -1,4 +1,4 @@
-import { Clock, FileText, Plus, Trash2, Calendar, GitBranch } from "lucide-react";
+import { Calendar, Clock, FileText, GitBranch, Lightbulb, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 export type SavedPlan = {
@@ -31,10 +31,20 @@ type PlanSelectorProps = {
   onSelectPlan: (plan: SavedPlan) => void;
   onCreateNew: () => void;
   onDeletePlan: (planId: string) => void;
+  currentProjectName?: string;
+  tenantName?: string;
+  onStartWithGoal?: (goal: string) => void;
 };
 
-export function PlanSelector({ plans, onSelectPlan, onCreateNew, onDeletePlan }: PlanSelectorProps) {
+export function PlanSelector({ plans, onSelectPlan, onCreateNew, onDeletePlan, currentProjectName, tenantName, onStartWithGoal }: PlanSelectorProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [goalInput, setGoalInput] = useState("");
+  const suggestedGoals = [
+    "Cut operating costs 15%",
+    "Increase sales 20%",
+    "Improve stock accuracy",
+    "Reduce spoilage 30%",
+  ];
 
   const handleDelete = (e: React.MouseEvent, planId: string) => {
     e.stopPropagation();
@@ -46,6 +56,27 @@ export function PlanSelector({ plans, onSelectPlan, onCreateNew, onDeletePlan }:
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-6">
       <div className="w-full max-w-5xl">
+        {/* Hierarchy Context */}
+        {(tenantName || currentProjectName) && (
+          <div className="mb-6 flex items-center justify-center">
+            <div className="inline-flex items-center gap-2 text-sm text-gray-600 bg-white px-4 py-2 rounded-full border border-gray-200 shadow-sm">
+              {tenantName && (
+                <>
+                  <span className="font-semibold text-gray-700">📊 {tenantName}</span>
+                  <span className="text-gray-400">→</span>
+                </>
+              )}
+              {currentProjectName && (
+                <>
+                  <span className="font-semibold text-primary">📁 {currentProjectName}</span>
+                  <span className="text-gray-400">→</span>
+                </>
+              )}
+              <span className="font-semibold text-gray-700">📋 Plans</span>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-3">
@@ -53,9 +84,43 @@ export function PlanSelector({ plans, onSelectPlan, onCreateNew, onDeletePlan }:
           </h1>
           <p className="text-lg text-gray-600">
             {plans.length > 0
-              ? "Choose an existing plan to continue or create a new one"
-              : "Get started by creating your first business plan"}
+              ? `Choose an existing plan ${currentProjectName ? `in ${currentProjectName}` : ''} or create a new one`
+              : `Get started by creating your first business plan ${currentProjectName ? `in ${currentProjectName}` : ''}`}
           </p>
+        </div>
+
+        {/* Goal-first quick start */}
+        <div className="mb-6">
+          <div className="flex flex-wrap gap-2 justify-center mb-3">
+            {suggestedGoals.map((g) => (
+              <button
+                key={g}
+                onClick={() => onStartWithGoal ? onStartWithGoal(g) : onCreateNew()}
+                className="px-3 py-1.5 text-sm rounded-full border border-gray-200 bg-white hover:border-primary hover:text-primary"
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+          <div className="max-w-3xl mx-auto flex gap-2">
+            <input
+              type="text"
+              value={goalInput}
+              onChange={(e) => setGoalInput(e.target.value)}
+              placeholder="Describe your top goal (e.g., Reduce costs by 15% in 90 days)"
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <button
+              onClick={() => {
+                const g = goalInput.trim();
+                if (!g) return;
+                onStartWithGoal ? onStartWithGoal(g) : onCreateNew();
+              }}
+              className="px-4 py-3 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90"
+            >
+              Generate plan
+            </button>
+          </div>
         </div>
 
         {/* Create New Plan Button */}
@@ -70,11 +135,47 @@ export function PlanSelector({ plans, onSelectPlan, onCreateNew, onDeletePlan }:
             <div className="text-left">
               <h3 className="text-2xl font-bold text-gray-900 mb-1">Create New Plan</h3>
               <p className="text-gray-600">
-                Start fresh with AI-powered business planning
+                Start fresh with AI-powered business planning {currentProjectName ? `in ${currentProjectName}` : ''}
               </p>
             </div>
           </div>
         </button>
+
+        {/* Info Card: Understanding the Hierarchy */}
+        {plans.length === 0 && (
+          <div className="mb-8 rounded-xl bg-gradient-to-r from-blue-100 via-purple-100 to-pink-100 p-6 border border-blue-200">
+            <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2">
+              <Lightbulb size={20} className="text-primary" />
+              How It Works: Organize Your Business Plans
+            </h3>
+            <div className="space-y-3 text-sm text-gray-700">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">📊</span>
+                <div>
+                  <strong className="font-semibold">Workspace (Tenant):</strong> Your company's main account where all your business data lives
+                </div>
+              </div>
+              <div className="flex items-center justify-center text-gray-400">
+                <span className="text-xl">↓</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">📁</span>
+                <div>
+                  <strong className="font-semibold">Projects:</strong> Organize plans by department, initiative, or business unit (e.g., "Q1 2024", "Restaurant A", "Cost Optimization")
+                </div>
+              </div>
+              <div className="flex items-center justify-center text-gray-400">
+                <span className="text-xl">↓</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">📋</span>
+                <div>
+                  <strong className="font-semibold">Plans:</strong> Specific business plans with goals, stages, and actions (e.g., "Reduce food waste 20%", "Increase revenue 15%")
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Existing Plans */}
         {plans.length > 0 && (
