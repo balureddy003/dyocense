@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AgentAssistant } from "../components/AgentAssistant";
 import { BusinessMetrics } from "../components/BusinessMetrics";
@@ -72,6 +72,11 @@ export const HomePage = () => {
   const [showVersionComparison, setShowVersionComparison] = useState(false);
   const [previousPlanVersion, setPreviousPlanVersion] = useState<SavedPlan | null>(null);
   const [newPlanVersion, setNewPlanVersion] = useState<SavedPlan | null>(null);
+
+  // Memoize current project name to avoid repeated lookups
+  const currentProjectName = useMemo(() => {
+    return projects.find(p => p.project_id === currentProjectId)?.name;
+  }, [projects, currentProjectId]);
 
   // Welcome modal removed - users get direct access after login
   // No need for additional welcome screens that interrupt workflow
@@ -441,6 +446,8 @@ export const HomePage = () => {
         <TopNav
           projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
           currentProjectId={currentProjectId}
+          tenantName={profile?.name}
+          showHierarchyBreadcrumb={true}
           onProjectChange={(id) => {
             setCurrentProjectId(id);
             setCurrentPlanId(null);
@@ -464,7 +471,7 @@ export const HomePage = () => {
           onSelectPlan={handleSelectPlan}
           onCreateNew={handleCreateNewPlan}
           onDeletePlan={handleDeletePlan}
-          currentProjectName={projects.find(p => p.project_id === currentProjectId)?.name}
+          currentProjectName={currentProjectName}
           tenantName={profile?.name}
           onStartWithGoal={(goal) => {
             setSeedGoal(goal);
@@ -494,6 +501,8 @@ export const HomePage = () => {
         <TopNav
           projectOptions={projects.map((p) => ({ id: p.project_id, name: p.name }))}
           currentProjectId={currentProjectId}
+          tenantName={profile?.name}
+          showHierarchyBreadcrumb={true}
           onProjectChange={(id) => {
             setCurrentProjectId(id);
             setCurrentPlanId(null);
@@ -574,6 +583,8 @@ export const HomePage = () => {
       {/* Unified Two-Level Header like Trip.com */}
       <TopNav
         showPlanControls={true}
+        tenantName={profile?.name}
+        showHierarchyBreadcrumb={true}
         planName={
           unsavedPlanName
           || (currentPlan ? (currentPlan.userProvidedName || currentPlan.title || "Untitled Plan")
@@ -631,6 +642,8 @@ export const HomePage = () => {
         onSkip={handleSkipPlanName}
         currentName={currentPlanId ? savedPlans.find(p => p.id === currentPlanId)?.userProvidedName : undefined}
         aiGeneratedTitle={pendingPlan?.title}
+        tenantName={profile?.name}
+        projectName={currentProjectName}
       />
 
       {/* Version Comparison Modal */}
@@ -647,6 +660,8 @@ export const HomePage = () => {
           previousVersion={previousPlanVersion}
           newVersion={newPlanVersion}
           changes={calculateChanges()}
+          tenantName={profile?.name}
+          projectName={currentProjectName}
         />
       )}
 
@@ -668,7 +683,8 @@ export const HomePage = () => {
         currentPlanId={currentPlanId}
         onSelectPlan={handleSelectPlan}
         onCreateNew={handleCreateNewPlan}
-        projectName={projects.find(p => p.project_id === currentProjectId)?.name}
+        tenantName={profile?.name}
+        projectName={currentProjectName}
       />
 
       {/* 3-Panel Layout with Collapsible Panels */}
@@ -692,6 +708,8 @@ export const HomePage = () => {
             key={`${currentPlanId || 'new-plan'}-${newPlanSignal}`}
             onPlanGenerated={handlePlanGenerated}
             profile={profile}
+            projectId={currentProjectId}
+            projectName={currentProjectName}
             seedGoal={seedGoal || undefined}
             startNewPlanSignal={newPlanSignal}
           />
@@ -710,6 +728,8 @@ export const HomePage = () => {
             title={generatedPlan ? "Execution Plan" : "Your Plan"}
             estimatedDuration={generatedPlan?.estimatedDuration}
             hideHeader={true}
+            tenantName={profile?.name}
+            projectName={currentProjectName}
           />
         </CollapsiblePanel>
 
@@ -726,7 +746,11 @@ export const HomePage = () => {
           showFullscreenButton={true}
           onCollapseChange={setRightPanelCollapsed}
         >
-          <MetricsPanel quickWins={generatedPlan?.quickWins} />
+          <MetricsPanel
+            quickWins={generatedPlan?.quickWins}
+            tenantName={profile?.name}
+            projectName={currentProjectName}
+          />
         </CollapsiblePanel>
       </div>
     </div>

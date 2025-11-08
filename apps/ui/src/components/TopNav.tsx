@@ -2,6 +2,7 @@ import { Bell, ChevronDown, CircleUserRound, Globe2, LayoutDashboard, LineChart,
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
 
 const NAV_LINKS = [
   { label: "Control tower", icon: LayoutDashboard, path: "/home" },
@@ -32,6 +33,8 @@ interface TopNavProps {
     refine: boolean;
     save: boolean;
   };
+  tenantName?: string;
+  showHierarchyBreadcrumb?: boolean;
 }
 
 export const TopNav = ({
@@ -49,6 +52,8 @@ export const TopNav = ({
   showPlanControls = false,
   dataStatusPosition = "right",
   steps,
+  tenantName,
+  showHierarchyBreadcrumb = false,
 }: TopNavProps = {}) => {
   const { user, authenticated, login, logout } = useAuth();
   const displayName = user?.fullName || user?.username || "Guest";
@@ -91,6 +96,16 @@ export const TopNav = ({
             <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white font-bold">D</span>
             Dyocense
           </Link>
+          {showHierarchyBreadcrumb && (
+            <div className="hidden lg:flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded-md border border-gray-200">
+              {/* Use shared breadcrumb component */}
+              <HierarchyBreadcrumb
+                tenantName={tenantName}
+                projectName={currentProjectId && projectOptions.length > 0 ? (projectOptions.find(p => p.id === currentProjectId)?.name || 'Project') : undefined}
+                className="inline-flex items-center gap-2"
+              />
+            </div>
+          )}
           <nav className="hidden md:flex items-center gap-5">
             {NAV_LINKS.map((item) => {
               const Icon = item.icon;

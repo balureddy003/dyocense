@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+import os
+
+# Load environment variables from .env early so persistence/backends honor settings
+try:
+    from dotenv import load_dotenv  # python-dotenv
+    load_dotenv()
+except Exception:
+    # Non-fatal if dotenv not available
+    pass
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
@@ -16,14 +25,13 @@ from services.orchestrator.main import app as orchestrator_app
 from services.plan.main import app as planner_app
 from services.accounts.main import app as accounts_app
 from services.chat.main import app as chat_app
-from services.connectors.main import app as connectors_app
+from services.analyze.main import app as analyze_app
 from packages.kernel_common import persistence
 from packages.kernel_common.auth import get_auth_health
 
 SUB_APPS = [
     accounts_app,
     chat_app,
-    connectors_app,
     compiler_app,
     forecast_app,
     policy_app,
@@ -34,7 +42,17 @@ SUB_APPS = [
     marketplace_app,
     orchestrator_app,
     planner_app,
+    analyze_app,
 ]
+
+# Optionally include connectors service (requires MongoDB) only if enabled
+try:
+    if os.getenv("ENABLE_CONNECTORS_SERVICE", "false").lower() in ("1", "true", "yes", "on"):
+        from services.connectors.main import app as connectors_app  # defer import to avoid Mongo requirement
+        SUB_APPS.insert(2, connectors_app)
+except Exception as e:
+    import logging
+    logging.getLogger("kernel").warning(f"Connectors service disabled or failed to load: {e}")
 
 app = FastAPI(
     title="Dyocense Kernel API",

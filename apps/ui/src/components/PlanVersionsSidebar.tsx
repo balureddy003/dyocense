@@ -1,5 +1,6 @@
 import { Calendar, FileText, GitBranch, X } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
 import { SavedPlan } from "./PlanSelector";
 
 type PlanVersionsSidebarProps = {
@@ -9,6 +10,7 @@ type PlanVersionsSidebarProps = {
   currentPlanId: string | null;
   onSelectPlan: (plan: SavedPlan) => void;
   onCreateNew: () => void;
+  tenantName?: string;
   projectName?: string;
 };
 
@@ -19,6 +21,7 @@ export function PlanVersionsSidebar({
   currentPlanId,
   onSelectPlan,
   onCreateNew,
+  tenantName,
   projectName,
 }: PlanVersionsSidebarProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -127,9 +130,7 @@ export function PlanVersionsSidebar({
           </div>
           {/* Hierarchy breadcrumb */}
           <div className="flex items-center gap-2 text-xs text-gray-600 bg-white/60 px-3 py-2 rounded-md border border-gray-200/50">
-            <span className="font-semibold text-gray-500">📊 Workspace</span>
-            <span className="text-gray-400">→</span>
-            <span className="font-semibold text-primary">{projectName || "Project"}</span>
+            <HierarchyBreadcrumb tenantName={tenantName || "Workspace"} projectName={projectName || "Project"} className="inline-flex items-center gap-2" />
             <span className="text-gray-400">→</span>
             <span className="font-semibold text-gray-700">{plans.length} {plans.length === 1 ? 'Plan' : 'Plans'}</span>
           </div>
@@ -166,8 +167,8 @@ export function PlanVersionsSidebar({
                     onClose();
                   }}
                   className={`w-full text-left p-3 rounded-lg transition-all group focus:outline-none focus:ring-2 focus:ring-primary/40 ${plan.id === currentPlanId
-                      ? "bg-blue-50 border border-primary"
-                      : "hover:bg-gray-50 border border-transparent"
+                    ? "bg-blue-50 border border-primary"
+                    : "hover:bg-gray-50 border border-transparent"
                     }`}
                 >
                   {/* Plan Header */}

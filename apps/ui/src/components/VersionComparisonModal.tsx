@@ -1,5 +1,6 @@
-import { X, AlertCircle } from "lucide-react";
-import { useState } from "react";
+import { AlertCircle, X } from "lucide-react";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
+
 
 type Stage = {
   id: string;
@@ -28,6 +29,8 @@ type VersionComparisonModalProps = {
     removed: string[];
     modified: string[];
   };
+  tenantName?: string;
+  projectName?: string;
 };
 
 export function VersionComparisonModal({
@@ -38,6 +41,8 @@ export function VersionComparisonModal({
   previousVersion,
   newVersion,
   changes,
+  tenantName,
+  projectName,
 }: VersionComparisonModalProps) {
   if (!open) return null;
 
@@ -51,6 +56,11 @@ export function VersionComparisonModal({
             <p className="text-sm text-gray-600 mt-1">
               Review the changes and decide which version to keep
             </p>
+            {(tenantName || projectName) && (
+              <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded-md border border-gray-200">
+                <HierarchyBreadcrumb tenantName={tenantName} projectName={projectName} className="inline-flex items-center gap-2" />
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}

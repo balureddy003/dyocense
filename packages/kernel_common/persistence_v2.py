@@ -102,6 +102,7 @@ class PostgresBackend(PersistenceBackend):
     def __init__(self):
         self.pool: Optional[Any] = None
         self.config = self._load_config()
+        self._extensions_initialized = False
     
     def _load_config(self) -> Dict[str, Any]:
         """Load PostgreSQL configuration from environment."""
@@ -138,6 +139,8 @@ class PostgresBackend(PersistenceBackend):
                     cur.execute("SELECT version()")
                     version = cur.fetchone()[0]
                     logger.info(f"Connected to PostgreSQL: {version}")
+                    # Ensure required extensions & indexes if flagged
+                    self._post_connect_bootstrap(conn)
             finally:
                 self.pool.putconn(conn)
             
@@ -146,6 +149,38 @@ class PostgresBackend(PersistenceBackend):
         except (ImportError, OperationalError) as exc:
             logger.error(f"PostgreSQL connection failed: {exc}")
             return False
+
+    def _post_connect_bootstrap(self, conn) -> None:
+        """Bootstrap pgvector and any lightweight DDL if enabled.
+
+        Safe to run repeatedly; guarded by flag. Avoids full migrations
+        but ensures critical extensions exist in ephemeral/dev environments.
+        """
+        if self._extensions_initialized:
+            return
+        enable_vector = os.getenv("ENABLE_PGVECTOR", "false").lower() == "true"
+        try:
+            with conn.cursor() as cur:
+                if enable_vector:
+                    cur.execute('CREATE EXTENSION IF NOT EXISTS "vector"')
+                    logger.debug("pgvector extension ensured")
+                # Minimal sanity check for knowledge.documents table (embeddings)
+                if enable_vector:
+                    cur.execute("""
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema='knowledge' AND table_name='documents' AND column_name='embedding'
+                    """)
+                    if cur.fetchone() is None:
+                        logger.warning("knowledge.documents table missing; run migrations to enable embeddings")
+            conn.commit()
+        except Exception as exc:
+            logger.warning(f"Post-connect bootstrap skipped due to error: {exc}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            self._extensions_initialized = True
     
     def disconnect(self) -> None:
         """Close all connections in pool."""
@@ -163,6 +198,7 @@ class PostgresBackend(PersistenceBackend):
             return {"status": "disconnected", "backend": "postgres"}
         
         try:
+            assert self.pool is not None
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cur:
@@ -180,6 +216,7 @@ class PostgresBackend(PersistenceBackend):
     @contextmanager
     def get_connection(self):
         """Context manager for getting pooled connections."""
+        assert self.pool is not None
         conn = self.pool.getconn()
         try:
             yield conn
@@ -236,7 +273,12 @@ class PostgresCollection(Collection):
                 cur.execute(query, values)
                 result = cur.fetchone()
                 conn.commit()
-                return result[id_field] if result else doc_id
+                # Guarantee a string ID
+                generated = result[id_field] if result and result.get(id_field) else doc_id
+                if generated is None:
+                    import uuid
+                    generated = str(uuid.uuid4())
+                return str(generated)
     
     def find_one(self, query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Find single document matching query."""
@@ -413,6 +455,8 @@ class MongoBackend(PersistenceBackend):
     
     def get_collection(self, name: str) -> Collection:
         """Get MongoDB collection wrapper."""
+        if self.db is None:
+            raise RuntimeError("Mongo backend not connected")
         return MongoCollection(self.db[name])
     
     def health_check(self) -> Dict[str, Any]:

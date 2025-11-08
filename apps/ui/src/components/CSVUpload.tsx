@@ -1,11 +1,13 @@
-import { useState, useRef } from "react";
-import { Upload, FileText, X, Download, CheckCircle } from "lucide-react";
+import { CheckCircle, Download, FileText, Upload, X } from "lucide-react";
+import { useRef, useState } from "react";
 
 interface CSVUploadProps {
   onFileSelect: (file: File, preview: any[]) => void;
   title?: string;
   description?: string;
   sampleDataUrl?: string;
+  onUseSample?: () => void; // new path for zero-friction sample analysis
+  allowSample?: boolean;
 }
 
 export const CSVUpload = ({
@@ -13,6 +15,8 @@ export const CSVUpload = ({
   title = "Upload your data",
   description = "Drag and drop your CSV file here, or click to browse",
   sampleDataUrl,
+  onUseSample,
+  allowSample = true,
 }: CSVUploadProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -112,13 +116,12 @@ export const CSVUpload = ({
     <div className="space-y-4">
       {!file ? (
         <div
-          className={`relative rounded-xl border-2 border-dashed transition-all ${
-            isDragging
+          className={`relative rounded-xl border-2 border-dashed transition-all ${isDragging
               ? "border-primary bg-blue-50"
               : error
-              ? "border-red-300 bg-red-50"
-              : "border-gray-300 bg-gray-50 hover:border-primary hover:bg-blue-50"
-          } p-8 text-center cursor-pointer`}
+                ? "border-red-300 bg-red-50"
+                : "border-gray-300 bg-gray-50 hover:border-primary hover:bg-blue-50"
+            } p-8 text-center cursor-pointer`}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -133,9 +136,8 @@ export const CSVUpload = ({
           />
 
           <div className="flex flex-col items-center gap-3">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-              error ? "bg-red-100" : "bg-primary/10"
-            }`}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${error ? "bg-red-100" : "bg-primary/10"
+              }`}>
               <Upload size={24} className={error ? "text-red-600" : "text-primary"} />
             </div>
 
@@ -160,6 +162,18 @@ export const CSVUpload = ({
               >
                 <Download size={14} />
                 Download sample template
+              </button>
+            )}
+            {allowSample && onUseSample && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUseSample();
+                }}
+                className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+              >
+                <span className="w-5 h-5 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-[10px] font-bold">★</span>
+                Try with sample data
               </button>
             )}
           </div>

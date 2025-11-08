@@ -20,12 +20,14 @@ import { createRun, getPlaybookRecommendations, getRun, getTenantProfile, postOp
 import { type ConnectorConfig } from "../lib/connectorMarketplace";
 import { generateGoalStatement, generateSuggestedGoalsFromBackend, SuggestedGoal } from "../lib/goalGenerator";
 import { calculateGoalProgress, createGoalVersion, GoalVersion, validateSMARTGoal, VersionHistory } from "../lib/goalVersioning";
-import { enrichGoalWithAnswers, generateFollowUpQuestions, generateQuestions, Question, validateAnswer } from "../lib/intelligentQuestioning";
-import { generateDataContextPrompt, suggestConnectorFromIntent, tenantConnectorStore, type TenantConnector } from "../lib/tenantConnectors";
+import { generateQuestions, Question } from "../lib/intelligentQuestioning";
+import { generateDataContextPrompt, tenantConnectorStore, type TenantConnector } from "../lib/tenantConnectors";
 import { ChatConnectorSetup } from "./ChatConnectorSetup";
 import { ConnectedDataSources } from "./ConnectedDataSources";
 import { ConnectorMarketplace } from "./ConnectorMarketplace";
 import { DataSource, DataUploader } from "./DataUploader";
+import { InlineConnectorSelector } from "./InlineConnectorSelector";
+import { InlineDataUploader } from "./InlineDataUploader";
 import { PreferencesModal } from "./PreferencesModal";
 import { ThinkingProgress, ThinkingStep } from "./ThinkingProgress";
 
@@ -36,10 +38,96 @@ const AGENT_SYSTEM_PROMPT = `You are Dyocense's AI Business Assistant.
 - When users mention data systems (POS, inventory, spreadsheets), suggest the best connector succinctly and offer to open the connector picker. If a connector was opened, confirm briefly and continue the conversation.
 - Ask clarifying questions only when needed (timeline, budget, target KPI, constraints), 1–2 at a time.
 - If asked, draft a concise step-by-step plan and call out required data. Prefer concrete, actionable language.
-- Keep answers crisp. End with an explicit next best action.`;
+- Keep answers crisp. End with an explicit next best action.
+
+**Goal Evaluation Guidelines:**
+- When user states a goal, evaluate if it's specific enough to create an actionable plan.
+- If goal has clear metric, target value, and timeframe (e.g., "Reduce costs by 15% in 3 months"), acknowledge it enthusiastically and indicate you'll start creating the plan.
+- If goal is vague (e.g., "improve efficiency"), ask 1-2 focused clarifying questions conversationally:
+  * What specific metric should we track?
+  * What's the target improvement and timeframe?
+  * Any constraints (budget, resources)?
+- Don't lecture about SMART goals - keep it natural and conversational.
+- Once you have enough specifics, confirm the goal and let you know you're creating a detailed plan.
+
+**Data Connection Guidelines:**
+When users need data to accomplish their goals:
+
+1. **Explain the need first**: "To create an accurate forecast, I'll need historical sales data."
+
+2. **Indicate your intent in your response using special markers**:
+   - To show connector options, include: [SHOW_CONNECTORS: crm, accounting] or [SHOW_CONNECTORS: salesforce, xero, shopify]
+   - To show file uploader, include: [SHOW_UPLOADER: csv] or [SHOW_UPLOADER: excel]
+   - Always explain WHY before the marker
+
+3. **Example flows**:
+   User: "Help me forecast sales"
+   You: "I can help! To give accurate predictions, I'll need historical sales data. Do you use a CRM like Salesforce or HubSpot, or do you have sales data in a spreadsheet? [SHOW_CONNECTORS: salesforce, hubspot, pipedrive]"
+   
+   OR if they mention files:
+   You: "Great! Please upload your sales data file. It should include columns like date, sales_amount, and product. [SHOW_UPLOADER: excel]"
+
+4. **Never force data connections**:
+   - Always explain WHY data is needed
+   - Give users a choice to skip if they want
+   - Offer to proceed with sample/demo data if they don't have their own`;
+
 
 // Feature flag to run the assistant in agent-driven mode (no hardcoded Q&A branches)
 const AGENT_DRIVEN_FLOW = true;
+
+// LLM Function Calling Tools for Inline UI
+const AGENT_FUNCTION_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "show_connector_options",
+      description: "Display inline connector selection UI to help user connect business data sources like CRM, accounting, ecommerce platforms, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          connectors: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of suggested connector IDs or categories (e.g., ['salesforce', 'xero', 'shopify'] or ['crm', 'accounting'])"
+          },
+          reason: {
+            type: "string",
+            description: "Brief explanation of why these connectors would help achieve the user's goal (1-2 sentences)"
+          }
+        },
+        required: ["connectors", "reason"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "show_data_uploader",
+      description: "Display inline file upload UI to allow user to upload CSV, Excel, or JSON files for analysis",
+      parameters: {
+        type: "object",
+        properties: {
+          format: {
+            type: "string",
+            enum: ["csv", "excel", "json"],
+            description: "Expected file format"
+          },
+          expectedColumns: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: Expected column names to guide the user (e.g., ['date', 'sales', 'region'])"
+          },
+          reason: {
+            type: "string",
+            description: "Brief explanation of what data is needed and why (1-2 sentences)"
+          }
+        },
+        required: ["format"]
+      }
+    }
+  }
+];
 
 type Message = {
   id: string;
@@ -51,6 +139,18 @@ type Message = {
   feedback?: "positive" | "negative" | null;
   showThinking?: boolean;
   thinkingSteps?: ThinkingStep[];
+  actions?: Array<{
+    label: string;
+    action: "connect" | "preview" | "remove" | "analyze";
+    data?: any;
+  }>;
+  // Inline component rendering for connector/upload flows
+  embeddedComponent?:
+  | "connector-selector"
+  | "data-uploader"
+  | "connector-progress"
+  | "data-preview";
+  componentData?: any;
 };
 
 type ResearchStatus = "idle" | "researching" | "planning" | "ready";
@@ -88,13 +188,16 @@ type AssistantMode = "chat" | "data-upload" | "goal-editing" | "version-history"
 export type AgentAssistantProps = {
   onPlanGenerated?: (plan: PlanOverview) => void;
   profile?: TenantProfile | null;
+  // Project context for plan generation
+  projectId?: string | null;
+  projectName?: string;
   // Seeded goal text to kick off generation from PlanSelector
   seedGoal?: string;
   // Signal to kickoff a fresh new-plan journey. Increment to trigger.
   startNewPlanSignal?: number;
 };
 
-export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPlanSignal }: AgentAssistantProps) {
+export function AgentAssistant({ onPlanGenerated, profile, projectId, projectName, seedGoal, startNewPlanSignal }: AgentAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -121,9 +224,97 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
   const [showConnectorSetup, setShowConnectorSetup] = useState(false);
   const [dataContextPrompt, setDataContextPrompt] = useState<string>("");
 
+  // Phase 3: Enhanced conversation state tracking
+  const [conversationStartTime] = useState<number>(Date.now());
+  const [lastPlanGeneratedTime, setLastPlanGeneratedTime] = useState<number | null>(null);
+  const [conversationTurnCount, setConversationTurnCount] = useState<number>(0);
+  // Multi-agent mode toggle & detection
+  const [multiAgentMode, setMultiAgentMode] = useState<boolean>(false);
+  // Track last multi-agent result for potential structured display (optional future use)
+  const [lastMultiAgentPayload, setLastMultiAgentPayload] = useState<any | null>(null);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper to build context-aware system prompt with project information
+  const buildSystemPrompt = () => {
+    let contextAddition = '';
+    if (projectName) {
+      contextAddition = `\n\n**Current Context:**\nYou are helping the user plan for their project: "${projectName}". All plans and recommendations should be scoped to this project.`;
+    }
+    return AGENT_SYSTEM_PROMPT + contextAddition;
+  };
+
+  // Phase 3: Helper to build rich context for LLM calls
+  const buildEnhancedContext = () => {
+    const conversationDurationMinutes = Math.floor((Date.now() - conversationStartTime) / 60000);
+    const planAge = lastPlanGeneratedTime
+      ? Math.floor((Date.now() - lastPlanGeneratedTime) / 60000)
+      : null;
+
+    return {
+      // Core identifiers
+      tenant_id: profile?.tenant_id,
+      tenant_name: profile?.name,
+      project_id: projectId,
+      project_name: projectName,
+      session_id: `session-${conversationStartTime}`,
+
+      // Conversation state
+      conversation_turns: conversationTurnCount,
+      conversation_duration_minutes: conversationDurationMinutes,
+      has_active_plan: Boolean(plan),
+      plan_age_minutes: planAge,
+      current_goal: currentGoal,
+
+      // User preferences & context
+      preferences: preferences ? {
+        business_type: Array.from(preferences.businessType),
+        objectives: Array.from(preferences.objectiveFocus),
+        budget: Array.from(preferences.budget),
+        markets: Array.from(preferences.markets),
+        operating_pace: Array.from(preferences.operatingPace),
+      } : null,
+
+      // Data availability
+      has_data_sources: dataSources.length > 0,
+      data_sources: dataSources.map(ds => ({
+        id: ds.id,
+        name: ds.name,
+        type: ds.type,
+        rows: ds.metadata?.rows,
+        columns: ds.metadata?.columns,
+        size_mb: ds.metadata?.size ? (ds.metadata.size / 1024 / 1024).toFixed(2) : 0,
+      })),
+
+      // Connected systems
+      connectors: tenantConnectors.map(c => ({
+        id: c.id,
+        name: c.displayName,
+        type: c.connectorName || c.connectorId,
+        status: c.status,
+        connected: c.status === "active",
+      })),
+      active_connectors_count: tenantConnectors.filter(c => c.status === "active").length,
+
+      // Plan state (if exists)
+      plan_summary: plan ? {
+        title: plan.title,
+        stages_count: plan.stages.length,
+        estimated_duration: plan.estimatedDuration,
+        has_quick_wins: plan.quickWins.length > 0,
+      } : null,
+
+      // Conversation metadata
+      message_count: messages.length,
+      last_user_input: messages.filter(m => m.role === "user").slice(-1)[0]?.text,
+      recent_topics: messages
+        .filter(m => m.role === "user")
+        .slice(-5)
+        .map(m => m.text.substring(0, 50)),
+    };
+  };
 
   // Load tenant connectors and data sources from localStorage
   useEffect(() => {
@@ -183,8 +374,9 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     }, 100);
   }, [startNewPlanSignal]);
 
-  // Auto-generate questions when context changes
+  // Auto-generate questions when context changes (legacy structured flow only)
   useEffect(() => {
+    if (AGENT_DRIVEN_FLOW) return; // disable in agent-driven mode
     if (currentGoal && dataSources.length > 0 && pendingQuestions.length === 0) {
       const questions = generateQuestions({
         goal: currentGoal,
@@ -218,66 +410,98 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
 
     setCurrentGoal(trimmed);
     setShowGoalSuggestions(false);
+    setLoading(true);
 
+    // Show immediate user message
     setMessages((m) => [
       ...m,
       {
         id: `user-goal-${Date.now()}`,
         role: "user",
-        text: `I want to: ${trimmed}`,
+        text: trimmed,
         timestamp: Date.now(),
       },
     ]);
 
-    // Create initial goal version (generic)
-    const initialVersion = createGoalVersion(
-      null,
-      {
-        title: trimmed,
-        description: trimmed,
-        metrics: [],
-        timeline: "6 months",
-        status: "draft",
-      },
-      "Initial goal creation",
-      profile?.tenant_id || "user"
-    );
-
-    setGoalVersions({
-      goalId: initialVersion.goalId,
-      versions: [initialVersion],
-      branches: {},
-    });
-    setEditingGoal(initialVersion);
-
-    // Generate contextual questions; if none, proceed to plan generation
-    const questions = generateQuestions({
-      goal: trimmed,
-      businessType: preferences ? Array.from(preferences.businessType)[0] : undefined,
-      dataSources,
-      budget: preferences ? Array.from(preferences.budget)[0] : undefined,
-    });
-
-    if (questions.length > 0) {
-      setPendingQuestions(questions);
-      setMessages((m) => [
-        ...m,
-        {
-          id: `assistant-questions-${Date.now()}`,
-          role: "assistant",
-          text: `Great! To create an accurate, measurable plan, I need to ask a few questions. This will help ensure your goal is SMART (Specific, Measurable, Achievable, Relevant, Time-bound).`,
-          timestamp: Date.now(),
+    // Let LLM evaluate the goal and decide next steps
+    try {
+      const resp = await postOpenAIChat({
+        model: "dyocense-chat-mini",
+        messages: [
+          { role: "system", content: AGENT_SYSTEM_PROMPT },
+          ...messages
+            .filter(m => m.role !== "system")
+            .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+          { role: "user", content: trimmed }
+        ],
+        temperature: 0.3,
+        context: {
+          ...buildEnhancedContext(),
+          goal: trimmed,
+          intent: "goal_evaluation",
         },
-        {
-          id: `question-${Date.now()}`,
-          role: "question",
-          text: questions[0].text,
-          timestamp: Date.now(),
-          question: questions[0],
-        },
-      ]);
-    } else {
-      await generatePlan(trimmed);
+      });
+
+      const content = resp.choices?.[0]?.message?.content ||
+        "Great goal! Let me help you create a detailed action plan.";
+
+      setMessages((m) => [...m, {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: content,
+        timestamp: Date.now(),
+      }]);
+
+      // Analyze LLM response to determine if it needs more info or is ready to plan
+      const lowerContent = content.toLowerCase();
+      const needsMoreInfo = lowerContent.includes("?") ||
+        lowerContent.includes("need to know") ||
+        lowerContent.includes("clarify") ||
+        lowerContent.includes("could you") ||
+        lowerContent.includes("tell me more");
+
+      if (!needsMoreInfo) {
+        // LLM thinks goal is specific enough, proceed to planning
+        const planningIndicators = [
+          "let me create",
+          "i'll create",
+          "creating a plan",
+          "start planning",
+          "here's your plan",
+          "action plan"
+        ];
+        const shouldPlan = planningIndicators.some(indicator =>
+          lowerContent.includes(indicator)
+        );
+
+        if (shouldPlan) {
+          // Give user a moment to read the message, then start planning
+          setTimeout(() => {
+            generatePlan(trimmed);
+          }, 1500);
+        }
+      }
+      // Otherwise, conversation continues naturally with user responding to LLM's questions
+
+      setLoading(false);
+
+    } catch (error) {
+      console.error("Error in goal flow:", error);
+
+      // Fallback: If LLM is unavailable, show a helpful message and still attempt planning
+      setMessages((m) => [...m, {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: `I understand your goal: "${trimmed}". Let me create a detailed action plan for you.`,
+        timestamp: Date.now(),
+      }]);
+
+      // Proceed to planning even without LLM conversation
+      setTimeout(() => {
+        generatePlan(trimmed);
+      }, 1000);
+
+      setLoading(false);
     }
   };
 
@@ -421,6 +645,9 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     }
   };
 
+  // DEPRECATED: Legacy Q&A handler - kept for reference but no longer used
+  // Now using LLM-driven conversational flow in startFlowWithGoalText
+  /*
   const handleQuestionAnswer = (question: Question, answer: string) => {
     const validation = validateAnswer(question, answer);
 
@@ -515,6 +742,7 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
       }
     }
   };
+  */
 
   const handleDataSourceAdded = (source: DataSource) => {
     setDataSources((prev) => {
@@ -540,17 +768,172 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     });
 
     if (source.status === "ready") {
-      setMessages((m) => [
-        ...m,
-        {
-          id: `system-data-${Date.now()}`,
-          role: "system",
-          text: `✓ Data source "${source.name}" connected successfully (${source.metadata?.rows} rows)`,
-          timestamp: Date.now(),
-        },
-      ]);
+      // Call agent to acknowledge and suggest next steps
+      (async () => {
+        try {
+          const resp = await postOpenAIChat({
+            model: "dyocense-chat-mini",
+            messages: [
+              { role: "system", content: AGENT_SYSTEM_PROMPT },
+              ...messages
+                .filter(m => m.role !== "system")
+                .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+              { role: "user", content: `Data source "${source.name}" is now connected with ${source.metadata?.rows} rows and columns: ${source.metadata?.columns?.join(", ")}.` },
+            ],
+            temperature: 0.2,
+            context: {
+              ...buildEnhancedContext(),
+              new_data_source: source.name,
+              intent: "data_source_added",
+            },
+          });
+          const content = resp.choices?.[0]?.message?.content || `✓ Data source "${source.name}" connected successfully (${source.metadata?.rows} rows). What would you like to analyze?`;
+          setMessages((m) => [...m, { id: `assistant-data-${Date.now()}`, role: "assistant", text: content, timestamp: Date.now() }]);
+        } catch {
+          setMessages((m) => [
+            ...m,
+            {
+              id: `system-data-${Date.now()}`,
+              role: "system",
+              text: `✓ Data source "${source.name}" connected successfully (${source.metadata?.rows} rows)`,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+      })();
     }
   };
+
+  const handleDataSourceRemove = async (sourceId: string) => {
+    const source = dataSources.find(s => s.id === sourceId);
+    if (!source) return;
+
+    setDataSources((prev) => {
+      const updated = prev.filter(s => s.id !== sourceId);
+      if (profile?.tenant_id) {
+        try {
+          const key = `dyocense-datasources-${profile.tenant_id}`;
+          localStorage.setItem(key, JSON.stringify(updated));
+        } catch (error) {
+          console.error("Error saving data sources:", error);
+        }
+      }
+      return updated;
+    });
+
+    // Call agent to acknowledge removal
+    try {
+      const resp = await postOpenAIChat({
+        model: "dyocense-chat-mini",
+        messages: [
+          { role: "system", content: AGENT_SYSTEM_PROMPT },
+          ...messages
+            .filter(m => m.role !== "system")
+            .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+          { role: "user", content: `Removed data source "${source.name}".` },
+        ],
+        temperature: 0.2,
+        context: {
+          tenant_id: profile?.tenant_id,
+          has_data_sources: dataSources.length > 1,
+          preferences,
+          data_sources: dataSources.filter(ds => ds.id !== sourceId).map(ds => ({ id: ds.id, name: ds.name, type: ds.type, rows: ds.metadata?.rows })),
+          connectors: tenantConnectors.map(c => ({ id: c.id, name: c.displayName, type: c.connectorName || c.connectorId, status: c.status })),
+        },
+      });
+      const content = resp.choices?.[0]?.message?.content || `✓ Removed "${source.name}".`;
+      setMessages((m) => [...m, { id: `assistant-remove-${Date.now()}`, role: "assistant", text: content, timestamp: Date.now() }]);
+    } catch {
+      setMessages((m) => [...m, { id: `system-remove-${Date.now()}`, role: "system", text: `✓ Removed "${source.name}".`, timestamp: Date.now() }]);
+    }
+  };
+
+  const handleDataSourcePreview = (sourceId: string) => {
+    const source = dataSources.find(s => s.id === sourceId);
+    if (!source || !source.metadata?.previewData) return;
+
+    const previewText = `Preview of "${source.name}" (showing first ${source.metadata.previewData.length} rows):\n\n` +
+      source.metadata.columns?.join(" | ") + "\n" +
+      "---".repeat(source.metadata.columns?.length || 1) + "\n" +
+      source.metadata.previewData.map(row =>
+        source.metadata!.columns!.map(col => row[col]).join(" | ")
+      ).join("\n");
+
+    setMessages((m) => [
+      ...m,
+      {
+        id: `preview-${Date.now()}`,
+        role: "system",
+        text: previewText,
+        timestamp: Date.now(),
+      },
+    ]);
+  };
+
+  const processFileUpload = async (file: File): Promise<DataSource> => {
+    const source: DataSource = {
+      id: `file-${Date.now()}-${Math.random()}`,
+      type: "file",
+      name: file.name,
+      status: "uploading",
+      metadata: { size: file.size },
+    };
+
+    handleDataSourceAdded(source);
+
+    try {
+      const content = await file.text();
+      let parsedData: any[] = [];
+      let columns: string[] = [];
+
+      if (file.name.endsWith('.csv')) {
+        const lines = content.split('\n').filter(l => l.trim());
+        if (lines.length > 0) {
+          columns = lines[0].split(',').map(c => c.trim());
+          parsedData = lines.slice(1).map(line => {
+            const values = line.split(',');
+            const row: any = {};
+            columns.forEach((col, idx) => {
+              row[col] = values[idx]?.trim();
+            });
+            return row;
+          });
+        }
+      } else if (file.name.endsWith('.json')) {
+        const json = JSON.parse(content);
+        parsedData = Array.isArray(json) ? json : [json];
+        if (parsedData.length > 0) {
+          columns = Object.keys(parsedData[0]);
+        }
+      }
+
+      const updatedSource: DataSource = {
+        ...source,
+        status: "ready",
+        metadata: {
+          size: file.size,
+          rows: parsedData.length,
+          columns,
+          previewData: parsedData.slice(0, 5),
+        },
+      };
+
+      handleDataSourceAdded(updatedSource);
+      return updatedSource;
+    } catch (error) {
+      const errorSource: DataSource = {
+        ...source,
+        status: "error",
+        metadata: {
+          size: file.size,
+          error: error instanceof Error ? error.message : "Failed to process file",
+        },
+      };
+      handleDataSourceAdded(errorSource);
+      return errorSource;
+    }
+  };
+
 
   const handleConnectorSelected = (connector: ConnectorConfig) => {
     setSelectedConnectorForSetup(connector);
@@ -563,16 +946,29 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     if (connector && profile?.tenant_id) {
       const updated = await tenantConnectorStore.getAll(profile.tenant_id);
       setTenantConnectors(updated);
-
-      setMessages((m) => [
-        ...m,
-        {
-          id: `system-connector-${Date.now()}`,
-          role: "system",
-          text: `✓ ${connector.displayName} connected successfully! I can now access your ${connector.dataTypes.join(", ")} data.`,
-          timestamp: Date.now(),
-        },
-      ]);
+      // Ask the agent to summarize what's now possible
+      try {
+        const resp = await postOpenAIChat({
+          model: "dyocense-chat-mini",
+          messages: [
+            { role: "system", content: AGENT_SYSTEM_PROMPT },
+            ...messages
+              .filter(m => m.role !== "system")
+              .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+            { role: "user", content: `${connector.displayName} connector is now connected.` },
+          ],
+          temperature: 0.2,
+          context: {
+            ...buildEnhancedContext(),
+            new_connector: connector.displayName,
+            intent: "connector_setup_complete",
+          },
+        });
+        const content = resp.choices?.[0]?.message?.content || `✓ ${connector.displayName} connected. What would you like to do with this data?`;
+        setMessages((m) => [...m, { id: `assistant-connector-${Date.now()}`, role: "assistant", text: content, timestamp: Date.now() }]);
+      } catch {
+        setMessages((m) => [...m, { id: `assistant-connector-${Date.now()}`, role: "assistant", text: `✓ ${connector.displayName} connected. What would you like to do with this data?`, timestamp: Date.now() }]);
+      }
     }
 
     setShowConnectorSetup(false);
@@ -803,6 +1199,7 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
 
       setPlan(newPlan);
+      setLastPlanGeneratedTime(Date.now());
       setResearchStatus("ready");
 
       setMessages((m) => [
@@ -828,86 +1225,256 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
       });
       setMessages((m) => m.map(msg => msg.id === thinkingMsgId ? { ...msg, thinkingSteps: [...thinkingSteps] } : msg));
 
-      // Generate a fallback plan using local logic when backend is unavailable
-      console.warn("Backend unavailable, generating fallback plan...");
+      // Generate fallback plan using LLM instead of hardcoded structure
+      console.warn("Backend unavailable, generating LLM-driven fallback plan...");
 
-      const fallbackPlan: PlanOverview = {
-        title: goal,
-        summary: `Strategic plan to ${goal}. This plan is based on industry best practices and will be refined as you add more data.`,
-        stages: [
-          {
-            id: "stage-1",
-            title: "Discovery & Baseline",
-            description: "Understand current state and set measurable targets",
-            todos: [
-              "Measure current performance metrics",
-              "Identify improvement opportunities",
-              "Set specific, measurable targets",
-              "Get team alignment on goals",
-            ],
-          },
-          {
-            id: "stage-2",
-            title: "Quick Wins (First 30 Days)",
-            description: "Execute high-impact, low-effort improvements",
-            todos: [
-              "Implement top 3 quick-win actions",
-              "Track daily/weekly progress",
-              "Celebrate early successes",
-              "Build momentum with the team",
-            ],
-          },
-          {
-            id: "stage-3",
-            title: "Core Initiatives (Month 2-4)",
-            description: "Execute main transformation activities",
-            todos: [
-              "Roll out strategic improvements",
-              "Monitor KPIs weekly",
-              "Address blockers quickly",
-              "Adjust tactics based on data",
-            ],
-          },
-          {
-            id: "stage-4",
-            title: "Optimize & Scale (Month 5-6)",
-            description: "Refine approach and expand what works",
-            todos: [
-              "Analyze results vs targets",
-              "Double down on what works",
-              "Fix or drop underperformers",
-              "Document lessons learned",
-            ],
-          },
-        ],
-        quickWins: [
-          "Review and optimize your 3 highest-cost areas",
-          "Automate one repetitive manual process",
-          "Set up a simple dashboard to track progress",
-        ],
-        estimatedDuration: questionAnswers.get("goal-timeframe") || "6 months",
-        dataSources: dataSources.map(ds => ({
-          id: ds.id,
-          name: ds.name,
-          type: ds.type,
-          size: ds.metadata?.size || 0,
-        })),
-      };
+      try {
+        // Use LLM to generate a personalized, context-aware plan
+        const planPrompt = `Generate a detailed, actionable business plan for the following goal:
 
-      setPlan(fallbackPlan);
-      setResearchStatus("ready");
+**Goal**: ${goal}
 
-      setMessages((m) => [
-        ...m,
-        {
-          id: `plan-ready-${Date.now()}`,
-          role: "assistant",
-          text: "✅ Your strategic plan is ready! I've created a practical roadmap based on proven business strategies. You can refine this plan as you go, and connect your data sources for more personalized recommendations.",
-          timestamp: Date.now(),
-        },
-      ]);
+**Context**:
+- Project: ${projectName || "Not specified"}
 
-      onPlanGenerated?.(fallbackPlan);
+**Generate a JSON plan with this exact structure**:
+{
+  "title": "Clear, inspiring title for the plan",
+  "summary": "2-3 sentence executive summary explaining what will be achieved and how",
+  "stages": [
+    {
+      "id": "stage-1",
+      "title": "Phase name (e.g., Discovery & Analysis)",
+      "description": "What gets accomplished in this phase",
+      "todos": ["Specific action 1", "Specific action 2", "Specific action 3", "Specific action 4"]
+    },
+    // Include 4 stages total: Discovery, Quick Wins, Core Execution, Optimization
+  ],
+  "quickWins": ["Quick win 1", "Quick win 2", "Quick win 3"],
+  "estimatedDuration": "X months"
+}
+
+**Requirements**:
+1. Make stages specific to the goal (not generic)
+2. Include concrete, actionable todos (not vague advice)
+3. Base quick wins on the goal's focus area
+4. If data sources exist, reference them in the plan
+5. Keep it practical and achievable
+
+Return ONLY the JSON object, no additional text.`;
+
+        const llmResp = await postOpenAIChat({
+          model: "dyocense-chat-mini",
+          messages: [
+            {
+              role: "system",
+              content: buildSystemPrompt() + "\n\nYou are a business planning expert. Generate detailed, actionable plans in JSON format. Be specific and practical, not generic."
+            },
+            {
+              role: "user",
+              content: planPrompt
+            }
+          ],
+          temperature: 0.4, // Slightly higher for creativity but still focused
+          context: {
+            ...buildEnhancedContext(),
+            goal: goal,
+            fallback_mode: true,
+            intent: "fallback_plan_generation",
+          },
+        });
+
+        const llmContent = llmResp.choices?.[0]?.message?.content || "";
+
+        // Try to parse JSON from LLM response
+        let fallbackPlan: PlanOverview;
+
+        try {
+          // Extract JSON if wrapped in code blocks
+          const jsonMatch = llmContent.match(/```json?\s*([\s\S]*?)\s*```/) ||
+            llmContent.match(/\{[\s\S]*\}/);
+          const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : llmContent;
+          const parsedPlan = JSON.parse(jsonStr);
+
+          // Validate and construct PlanOverview
+          fallbackPlan = {
+            title: parsedPlan.title || goal,
+            summary: parsedPlan.summary || `Strategic plan to ${goal}. Based on proven business frameworks.`,
+            stages: (parsedPlan.stages || []).map((stage: any, idx: number) => ({
+              id: stage.id || `stage-${idx + 1}`,
+              title: stage.title || `Phase ${idx + 1}`,
+              description: stage.description || "Execute key initiatives",
+              todos: Array.isArray(stage.todos) ? stage.todos.slice(0, 5) : [
+                "Define success metrics",
+                "Execute planned activities",
+                "Monitor progress",
+                "Adjust based on results"
+              ],
+            })),
+            quickWins: Array.isArray(parsedPlan.quickWins) ? parsedPlan.quickWins.slice(0, 3) : [
+              "Identify and optimize highest-impact area",
+              "Set up basic progress tracking",
+              "Execute one quick improvement"
+            ],
+            estimatedDuration: parsedPlan.estimatedDuration || questionAnswers.get("goal-timeframe") || "6 months",
+            dataSources: dataSources.map(ds => ({
+              id: ds.id,
+              name: ds.name,
+              type: ds.type,
+              size: ds.metadata?.size || 0,
+            })),
+          };
+
+          // Ensure we have at least 3 stages
+          while (fallbackPlan.stages.length < 3) {
+            const phaseNum = fallbackPlan.stages.length + 1;
+            fallbackPlan.stages.push({
+              id: `stage-${phaseNum}`,
+              title: `Phase ${phaseNum}`,
+              description: "Execute key initiatives for this phase",
+              todos: [
+                "Define phase objectives",
+                "Execute planned activities",
+                "Monitor key metrics",
+                "Adjust approach as needed"
+              ],
+            });
+          }
+
+        } catch (parseError) {
+          console.warn("Failed to parse LLM JSON, using LLM text response");
+
+          // Fallback: Use LLM response as summary and create basic structure
+          fallbackPlan = {
+            title: goal,
+            summary: llmContent.substring(0, 300) || `Strategic plan to ${goal}. Based on proven business frameworks and industry best practices.`,
+            stages: [
+              {
+                id: "stage-1",
+                title: "Discovery & Baseline",
+                description: "Understand current state and set measurable targets",
+                todos: [
+                  "Measure current performance metrics",
+                  "Identify improvement opportunities",
+                  "Set specific, measurable targets",
+                  "Get team alignment on goals",
+                ],
+              },
+              {
+                id: "stage-2",
+                title: "Quick Wins (First 30 Days)",
+                description: "Execute high-impact, low-effort improvements",
+                todos: [
+                  "Implement top 3 quick-win actions",
+                  "Track daily/weekly progress",
+                  "Celebrate early successes",
+                  "Build momentum with the team",
+                ],
+              },
+              {
+                id: "stage-3",
+                title: "Core Initiatives",
+                description: "Execute main transformation activities",
+                todos: [
+                  "Roll out strategic improvements",
+                  "Monitor KPIs weekly",
+                  "Address blockers quickly",
+                  "Adjust tactics based on data",
+                ],
+              },
+            ],
+            quickWins: [
+              "Review and optimize your highest-impact area",
+              "Set up simple progress tracking",
+              "Execute one quick improvement this week",
+            ],
+            estimatedDuration: questionAnswers.get("goal-timeframe") || "6 months",
+            dataSources: dataSources.map(ds => ({
+              id: ds.id,
+              name: ds.name,
+              type: ds.type,
+              size: ds.metadata?.size || 0,
+            })),
+          };
+        }
+
+        setPlan(fallbackPlan);
+        setLastPlanGeneratedTime(Date.now());
+        setResearchStatus("ready");
+
+        setMessages((m) => [
+          ...m,
+          {
+            id: `plan-ready-${Date.now()}`,
+            role: "assistant",
+            text: "✅ Your strategic plan is ready! I've created a practical roadmap based on your goal and context. You can refine this plan as you go, and connect your data sources for more personalized recommendations.",
+            timestamp: Date.now(),
+          },
+        ]);
+
+        onPlanGenerated?.(fallbackPlan);
+
+      } catch (llmError) {
+        console.error("LLM fallback also failed, using minimal plan:", llmError);
+
+        // Ultimate fallback: minimal generic plan if even LLM fails
+        const minimalPlan: PlanOverview = {
+          title: goal,
+          summary: `Action plan for: ${goal}. Connect your data sources and I'll help create a more personalized plan.`,
+          stages: [
+            {
+              id: "stage-1",
+              title: "Getting Started",
+              description: "Set up tracking and baseline metrics",
+              todos: [
+                "Define what success looks like",
+                "Measure current state",
+                "Identify key actions",
+                "Set up progress tracking",
+              ],
+            },
+            {
+              id: "stage-2",
+              title: "Take Action",
+              description: "Execute your plan",
+              todos: [
+                "Start with highest-impact actions",
+                "Monitor progress regularly",
+                "Adjust based on results",
+                "Document what works",
+              ],
+            },
+          ],
+          quickWins: [
+            "Identify your highest-impact opportunity",
+            "Take one action this week",
+            "Set up basic tracking",
+          ],
+          estimatedDuration: "6 months",
+          dataSources: dataSources.map(ds => ({
+            id: ds.id,
+            name: ds.name,
+            type: ds.type,
+            size: ds.metadata?.size || 0,
+          })),
+        };
+
+        setPlan(minimalPlan);
+        setLastPlanGeneratedTime(Date.now());
+        setResearchStatus("ready");
+
+        setMessages((m) => [
+          ...m,
+          {
+            id: `plan-ready-${Date.now()}`,
+            role: "assistant",
+            text: "✅ I've created a basic plan to get you started. Connect your data sources or provide more context, and I'll help create a more detailed, personalized plan.",
+            timestamp: Date.now(),
+          },
+        ]);
+
+        onPlanGenerated?.(minimalPlan);
+      }
     }
   };
 
@@ -977,22 +1544,51 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     const userInput = input;
     setInput("");
 
-    if (!AGENT_DRIVEN_FLOW) {
-      // Legacy flow: structured Q&A
-      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-      if (lastMessage && lastMessage.role === "question" && lastMessage.question && !lastMessage.question.answered) {
-        handleQuestionAnswer(lastMessage.question, userInput);
-        return;
-      }
+    // Heuristic: determine if this is a complex strategic goal suitable for multi-agent analysis
+    const isComplexGoal = (text: string) => {
+      const verbs = /(increase|reduce|improve|optimize|forecast|predict|plan|launch|grow|scale|retain|expand)/i;
+      const hasPercentOrTarget = /(\b\d+%\b|\b\d{4}\b|\$\d+)/.test(text);
+      return verbs.test(text) && (text.length > 25 || hasPercentOrTarget);
+    };
 
-      const isFirstMessage = messages.length === 0;
-      const looksLikeGoal = /reduce|increase|improve|grow|cut|boost|optimize|save|earn|achieve|goal|want|need/i.test(userInput);
-      if (isFirstMessage && looksLikeGoal) {
-        await startFlowWithGoalText(userInput);
+    // Parse common intents before calling agent
+    const lowerInput = userInput.toLowerCase();
+
+    // Handle "preview [filename]" intent
+    if (lowerInput.includes("preview")) {
+      const matchedSource = dataSources.find(ds =>
+        lowerInput.includes(ds.name.toLowerCase())
+      );
+      if (matchedSource) {
+        handleDataSourcePreview(matchedSource.id);
+        setMessages((m) => [...m, {
+          id: `user-${Date.now()}`,
+          role: "user",
+          text: userInput,
+          timestamp: Date.now(),
+        }]);
         return;
       }
     }
 
+    // Handle "remove [filename]" intent
+    if (lowerInput.includes("remove") || lowerInput.includes("delete")) {
+      const matchedSource = dataSources.find(ds =>
+        lowerInput.includes(ds.name.toLowerCase())
+      );
+      if (matchedSource) {
+        setMessages((m) => [...m, {
+          id: `user-${Date.now()}`,
+          role: "user",
+          text: userInput,
+          timestamp: Date.now(),
+        }]);
+        await handleDataSourceRemove(matchedSource.id);
+        return;
+      }
+    }
+
+    // Agent-driven flow: all messages go through LLM
     // Add user message to chat
     const userMsg: Message = {
       id: `user-${Date.now()}`,
@@ -1002,47 +1598,201 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
     };
 
     setMessages((m) => [...m, userMsg]);
-    // Check for connector-related keywords and optionally open the marketplace,
-    // but still proceed with an agent response so the conversation remains fluid.
-    const connectorIntent = suggestConnectorFromIntent(userInput);
-    if (connectorIntent && profile?.tenant_id) {
-      setShowConnectorMarketplace(true);
-      setMode("connectors");
-    }
 
-    // Otherwise, process as general chat using backend
+    // Phase 3: Track conversation turn
+    setConversationTurnCount(prev => prev + 1);
+
+    // LLM now handles connector suggestions via function calling (removed hardcoded logic)
+
+    // Process as general chat using backend
     setLoading(true);
 
     try {
-      const oaiResp = await postOpenAIChat({
-        model: "dyocense-chat-mini",
-        messages: [
-          { role: "system", content: AGENT_SYSTEM_PROMPT },
-          ...messages
-            .filter(m => m.role !== "system")
-            .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
-          { role: "user", content: userInput },
-        ],
-        temperature: 0.2,
-        context: {
-          tenant_id: profile?.tenant_id,
-          has_data_sources: dataSources.length > 0,
-          preferences: preferences,
-          data_sources: dataSources.map(ds => ({ id: ds.id, name: ds.name, type: ds.type, rows: ds.metadata?.rows })),
-          connectors: tenantConnectors.map(c => ({ id: c.id, name: c.displayName, type: c.connector_type, status: c.status })),
-          marketplace_opened: Boolean(connectorIntent),
-        },
-      });
+      const useMultiAgent = multiAgentMode || (messages.length === 0 && isComplexGoal(userInput));
+      let message: any = null;
 
-      const content = oaiResp.choices?.[0]?.message?.content || "I'm here to help! You can upload data, select a goal, or ask me questions about your business objectives.";
-      const assistantMsg: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        text: content,
-        timestamp: Date.now(),
-      };
+      if (useMultiAgent) {
+        // Call multi-agent backend endpoint
+        const maResp = await fetch('/v1/chat/multi-agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            goal: userInput,
+            context: {
+              data_sources: dataSources.map(ds => ({ id: ds.id, name: ds.name, type: ds.type })),
+              connectors: tenantConnectors.filter(c => c.status === 'active').map(c => ({ id: c.id, name: c.displayName })),
+            },
+            llm_config: { provider: (window as any).LLM_PROVIDER || 'azure' }
+          })
+        });
+        if (!maResp.ok) throw new Error(`Multi-agent request failed: ${maResp.status}`);
+        const maJson = await maResp.json();
+        setLastMultiAgentPayload(maJson);
+        // Shape a message-like object to reuse existing parsing logic
+        message = { content: maJson.response };
+        // Also append structured analysis messages (compact summaries)
+        const summaries: string[] = [];
+        if (maJson.goal_analysis) summaries.push(`Refined Goal: ${maJson.goal_analysis.refined_goal || userInput}`);
+        if (maJson.data_analysis) summaries.push(`Data Readiness: ${maJson.data_analysis.ready_for_modeling ? 'Ready for modeling' : 'Needs more data'}`);
+        if (maJson.model_results) summaries.push(`Model Insights: ${(maJson.model_results.analysis || '').slice(0, 200)}${(maJson.model_results.analysis || '').length > 200 ? '...' : ''}`);
+        if (maJson.recommendations) summaries.push(`Recommendations prepared.`);
+        if (summaries.length) {
+          setMessages(m => [...m, {
+            id: `ma-summary-${Date.now()}`,
+            role: 'assistant',
+            text: summaries.join('\n'),
+            timestamp: Date.now(),
+          }]);
+        }
+      } else {
+        // Standard single-agent chat flow
+        const oaiResp = await postOpenAIChat({
+          model: "dyocense-chat-mini",
+          messages: [
+            { role: "system", content: AGENT_SYSTEM_PROMPT },
+            ...messages
+              .filter(m => m.role !== "system")
+              .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+            { role: "user", content: userInput },
+          ],
+          temperature: 0.2,
+          ...({
+            tools: AGENT_FUNCTION_TOOLS,
+            tool_choice: "auto",
+          } as any),
+          context: {
+            ...buildEnhancedContext(),
+          },
+        });
+        message = oaiResp.choices?.[0]?.message as any;
+      }
 
-      setMessages((m) => [...m, assistantMsg]);
+      // Handle function calls from LLM (if supported by backend)
+      if (message?.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+        for (const toolCall of message.tool_calls) {
+          try {
+            const args = JSON.parse(toolCall.function.arguments);
+
+            if (toolCall.function.name === "show_connector_options") {
+              const connectorMsg: Message = {
+                id: `connector-${Date.now()}`,
+                role: "assistant",
+                text: args.reason || "Here are some data sources you can connect:",
+                embeddedComponent: "connector-selector",
+                componentData: {
+                  connectors: args.connectors || [],
+                  reason: args.reason,
+                },
+                timestamp: Date.now(),
+              };
+              setMessages(m => [...m, connectorMsg]);
+            } else if (toolCall.function.name === "show_data_uploader") {
+              const uploaderMsg: Message = {
+                id: `uploader-${Date.now()}`,
+                role: "assistant",
+                text: args.reason || "Upload your data file here:",
+                embeddedComponent: "data-uploader",
+                componentData: {
+                  format: args.format || "csv",
+                  expectedColumns: args.expectedColumns,
+                },
+                timestamp: Date.now(),
+              };
+              setMessages(m => [...m, uploaderMsg]);
+            }
+          } catch (parseError) {
+            console.error("Error parsing tool call arguments:", parseError);
+          }
+        }
+      }
+
+      // Handle regular text response and parse for inline UI markers
+      if (message?.content) {
+        let responseText = message.content;
+        console.log("🤖 LLM Response:", responseText);
+
+        // Parse [SHOW_CONNECTORS: ...] marker
+        const connectorMatch = responseText.match(/\[SHOW_CONNECTORS:\s*([^\]]+)\]/i);
+        if (connectorMatch) {
+          console.log("✅ Detected SHOW_CONNECTORS:", connectorMatch[1]);
+          const connectorList = connectorMatch[1].split(',').map((c: string) => c.trim().toLowerCase());
+          responseText = responseText.replace(connectorMatch[0], '').trim();
+
+          // Add text message
+          if (responseText) {
+            setMessages(m => [...m, {
+              id: `assistant-${Date.now()}`,
+              role: "assistant",
+              text: responseText,
+              timestamp: Date.now(),
+            }]);
+          }
+
+          // Add connector selector
+          setMessages(m => [...m, {
+            id: `connector-${Date.now()}`,
+            role: "assistant",
+            text: "Choose a data source to connect:",
+            embeddedComponent: "connector-selector",
+            componentData: {
+              connectors: connectorList,
+              reason: "Select a connector to integrate your business data",
+            },
+            timestamp: Date.now(),
+          }]);
+        }
+        // Parse [SHOW_UPLOADER: ...] marker
+        else if (responseText.match(/\[SHOW_UPLOADER:\s*([^\]]+)\]/i)) {
+          const uploaderMatch = responseText.match(/\[SHOW_UPLOADER:\s*([^\]]+)\]/i);
+          const format = uploaderMatch![1].trim().toLowerCase();
+          console.log("✅ Detected SHOW_UPLOADER:", format);
+          responseText = responseText.replace(uploaderMatch![0], '').trim();
+
+          // Add text message
+          if (responseText) {
+            setMessages(m => [...m, {
+              id: `assistant-${Date.now()}`,
+              role: "assistant",
+              text: responseText,
+              timestamp: Date.now(),
+            }]);
+          }
+
+          // Add uploader
+          setMessages(m => [...m, {
+            id: `uploader-${Date.now()}`,
+            role: "assistant",
+            text: "Upload your data file:",
+            embeddedComponent: "data-uploader",
+            componentData: {
+              format: format === "excel" ? "excel" : "csv",
+              expectedColumns: [],
+            },
+            timestamp: Date.now(),
+          }]);
+        }
+        // No markers found, just show text
+        else {
+          const assistantMsg: Message = {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            text: responseText,
+            timestamp: Date.now(),
+          };
+          setMessages((m) => [...m, assistantMsg]);
+        }
+      }
+
+      // If no content and no tool calls, provide default message
+      if (!message?.content && (!message?.tool_calls || message.tool_calls.length === 0)) {
+        const defaultMsg: Message = {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: "I'm here to help! You can upload data, select a goal, or ask me questions about your business objectives.",
+          timestamp: Date.now(),
+        };
+        setMessages((m) => [...m, defaultMsg]);
+      }
     } catch (error) {
       console.error("Chat error:", error);
       const errorMsg: Message = {
@@ -1054,9 +1804,7 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
       setMessages((m) => [...m, errorMsg]);
     }
     setLoading(false);
-  };
-
-  return (
+  }; return (
     <div className="flex h-full w-full flex-col bg-white relative">
       {/* Header */}
       <div className="border-b border-gray-200 px-4 py-2.5 flex-shrink-0">
@@ -1087,6 +1835,16 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
               <Database size={14} className="inline mr-1" />
               Connectors ({tenantConnectors.filter(c => c.status === "active").length})
             </button>
+            <button
+              onClick={() => setMultiAgentMode(m => !m)}
+              className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${multiAgentMode
+                ? "bg-purple-600 text-white"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}
+              title="Toggle multi-agent strategic analysis"
+            >
+              <GitBranch size={14} className="inline mr-1" />
+              {multiAgentMode ? 'Multi-Agent ON' : 'Multi-Agent'}
+            </button>
             {goalVersions && (
               <button
                 onClick={() => setMode("version-history")}
@@ -1101,6 +1859,14 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
             )}
           </div>
         </div>
+
+        {/* Project Context Display */}
+        {projectName && (
+          <div className="mb-2 flex items-center gap-2 text-xs text-gray-600 bg-blue-50 px-3 py-1.5 rounded-md border border-blue-100">
+            <span className="text-gray-500">Planning for:</span>
+            <span className="font-semibold text-primary">📁 {projectName}</span>
+          </div>
+        )}
 
         {/* Optional: Show preferences button less prominently */}
         {!preferences && (
@@ -1135,74 +1901,136 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-28">
         {mode === "chat" && (
           <>
-            {/* Empty State - Quick Start Actions */}
+            {/* Empty State - Optimized UX Flow */}
             {messages.length === 0 && !plan && (
-              <div className="flex flex-col items-center justify-center h-full px-6">
-                <div className="w-full max-w-md space-y-6">
-                  {/* Welcome Header */}
-                  <div className="text-center">
-                    <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4">
-                      <Sparkles className="text-white" size={32} />
+              <div className="flex flex-col items-center justify-center h-full px-6 py-8">
+                <div className="w-full max-w-2xl space-y-8">
+                  {/* Hero Section */}
+                  <div className="text-center space-y-4">
+                    <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 rounded-3xl mb-2 shadow-lg">
+                      <Sparkles className="text-white" size={40} />
                     </div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-2">
-                      Let's grow your business
-                    </h3>
-                    <p className="text-sm text-gray-600">
-                      Tell me your goal and I'll create a step-by-step plan to achieve it
+                    <h2 className="text-3xl font-bold text-gray-900 tracking-tight">
+                      Let's create your action plan
+                    </h2>
+                    <p className="text-base text-gray-600 max-w-md mx-auto">
+                      I'll help you turn your business goal into a detailed, step-by-step plan with milestones and actionable tasks.
                     </p>
                   </div>
 
-                  {/* Quick Start Examples */}
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      Popular goals
-                    </p>
+                  {/* Quick Start Cards - Prominent CTAs */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {[
-                      { icon: "💰", text: "Reduce costs by 15%", color: "blue" },
-                      { icon: "📈", text: "Increase sales by 20%", color: "green" },
-                      { icon: "⚡", text: "Improve efficiency", color: "purple" },
-                      { icon: "👥", text: "Grow customer base", color: "orange" },
-                    ].map((example) => (
+                      {
+                        icon: "💰",
+                        title: "Cut Costs",
+                        description: "Reduce expenses by 15% in 3 months",
+                        gradient: "from-emerald-500 to-teal-600",
+                        hoverGradient: "from-emerald-600 to-teal-700"
+                      },
+                      {
+                        icon: "�",
+                        title: "Boost Revenue",
+                        description: "Increase sales by 20% this quarter",
+                        gradient: "from-blue-500 to-indigo-600",
+                        hoverGradient: "from-blue-600 to-indigo-700"
+                      },
+                      {
+                        icon: "⚡",
+                        title: "Optimize Operations",
+                        description: "Improve efficiency and productivity",
+                        gradient: "from-purple-500 to-pink-600",
+                        hoverGradient: "from-purple-600 to-pink-700"
+                      },
+                      {
+                        icon: "👥",
+                        title: "Grow Customers",
+                        description: "Expand customer base by 30%",
+                        gradient: "from-orange-500 to-red-600",
+                        hoverGradient: "from-orange-600 to-red-700"
+                      },
+                    ].map((card, idx) => (
                       <button
-                        key={example.text}
+                        key={card.title}
                         onClick={() => {
-                          setInput(example.text);
-                          chatInputRef.current?.focus();
+                          startFlowWithGoalText(card.description);
                         }}
-                        className={`w-full text-left px-4 py-3 rounded-xl border-2 border-gray-200 hover:border-${example.color}-300 hover:bg-${example.color}-50 transition-all group`}
+                        className="group relative overflow-hidden rounded-2xl border-2 border-gray-200 bg-white p-6 text-left shadow-sm hover:shadow-xl hover:border-transparent hover:-translate-y-1 transition-all duration-300"
+                        style={{ animationDelay: `${idx * 100}ms` }}
                       >
-                        <div className="flex items-center gap-3">
-                          <span className="text-2xl">{example.icon}</span>
-                          <span className="text-sm font-medium text-gray-700 group-hover:text-gray-900">
-                            {example.text}
-                          </span>
+                        {/* Gradient overlay on hover */}
+                        <div className={`absolute inset-0 bg-gradient-to-br ${card.gradient} opacity-0 group-hover:opacity-100 transition-opacity duration-300`}></div>
+
+                        {/* Content */}
+                        <div className="relative z-10">
+                          <div className="flex items-start justify-between mb-3">
+                            <span className="text-4xl mb-2 transform group-hover:scale-110 transition-transform duration-300">
+                              {card.icon}
+                            </span>
+                            <span className="text-gray-400 group-hover:text-white transition-colors">
+                              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                              </svg>
+                            </span>
+                          </div>
+                          <h3 className="text-lg font-bold text-gray-900 group-hover:text-white mb-1 transition-colors">
+                            {card.title}
+                          </h3>
+                          <p className="text-sm text-gray-600 group-hover:text-white/90 transition-colors">
+                            {card.description}
+                          </p>
                         </div>
                       </button>
                     ))}
                   </div>
 
-                  {/* Data Connection CTA */}
+                  {/* Divider with "OR" */}
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-200"></div>
+                    </div>
+                    <div className="relative flex justify-center text-sm">
+                      <span className="px-4 bg-white text-gray-500 font-medium">OR</span>
+                    </div>
+                  </div>
+
+                  {/* Custom Input Prompt */}
+                  <div className="text-center space-y-4">
+                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-50 border border-blue-200">
+                      <Target size={16} className="text-blue-600" />
+                      <span className="text-sm font-medium text-blue-900">Have a specific goal in mind?</span>
+                    </div>
+                    <div className="flex items-center justify-center gap-2 text-gray-600">
+                      <span className="text-base">Type it in the box below</span>
+                      <span className="text-2xl animate-bounce">👇</span>
+                    </div>
+                  </div>
+
+                  {/* Optional Feature Showcase */}
                   {tenantConnectors.filter(c => c.status === "active").length === 0 && (
-                    <div className="pt-4 border-t border-gray-200">
-                      <button
-                        onClick={handleOpenConnectorMarketplace}
-                        className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 hover:border-blue-300 transition-all group"
-                      >
-                        <div className="flex items-center gap-3">
-                          <Database size={20} className="text-blue-600" />
-                          <div className="text-left">
-                            <p className="text-sm font-semibold text-gray-900">
-                              Connect your data
+                    <div className="pt-4">
+                      <div className="rounded-2xl bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 p-6 border border-blue-100">
+                        <div className="flex items-start gap-4">
+                          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center">
+                            <Database size={20} className="text-blue-600" />
+                          </div>
+                          <div className="flex-1">
+                            <h4 className="text-sm font-semibold text-gray-900 mb-1">
+                              💡 Pro Tip: Connect Your Data
+                            </h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              Link your business systems for AI-powered insights and personalized recommendations.
                             </p>
-                            <p className="text-xs text-gray-600">
-                              Get personalized recommendations
-                            </p>
+                            <button
+                              onClick={handleOpenConnectorMarketplace}
+                              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all text-sm font-medium text-gray-900 shadow-sm"
+                            >
+                              <span>Browse Connectors</span>
+                              <span className="text-blue-600">→</span>
+                            </button>
                           </div>
                         </div>
-                        <span className="text-blue-600 group-hover:translate-x-1 transition-transform">
-                          →
-                        </span>
-                      </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1248,7 +2076,50 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
 
                       <div className="whitespace-pre-wrap text-sm">{msg.text}</div>
 
-                      {/* Quick Reply Buttons for Questions */}
+                      {/* Embedded Components for Inline Connector/Upload Flow */}
+                      {msg.embeddedComponent === "connector-selector" && msg.componentData && (
+                        <InlineConnectorSelector
+                          connectors={msg.componentData.connectors || []}
+                          reason={msg.componentData.reason}
+                          onSelect={handleConnectorSelected}
+                        />
+                      )}
+
+                      {msg.embeddedComponent === "data-uploader" && msg.componentData && (
+                        <InlineDataUploader
+                          format={msg.componentData.format || "csv"}
+                          expectedColumns={msg.componentData.expectedColumns}
+                          onUploadComplete={handleDataSourceAdded}
+                        />
+                      )}
+
+                      {/* Action Buttons for file uploads and data operations */}
+                      {msg.actions && msg.actions.length > 0 && (
+                        <div className="mt-4 pt-3 border-t border-gray-200">
+                          <div className="flex flex-wrap gap-2">
+                            {msg.actions.map((action, idx) => (
+                              <button
+                                key={idx}
+                                onClick={async () => {
+                                  if (action.action === "preview") {
+                                    handleDataSourcePreview(action.data?.sourceId);
+                                  } else if (action.action === "remove") {
+                                    await handleDataSourceRemove(action.data?.sourceId);
+                                  } else if (action.action === "analyze") {
+                                    setInput(`Analyze the data in ${dataSources.find(ds => ds.id === action.data?.sourceId)?.name}`);
+                                    chatInputRef.current?.focus();
+                                  }
+                                }}
+                                className="rounded-lg border-2 border-primary bg-white px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary hover:text-white transition-all"
+                              >
+                                {action.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* DEPRECATED: Quick Reply Buttons for Questions - No longer used with LLM-driven flow
                       {msg.question?.suggestedAnswers && !msg.question.answered && (
                         <div className="mt-4 pt-3 border-t border-amber-200">
                           <p className="text-xs font-semibold text-gray-600 mb-2">Quick replies:</p>
@@ -1266,6 +2137,7 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
                           <p className="text-xs text-gray-500 mt-2 italic">Or type your own answer below</p>
                         </div>
                       )}
+                      */}
 
                       {/* Feedback buttons for assistant messages */}
                       {msg.role === "assistant" && !msg.question && (
@@ -1450,106 +2322,172 @@ export function AgentAssistant({ onPlanGenerated, profile, seedGoal, startNewPla
         )}
       </div>
 
-      {/* Floating Input Area - Absolutely positioned at bottom */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-white border-t border-gray-200 px-6 py-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+      {/* Floating Input Area - Enhanced UX */}
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-white via-white to-white/80 border-t border-gray-200 px-6 py-4 shadow-[0_-8px_16px_-4px_rgba(0,0,0,0.1)] backdrop-blur-sm">
+        {/* Input hint for empty state */}
+        {messages.length === 0 && !loading && (
+          <div className="mb-2 flex items-center justify-center gap-2 text-xs text-gray-500">
+            <Lightbulb size={14} className="text-yellow-500" />
+            <span>Example: "Reduce inventory costs by 20% in the next quarter"</span>
+          </div>
+        )}
+
         <form
-          className="flex gap-2 items-center"
+          className="flex gap-3 items-end max-w-4xl mx-auto"
           onSubmit={e => { e.preventDefault(); handleSend(); }}
           encType="multipart/form-data"
         >
-          <input
-            data-chat-input
-            ref={chatInputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            placeholder={
-              pendingQuestions.some((q) => !q.answered && q.required)
-                ? "Type your answer..."
-                : messages.length === 0
-                  ? "What's your business goal? (e.g., Cut costs by 15%)"
-                  : "Ask me anything..."
-            }
-            className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            disabled={loading}
-          />
-          <label htmlFor="chat-file-upload" className="cursor-pointer flex items-center px-3 py-2 rounded-xl border border-gray-300 bg-gray-50 hover:bg-gray-100">
-            <FileUp size={18} className="text-primary mr-1" />
-            <span className="text-xs text-gray-700">Upload</span>
+          <div className="flex-1 relative">
             <input
-              id="chat-file-upload"
-              type="file"
-              multiple
-              style={{ display: "none" }}
-              onChange={async (e) => {
-                const files = Array.from(e.target.files || []);
-                for (const file of files) {
-                  // Add user message for upload
-                  setMessages((m) => [
-                    ...m,
-                    {
-                      id: `file-upload-${Date.now()}-${file.name}`,
-                      role: "user",
-                      text: `Uploaded file: ${file.name}`,
-                      files: [{ name: file.name, size: file.size }],
-                      timestamp: Date.now(),
-                    },
-                  ]);
-                  // Call agent/LLM for next step after upload
-                  setLoading(true);
-                  try {
-                    const oaiResp = await postOpenAIChat({
-                      model: "dyocense-chat-mini",
-                      messages: [
-                        ...messages
-                          .filter(m => m.role !== "system")
-                          .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
-                        { role: "user", content: `Uploaded file: ${file.name}` }
-                      ],
-                      temperature: 0.2,
-                      context: {
-                        tenant_id: profile?.tenant_id,
-                        has_data_sources: true,
-                        preferences: preferences,
-                        uploaded_file: { name: file.name, size: file.size }
-                      },
-                    });
-                    const content = oaiResp.choices?.[0]?.message?.content || `File \"${file.name}\" uploaded! Would you like to connect or preview the data?`;
-                    setMessages((m) => [
-                      ...m,
-                      {
-                        id: `file-action-${Date.now()}-${file.name}`,
-                        role: "assistant",
-                        text: content,
-                        timestamp: Date.now(),
-                      },
-                    ]);
-                  } catch (err) {
-                    setMessages((m) => [
-                      ...m,
-                      {
-                        id: `file-action-error-${Date.now()}-${file.name}`,
-                        role: "assistant",
-                        text: `File \"${file.name}\" uploaded, but I couldn't reach the agent for next steps. Please try again.`,
-                        timestamp: Date.now(),
-                      },
-                    ]);
-                  }
-                  setLoading(false);
-                }
-                // Reset file input
-                e.target.value = "";
-              }}
+              data-chat-input
+              ref={chatInputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+              placeholder={
+                pendingQuestions.some((q) => !q.answered && q.required)
+                  ? "Type your answer..."
+                  : messages.length === 0
+                    ? "Describe your business goal in your own words..."
+                    : "Ask me anything..."
+              }
+              className="w-full rounded-2xl border-2 border-gray-300 px-5 py-3.5 pr-12 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all disabled:bg-gray-50 disabled:cursor-not-allowed"
+              disabled={loading}
             />
-          </label>
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="rounded-xl bg-primary px-6 py-3 font-semibold text-white hover:bg-primary/90 disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
-          </button>
+            {/* Character count for longer inputs */}
+            {input.length > 50 && (
+              <span className="absolute right-3 bottom-3 text-xs text-gray-400">
+                {input.length}
+              </span>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-2">
+            <label
+              htmlFor="chat-file-upload"
+              className={`cursor-pointer flex items-center gap-2 px-4 py-3.5 rounded-2xl border-2 border-gray-300 bg-white hover:bg-gray-50 hover:border-gray-400 transition-all shadow-sm ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Upload data file (CSV, Excel)"
+            >
+              <FileUp size={20} className="text-gray-600" />
+              <span className="text-sm font-medium text-gray-700 hidden sm:inline">Upload</span>
+              <input
+                id="chat-file-upload"
+                type="file"
+                multiple
+                disabled={loading}
+                accept=".csv,.xlsx,.xls,.json"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files || []);
+                  setLoading(true);
+
+                  for (const file of files) {
+                    // Process and persist file
+                    const processedSource = await processFileUpload(file);
+
+                    // Add user message for upload
+                    setMessages((m) => [
+                      ...m,
+                      {
+                        id: `file-upload-${Date.now()}-${file.name}`,
+                        role: "user",
+                        text: `Uploaded file: ${file.name}`,
+                        files: [{ name: file.name, size: file.size }],
+                        timestamp: Date.now(),
+                      },
+                    ]);
+
+                    // Call agent/LLM for next step after upload
+                    try {
+                      const oaiResp = await postOpenAIChat({
+                        model: "dyocense-chat-mini",
+                        messages: [
+                          { role: "system", content: AGENT_SYSTEM_PROMPT },
+                          ...messages
+                            .filter(m => m.role !== "system")
+                            .map(m => ({ role: (m.role === "question" ? "assistant" : m.role) as any, content: m.text })),
+                          { role: "user", content: `Uploaded file: ${file.name} (${processedSource.metadata?.rows} rows, ${processedSource.metadata?.columns?.length} columns: ${processedSource.metadata?.columns?.join(", ")})` }
+                        ],
+                        temperature: 0.2,
+                        context: {
+                          tenant_id: profile?.tenant_id,
+                          has_data_sources: true,
+                          preferences: preferences,
+                          uploaded_file: {
+                            name: file.name,
+                            size: file.size,
+                            rows: processedSource.metadata?.rows,
+                            columns: processedSource.metadata?.columns,
+                          },
+                          data_sources: [...dataSources, processedSource].map(ds => ({ id: ds.id, name: ds.name, type: ds.type, rows: ds.metadata?.rows, columns: ds.metadata?.columns })),
+                          connectors: tenantConnectors.map(c => ({ id: c.id, name: c.displayName, type: c.connectorName || c.connectorId, status: c.status })),
+                        },
+                      });
+                      const content = oaiResp.choices?.[0]?.message?.content || `File "${file.name}" uploaded with ${processedSource.metadata?.rows} rows!`;
+                      setMessages((m) => [
+                        ...m,
+                        {
+                          id: `file-action-${Date.now()}-${file.name}`,
+                          role: "assistant",
+                          text: content,
+                          timestamp: Date.now(),
+                          actions: processedSource.status === "ready" ? [
+                            { label: "Preview Data", action: "preview", data: { sourceId: processedSource.id } },
+                            { label: "Analyze", action: "analyze", data: { sourceId: processedSource.id } },
+                            { label: "Remove", action: "remove", data: { sourceId: processedSource.id } },
+                          ] : undefined,
+                        },
+                      ]);
+                    } catch (err) {
+                      console.error("Agent error after upload:", err);
+                      setMessages((m) => [
+                        ...m,
+                        {
+                          id: `file-action-error-${Date.now()}-${file.name}`,
+                          role: "assistant",
+                          text: `File "${file.name}" uploaded with ${processedSource.metadata?.rows || 0} rows. What would you like to do with it?`,
+                          timestamp: Date.now(),
+                          actions: processedSource.status === "ready" ? [
+                            { label: "Preview Data", action: "preview", data: { sourceId: processedSource.id } },
+                            { label: "Analyze", action: "analyze", data: { sourceId: processedSource.id } },
+                            { label: "Remove", action: "remove", data: { sourceId: processedSource.id } },
+                          ] : undefined,
+                        },
+                      ]);
+                    }
+                  }
+
+                  setLoading(false);
+                  // Reset file input
+                  e.target.value = "";
+                }}
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className={`flex items-center gap-2 px-6 py-3.5 rounded-2xl font-semibold text-white shadow-lg transition-all ${loading || !input.trim()
+                ? 'bg-gray-300 cursor-not-allowed'
+                : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 hover:shadow-xl hover:scale-105 active:scale-95'
+                }`}
+              title={!input.trim() ? "Type a message to send" : "Send message"}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  <span className="hidden sm:inline">Thinking...</span>
+                </>
+              ) : (
+                <>
+                  <Send size={20} />
+                  <span className="hidden sm:inline">Send</span>
+                </>
+              )}
+            </button>
+          </div>
         </form>
       </div>
 

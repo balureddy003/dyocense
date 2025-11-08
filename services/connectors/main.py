@@ -8,11 +8,10 @@ Supports OAuth flows, API key authentication, and connector testing.
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pymongo import MongoClient
 from pydantic import BaseModel, Field
 
 from packages.kernel_common.deps import require_auth
@@ -23,7 +22,8 @@ from packages.connectors.models import (
     ConnectorTestResult,
     SyncFrequency,
 )
-from packages.connectors.repository import ConnectorRepository
+from packages.connectors.repository import ConnectorRepository as MongoConnectorRepository
+from packages.connectors.repository_postgres import ConnectorRepositoryPG
 from packages.connectors.testing import ConnectorTester
 
 # Connector marketplace metadata
@@ -31,12 +31,26 @@ from packages.connectors.catalog import CONNECTOR_CATALOG
 
 logger = logging.getLogger(__name__)
 
-# MongoDB connection
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-mongo_client = MongoClient(MONGO_URI)
+# Initialize repository based on configured backend
+BACKEND = os.getenv("PERSISTENCE_BACKEND", "postgres").lower()
+USE_MONGODB = os.getenv("USE_MONGODB", "false").lower() == "true"
 
-# Initialize repository
-connector_repo = ConnectorRepository(mongo_client)
+connector_repo: Any
+mongo_client = None
+if USE_MONGODB or BACKEND == "mongodb":
+    try:
+        from pymongo import MongoClient  # local import to avoid hard dependency
+        MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        mongo_client = MongoClient(MONGO_URI)
+        connector_repo = MongoConnectorRepository(mongo_client)
+        logger.info("Connectors repository: MongoDB")
+    except Exception as e:
+        logger.error(f"Failed to initialize Mongo repository: {e}")
+        logger.info("Falling back to Postgres repository.")
+        connector_repo = ConnectorRepositoryPG()
+else:
+    connector_repo = ConnectorRepositoryPG()
+    logger.info("Connectors repository: Postgres")
 connector_tester = ConnectorTester()
 
 
@@ -46,7 +60,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Connectors service...")
     yield
     logger.info("Shutting down Connectors service...")
-    mongo_client.close()
+    if mongo_client is not None:
+        try:
+            mongo_client.close()
+        except Exception:
+            pass
 
 
 app = FastAPI(

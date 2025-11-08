@@ -8,18 +8,26 @@
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- =====================================================================
 -- Schema Organization
 -- =====================================================================
 CREATE SCHEMA IF NOT EXISTS tenants;
+
 CREATE SCHEMA IF NOT EXISTS runs;
+
 CREATE SCHEMA IF NOT EXISTS connectors;
+
 CREATE SCHEMA IF NOT EXISTS evidence;
+
 CREATE SCHEMA IF NOT EXISTS knowledge;
+
 CREATE SCHEMA IF NOT EXISTS system;
 
 -- =====================================================================
@@ -36,18 +44,23 @@ CREATE TABLE tenants.tenants (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   metadata JSONB DEFAULT '{}',
-  
-  -- Resource limits based on tier
-  limits JSONB DEFAULT jsonb_build_object(
-    'max_users', 10,
-    'max_projects', 50,
-    'max_runs_per_month', 1000,
-    'max_connectors', 10,
-    'max_storage_gb', 10
-  ),
-  
-  -- Usage tracking
-  usage JSONB DEFAULT jsonb_build_object(
+
+-- Resource limits based on tier
+limits JSONB DEFAULT jsonb_build_object (
+    'max_users',
+    10,
+    'max_projects',
+    50,
+    'max_runs_per_month',
+    1000,
+    'max_connectors',
+    10,
+    'max_storage_gb',
+    10
+),
+
+-- Usage tracking
+usage JSONB DEFAULT jsonb_build_object(
     'users_count', 0,
     'projects_count', 0,
     'runs_this_month', 0,
@@ -58,9 +71,12 @@ CREATE TABLE tenants.tenants (
   CONSTRAINT valid_plan_tier CHECK (plan_tier IN ('smb_starter', 'smb_growth', 'enterprise'))
 );
 
-CREATE INDEX idx_tenants_status ON tenants.tenants(status);
-CREATE INDEX idx_tenants_plan_tier ON tenants.tenants(plan_tier);
-CREATE INDEX idx_tenants_owner_email ON tenants.tenants(owner_email);
+CREATE INDEX idx_tenants_status ON tenants.tenants (status);
+
+CREATE INDEX idx_tenants_plan_tier ON tenants.tenants (plan_tier);
+
+CREATE INDEX idx_tenants_owner_email ON tenants.tenants (owner_email);
+
 
 CREATE TABLE tenants.users (
   user_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -79,9 +95,12 @@ CREATE TABLE tenants.users (
   CONSTRAINT valid_status CHECK (status IN ('active', 'suspended', 'deleted'))
 );
 
-CREATE INDEX idx_users_tenant ON tenants.users(tenant_id);
-CREATE INDEX idx_users_email ON tenants.users(email);
-CREATE INDEX idx_users_status ON tenants.users(tenant_id, status);
+CREATE INDEX idx_users_tenant ON tenants.users (tenant_id);
+
+CREATE INDEX idx_users_email ON tenants.users (email);
+
+CREATE INDEX idx_users_status ON tenants.users (tenant_id, status);
+
 
 CREATE TABLE tenants.projects (
   project_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -98,8 +117,9 @@ CREATE TABLE tenants.projects (
   CONSTRAINT unique_tenant_project_name UNIQUE(tenant_id, name)
 );
 
-CREATE INDEX idx_projects_tenant ON tenants.projects(tenant_id);
-CREATE INDEX idx_projects_owner ON tenants.projects(owner_id);
+CREATE INDEX idx_projects_tenant ON tenants.projects (tenant_id);
+
+CREATE INDEX idx_projects_owner ON tenants.projects (owner_id);
 
 -- =====================================================================
 -- RUNS SCHEMA
@@ -111,18 +131,17 @@ CREATE TABLE runs.runs (
   project_id TEXT REFERENCES tenants.projects(project_id) ON DELETE SET NULL,
   user_id TEXT REFERENCES tenants.users(user_id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending',
-  
-  -- Core payload and results
-  ops_payload JSONB NOT NULL,
-  solution_pack JSONB,
-  
-  -- Execution metadata
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  duration_seconds NUMERIC,
-  
-  -- Error tracking
-  error_message TEXT,
+
+-- Core payload and results
+ops_payload JSONB NOT NULL, solution_pack JSONB,
+
+-- Execution metadata
+started_at TIMESTAMPTZ,
+completed_at TIMESTAMPTZ,
+duration_seconds NUMERIC,
+
+-- Error tracking
+error_message TEXT,
   error_details JSONB,
   
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -132,14 +151,19 @@ CREATE TABLE runs.runs (
   CONSTRAINT valid_status CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled'))
 );
 
-CREATE INDEX idx_runs_tenant ON runs.runs(tenant_id, created_at DESC);
-CREATE INDEX idx_runs_project ON runs.runs(project_id, created_at DESC);
-CREATE INDEX idx_runs_status ON runs.runs(status, created_at DESC);
-CREATE INDEX idx_runs_user ON runs.runs(user_id);
+CREATE INDEX idx_runs_tenant ON runs.runs (tenant_id, created_at DESC);
+
+CREATE INDEX idx_runs_project ON runs.runs (project_id, created_at DESC);
+
+CREATE INDEX idx_runs_status ON runs.runs (status, created_at DESC);
+
+CREATE INDEX idx_runs_user ON runs.runs (user_id);
 
 -- GIN index for JSONB queries
-CREATE INDEX idx_runs_ops_payload ON runs.runs USING GIN(ops_payload);
-CREATE INDEX idx_runs_solution_pack ON runs.runs USING GIN(solution_pack);
+CREATE INDEX idx_runs_ops_payload ON runs.runs USING GIN (ops_payload);
+
+CREATE INDEX idx_runs_solution_pack ON runs.runs USING GIN (solution_pack);
+
 
 CREATE TABLE runs.run_steps (
   step_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -158,7 +182,7 @@ CREATE TABLE runs.run_steps (
   CONSTRAINT valid_step_status CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped'))
 );
 
-CREATE INDEX idx_run_steps_run ON runs.run_steps(run_id, created_at);
+CREATE INDEX idx_run_steps_run ON runs.run_steps (run_id, created_at);
 
 -- =====================================================================
 -- CONNECTORS SCHEMA
@@ -168,10 +192,16 @@ CREATE TABLE connectors.connectors (
   connector_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
   connector_type TEXT NOT NULL,
+  connector_name TEXT NOT NULL,
   display_name TEXT NOT NULL,
-  
-  -- Encrypted credentials
-  config_encrypted BYTEA,
+  category TEXT,
+  icon TEXT,
+  data_types TEXT[] DEFAULT ARRAY[]::TEXT[],
+  sync_frequency TEXT NOT NULL DEFAULT 'manual',
+  created_by TEXT,
+
+-- Encrypted credentials
+config_encrypted BYTEA,
   encryption_key_id TEXT,
   
   status TEXT NOT NULL DEFAULT 'active',
@@ -187,8 +217,10 @@ CREATE TABLE connectors.connectors (
   CONSTRAINT valid_status CHECK (status IN ('active', 'inactive', 'error', 'deleted'))
 );
 
-CREATE INDEX idx_connectors_tenant ON connectors.connectors(tenant_id, status);
-CREATE INDEX idx_connectors_type ON connectors.connectors(connector_type);
+CREATE INDEX idx_connectors_tenant ON connectors.connectors (tenant_id, status);
+
+CREATE INDEX idx_connectors_type ON connectors.connectors (connector_type);
+
 
 CREATE TABLE connectors.sync_history (
   sync_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -203,7 +235,7 @@ CREATE TABLE connectors.sync_history (
   CONSTRAINT valid_sync_status CHECK (status IN ('running', 'completed', 'failed', 'cancelled'))
 );
 
-CREATE INDEX idx_sync_history_connector ON connectors.sync_history(connector_id, started_at DESC);
+CREATE INDEX idx_sync_history_connector ON connectors.sync_history (connector_id, started_at DESC);
 
 -- =====================================================================
 -- EVIDENCE SCHEMA (Graph-like structure in Postgres)
@@ -219,10 +251,13 @@ CREATE TABLE evidence.evidence_nodes (
   metadata JSONB DEFAULT '{}'
 );
 
-CREATE INDEX idx_evidence_nodes_run ON evidence.evidence_nodes(run_id);
-CREATE INDEX idx_evidence_nodes_tenant ON evidence.evidence_nodes(tenant_id);
-CREATE INDEX idx_evidence_nodes_type ON evidence.evidence_nodes(node_type);
-CREATE INDEX idx_evidence_nodes_properties ON evidence.evidence_nodes USING GIN(properties);
+CREATE INDEX idx_evidence_nodes_run ON evidence.evidence_nodes (run_id);
+
+CREATE INDEX idx_evidence_nodes_tenant ON evidence.evidence_nodes (tenant_id);
+
+CREATE INDEX idx_evidence_nodes_type ON evidence.evidence_nodes (node_type);
+
+CREATE INDEX idx_evidence_nodes_properties ON evidence.evidence_nodes USING GIN (properties);
 
 CREATE TABLE evidence.evidence_edges (
   edge_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -235,10 +270,13 @@ CREATE TABLE evidence.evidence_edges (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_evidence_edges_run ON evidence.evidence_edges(run_id);
-CREATE INDEX idx_evidence_edges_from ON evidence.evidence_edges(from_node);
-CREATE INDEX idx_evidence_edges_to ON evidence.evidence_edges(to_node);
-CREATE INDEX idx_evidence_edges_type ON evidence.evidence_edges(relationship_type);
+CREATE INDEX idx_evidence_edges_run ON evidence.evidence_edges (run_id);
+
+CREATE INDEX idx_evidence_edges_from ON evidence.evidence_edges (from_node);
+
+CREATE INDEX idx_evidence_edges_to ON evidence.evidence_edges (to_node);
+
+CREATE INDEX idx_evidence_edges_type ON evidence.evidence_edges (relationship_type);
 
 -- =====================================================================
 -- KNOWLEDGE SCHEMA (Vector embeddings for RAG)
@@ -257,58 +295,76 @@ CREATE TABLE knowledge.documents (
   metadata JSONB DEFAULT '{}'
 );
 
-CREATE INDEX idx_documents_tenant ON knowledge.documents(tenant_id);
-CREATE INDEX idx_documents_project ON knowledge.documents(project_id);
-CREATE INDEX idx_documents_type ON knowledge.documents(document_type);
+CREATE INDEX idx_documents_tenant ON knowledge.documents (tenant_id);
+
+CREATE INDEX idx_documents_project ON knowledge.documents (project_id);
+
+CREATE INDEX idx_documents_type ON knowledge.documents (document_type);
 
 -- Vector similarity search index (IVFFlat for cost-efficiency)
-CREATE INDEX idx_documents_embedding ON knowledge.documents 
-  USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+CREATE INDEX idx_documents_embedding ON knowledge.documents USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
 
 -- Full-text search
-CREATE INDEX idx_documents_content_fts ON knowledge.documents USING GIN(to_tsvector('english', content));
+CREATE INDEX idx_documents_content_fts ON knowledge.documents USING GIN (
+    to_tsvector ('english', content)
+);
 
 -- =====================================================================
 -- SYSTEM SCHEMA (Events, Audit, Background Jobs)
 -- =====================================================================
 
 CREATE TABLE system.event_queue (
-  event_id BIGSERIAL PRIMARY KEY,
-  event_type TEXT NOT NULL,
-  payload JSONB NOT NULL,
-  tenant_id TEXT REFERENCES tenants.tenants(tenant_id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  priority INTEGER DEFAULT 0,
-  scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  processed_at TIMESTAMPTZ,
-  error_message TEXT,
-  retry_count INTEGER DEFAULT 0,
-  max_retries INTEGER DEFAULT 3,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  
-  CONSTRAINT valid_event_status CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled'))
+    event_id BIGSERIAL PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    tenant_id TEXT REFERENCES tenants.tenants (tenant_id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    priority INTEGER DEFAULT 0,
+    scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ,
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT valid_event_status CHECK (
+        status IN (
+            'pending',
+            'processing',
+            'completed',
+            'failed',
+            'cancelled'
+        )
+    )
 );
 
-CREATE INDEX idx_event_queue_status ON system.event_queue(status, priority DESC, scheduled_at);
-CREATE INDEX idx_event_queue_tenant ON system.event_queue(tenant_id);
+CREATE INDEX idx_event_queue_status ON system.event_queue (
+    status,
+    priority DESC,
+    scheduled_at
+);
+
+CREATE INDEX idx_event_queue_tenant ON system.event_queue (tenant_id);
 
 CREATE TABLE system.audit_log (
-  audit_id BIGSERIAL PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants.tenants(tenant_id) ON DELETE SET NULL,
-  user_id TEXT REFERENCES tenants.users(user_id) ON DELETE SET NULL,
-  action TEXT NOT NULL,
-  resource_type TEXT NOT NULL,
-  resource_id TEXT NOT NULL,
-  changes JSONB,
-  ip_address INET,
-  user_agent TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    audit_id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT REFERENCES tenants.tenants (tenant_id) ON DELETE SET NULL,
+    user_id TEXT REFERENCES tenants.users (user_id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    changes JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_log_tenant ON system.audit_log(tenant_id, created_at DESC);
-CREATE INDEX idx_audit_log_user ON system.audit_log(user_id, created_at DESC);
-CREATE INDEX idx_audit_log_resource ON system.audit_log(resource_type, resource_id);
+CREATE INDEX idx_audit_log_tenant ON system.audit_log (tenant_id, created_at DESC);
+
+CREATE INDEX idx_audit_log_user ON system.audit_log (user_id, created_at DESC);
+
+CREATE INDEX idx_audit_log_resource ON system.audit_log (resource_type, resource_id);
+
 
 CREATE TABLE system.background_jobs (
   job_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -328,8 +384,9 @@ CREATE TABLE system.background_jobs (
   CONSTRAINT valid_job_status CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled'))
 );
 
-CREATE INDEX idx_background_jobs_status ON system.background_jobs(status, scheduled_at);
-CREATE INDEX idx_background_jobs_tenant ON system.background_jobs(tenant_id);
+CREATE INDEX idx_background_jobs_status ON system.background_jobs (status, scheduled_at);
+
+CREATE INDEX idx_background_jobs_tenant ON system.background_jobs (tenant_id);
 
 -- =====================================================================
 -- TRIGGERS & FUNCTIONS
@@ -499,9 +556,21 @@ $$ LANGUAGE sql;
 -- =====================================================================
 
 -- Create system tenant for internal operations
-INSERT INTO tenants.tenants (tenant_id, name, owner_email, plan_tier, status)
-VALUES ('system', 'System', 'admin@dyocense.com', 'enterprise', 'active')
-ON CONFLICT (tenant_id) DO NOTHING;
+INSERT INTO
+    tenants.tenants (
+        tenant_id,
+        name,
+        owner_email,
+        plan_tier,
+        status
+    )
+VALUES (
+        'system',
+        'System',
+        'admin@dyocense.com',
+        'enterprise',
+        'active'
+    ) ON CONFLICT (tenant_id) DO NOTHING;
 
 -- =====================================================================
 -- VIEWS
@@ -530,20 +599,21 @@ WHERE t.status = 'active';
 
 -- Recent runs view
 CREATE OR REPLACE VIEW runs.recent_runs AS
-SELECT 
-  r.run_id,
-  r.tenant_id,
-  t.name AS tenant_name,
-  r.project_id,
-  p.name AS project_name,
-  r.status,
-  r.duration_seconds,
-  r.created_at,
-  r.completed_at
+SELECT
+    r.run_id,
+    r.tenant_id,
+    t.name AS tenant_name,
+    r.project_id,
+    p.name AS project_name,
+    r.status,
+    r.duration_seconds,
+    r.created_at,
+    r.completed_at
 FROM runs.runs r
-LEFT JOIN tenants.tenants t ON t.tenant_id = r.tenant_id
-LEFT JOIN tenants.projects p ON p.project_id = r.project_id
-WHERE r.created_at >= NOW() - INTERVAL '7 days'
+    LEFT JOIN tenants.tenants t ON t.tenant_id = r.tenant_id
+    LEFT JOIN tenants.projects p ON p.project_id = r.project_id
+WHERE
+    r.created_at >= NOW() - INTERVAL '7 days'
 ORDER BY r.created_at DESC;
 
 -- =====================================================================
@@ -551,15 +621,55 @@ ORDER BY r.created_at DESC;
 -- =====================================================================
 
 -- Grant usage on schemas
-GRANT USAGE ON SCHEMA tenants, runs, connectors, evidence, knowledge, system TO PUBLIC;
+GRANT USAGE ON SCHEMA tenants,
+runs,
+connectors,
+evidence,
+knowledge,
+system TO PUBLIC;
 
 -- Grant access on all tables (adjust for production)
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tenants TO PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA runs TO PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA connectors TO PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA evidence TO PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA knowledge TO PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA system TO PUBLIC;
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA tenants TO PUBLIC;
+
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA runs TO PUBLIC;
+
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA connectors TO PUBLIC;
+
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA evidence TO PUBLIC;
+
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA knowledge TO PUBLIC;
+
+GRANT
+SELECT,
+INSERT
+,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA system TO PUBLIC;
 
 -- Grant sequence usage
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA system TO PUBLIC;
@@ -569,12 +679,22 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA system TO PUBLIC;
 -- =====================================================================
 
 COMMENT ON SCHEMA tenants IS 'Multi-tenant organization, users, and projects';
+
 COMMENT ON SCHEMA runs IS 'Execution runs, steps, and results';
+
 COMMENT ON SCHEMA connectors IS 'External data source integrations';
+
 COMMENT ON SCHEMA evidence IS 'Graph-based evidence and relationships';
+
 COMMENT ON SCHEMA knowledge IS 'Vector embeddings for semantic search';
+
 COMMENT ON SCHEMA system IS 'Events, audit logs, and background jobs';
 
-COMMENT ON TABLE tenants.tenants IS 'Root tenant entity with resource limits and usage tracking';
-COMMENT ON TABLE knowledge.documents IS 'Vector embeddings for RAG using pgvector extension';
-COMMENT ON TABLE system.event_queue IS 'Asynchronous event processing queue using LISTEN/NOTIFY';
+COMMENT ON
+TABLE tenants.tenants IS 'Root tenant entity with resource limits and usage tracking';
+
+COMMENT ON
+TABLE knowledge.documents IS 'Vector embeddings for RAG using pgvector extension';
+
+COMMENT ON
+TABLE system.event_queue IS 'Asynchronous event processing queue using LISTEN/NOTIFY';

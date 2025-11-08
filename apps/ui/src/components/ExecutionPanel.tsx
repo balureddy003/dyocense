@@ -1,5 +1,6 @@
-import { Check, Circle, Clock, ChevronRight, AlertCircle } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Circle, Clock } from "lucide-react";
 import { useState } from "react";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
 
 type Stage = {
   id: string;
@@ -15,9 +16,11 @@ export type ExecutionPanelProps = {
   title?: string;
   estimatedDuration?: string;
   hideHeader?: boolean; // allow callers to remove header when a global header exists
+  tenantName?: string;
+  projectName?: string;
 };
 
-export function ExecutionPanel({ stages, title = "Execution Playbook", estimatedDuration, hideHeader = false }: ExecutionPanelProps) {
+export function ExecutionPanel({ stages, title = "Execution Playbook", estimatedDuration, hideHeader = false, tenantName, projectName }: ExecutionPanelProps) {
   const [expandedStage, setExpandedStage] = useState<string | null>(stages.length > 0 ? stages[0].id : null);
   const [todoStatus, setTodoStatus] = useState<Record<string, TodoStatus>>({});
 
@@ -55,6 +58,11 @@ export function ExecutionPanel({ stages, title = "Execution Playbook", estimated
             )}
           </div>
           <p className="text-sm text-gray-600">Follow these stages to execute your plan. Track progress and mark todos as you complete them.</p>
+          {(tenantName || projectName) && (
+            <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-600 bg-white px-2 py-1 rounded border border-gray-200">
+              <HierarchyBreadcrumb tenantName={tenantName} projectName={projectName} className="inline-flex items-center gap-2" />
+            </div>
+          )}
         </header>
       )}
 
@@ -132,9 +140,8 @@ export function ExecutionPanel({ stages, title = "Execution Playbook", estimated
                           {/* Todo Text */}
                           <div className="flex-1">
                             <div
-                              className={`text-sm leading-relaxed ${
-                                status === "completed" ? "text-gray-500 line-through" : "text-gray-900"
-                              }`}
+                              className={`text-sm leading-relaxed ${status === "completed" ? "text-gray-500 line-through" : "text-gray-900"
+                                }`}
                             >
                               {todo}
                             </div>

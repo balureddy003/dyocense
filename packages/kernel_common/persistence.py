@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 _mongo_client = None
 _inmem_collections: dict[str, "InMemoryCollection"] = {}
-_connection_pool_config = {
+_connection_pool_config: dict[str, Any] = {
     "maxPoolSize": 50,
     "minPoolSize": 10,
     "maxIdleTimeMS": 45000,
@@ -162,10 +162,9 @@ def _get_mongo_client():
     """
     global _mongo_client, _use_fallback_mode
     
-    # Respect environment to disable Mongo in SMB/unified mode
-    if _mongo_disabled_by_env():
-        if not _use_fallback_mode:
-            logger.info("MongoDB disabled by config (PERSISTENCE_BACKEND/USE_MONGODB/DEPLOYMENT_MODE); using in-memory fallback")
+    # Respect environment to disable Mongo in SMB/unified/Postgres-only mode.
+    # Additionally, if PERSISTENCE_BACKEND=postgres we hard-skip any attempt (no log spam).
+    if _mongo_disabled_by_env() or os.getenv("PERSISTENCE_BACKEND", "").lower() in ("postgres", "postgre", "pg"):
         _use_fallback_mode = True
         return None
 
@@ -180,19 +179,11 @@ def _get_mongo_client():
 
     try:
         from pymongo import MongoClient  # type: ignore
-        
-        # Try to import error types, but fall back to Exception if not available
-        try:
-            from pymongo.errors import (
-                ConnectionFailure, 
-                OperationFailure, 
-                ConfigurationError
-            )  # type: ignore
-        except (ImportError, AttributeError):
-            # Fallback for mocked pymongo without errors module
-            ConnectionFailure = Exception
-            OperationFailure = Exception
-            ConfigurationError = Exception
+        from pymongo.errors import (
+            ConnectionFailure,
+            OperationFailure,
+            ConfigurationError,
+        )  # type: ignore
 
         uri = _build_mongo_uri()
         
@@ -226,31 +217,19 @@ def _get_mongo_client():
         
         return _mongo_client
         
-    except (ConnectionFailure, OperationFailure, ConfigurationError) as exc:
-        logger.warning(
-            "MongoDB connection failed (%s: %s); using in-memory fallback. "
-            "Set FORCE_INMEMORY_MODE=true to skip connection attempts.",
-            type(exc).__name__, 
-            str(exc)
-        )
-        _mongo_client = None
-        _use_fallback_mode = True
-        return None
-        
     except ImportError:
-        logger.warning(
-            "pymongo not installed; using in-memory fallback. "
-            "Install with: pip install pymongo"
-        )
+        logger.debug("pymongo not installed; skipping Mongo and using in-memory")
         _mongo_client = None
         _use_fallback_mode = True
         return None
-        
+    except (ConnectionFailure, OperationFailure, ConfigurationError):
+        if os.getenv("PERSISTENCE_BACKEND", "").lower() not in ("postgres", "postgre", "pg"):
+            logger.warning("MongoDB connection failed; falling back to in-memory")
+        _mongo_client = None
+        _use_fallback_mode = True
+        return None
     except Exception as exc:  # pragma: no cover
-        logger.warning(
-            "Unexpected MongoDB initialization error (%s); using in-memory fallback.", 
-            exc
-        )
+        logger.debug(f"Unexpected Mongo init error '{exc}'; fallback to in-memory")
         _mongo_client = None
         _use_fallback_mode = True
         return None

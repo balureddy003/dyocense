@@ -1,4 +1,5 @@
-import { TrendingUp, TrendingDown, DollarSign, Package, ShoppingCart, Users, Zap, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Package, TrendingDown, TrendingUp, Zap } from "lucide-react";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
 
 type KPI = {
   id: string;
@@ -20,6 +21,8 @@ export type MetricsPanelProps = {
   kpis?: KPI[];
   evidence?: Evidence[];
   quickWins?: string[];
+  tenantName?: string;
+  projectName?: string;
 };
 
 const DEFAULT_KPIS: KPI[] = [
@@ -78,7 +81,7 @@ const DEFAULT_EVIDENCE: Evidence[] = [
   },
 ];
 
-export function MetricsPanel({ kpis = DEFAULT_KPIS, evidence = DEFAULT_EVIDENCE, quickWins }: MetricsPanelProps) {
+export function MetricsPanel({ kpis = DEFAULT_KPIS, evidence = DEFAULT_EVIDENCE, quickWins, tenantName, projectName }: MetricsPanelProps) {
   return (
     <aside className="flex h-full w-full flex-col overflow-hidden bg-white">
       {/* Header */}
@@ -88,6 +91,11 @@ export function MetricsPanel({ kpis = DEFAULT_KPIS, evidence = DEFAULT_EVIDENCE,
         </div>
         <h2 className="text-base font-semibold text-gray-900">Before vs. After</h2>
         <p className="text-xs leading-relaxed text-gray-600">Track improvements and validate with data-backed evidence</p>
+        {(tenantName || projectName) && (
+          <div className="mt-2 inline-flex items-center gap-2 text-xs text-gray-600 bg-white px-2 py-1 rounded border border-gray-200">
+            <HierarchyBreadcrumb tenantName={tenantName} projectName={projectName} className="inline-flex items-center gap-2" />
+          </div>
+        )}
       </header>
 
       {/* Quick Wins */}
@@ -127,9 +135,8 @@ export function MetricsPanel({ kpis = DEFAULT_KPIS, evidence = DEFAULT_EVIDENCE,
                 </div>
               </div>
               <div
-                className={`flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold ${
-                  kpi.positive ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
-                }`}
+                className={`flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold ${kpi.positive ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+                  }`}
               >
                 {kpi.positive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
                 {kpi.improvement}

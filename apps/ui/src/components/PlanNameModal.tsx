@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
 import { FileText, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { HierarchyBreadcrumb } from "./HierarchyBreadcrumb";
 
 type PlanNameModalProps = {
   open: boolean;
@@ -8,9 +9,11 @@ type PlanNameModalProps = {
   onSkip?: () => void;
   currentName?: string;
   aiGeneratedTitle?: string;
+  tenantName?: string;
+  projectName?: string;
 };
 
-export function PlanNameModal({ open, onClose, onSave, onSkip, currentName, aiGeneratedTitle }: PlanNameModalProps) {
+export function PlanNameModal({ open, onClose, onSave, onSkip, currentName, aiGeneratedTitle, tenantName, projectName }: PlanNameModalProps) {
   const [name, setName] = useState(currentName || "");
 
   useEffect(() => {
@@ -57,6 +60,16 @@ export function PlanNameModal({ open, onClose, onSave, onSkip, currentName, aiGe
             <X size={20} />
           </button>
         </div>
+
+        {/* Context breadcrumb */}
+        {(tenantName || projectName) && (
+          <div className="px-6 pt-4">
+            <div className="mb-3 flex items-center gap-2 text-xs text-gray-600 bg-white px-3 py-2 rounded-md border border-gray-200">
+              <HierarchyBreadcrumb tenantName={tenantName} projectName={projectName} className="inline-flex items-center gap-2" />
+            </div>
+            <p className="text-xs text-gray-500">This plan will be saved in {projectName ? `"${projectName}"` : "the current project"}.</p>
+          </div>
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6">
