@@ -1,0 +1,642 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        color-scheme: light;
+        /* Professional color palette - Higher contrast */
+        --brand-primary: #6366F1;
+        --brand-secondary: #8B5CF6;
+        --surface-primary: #FFFFFF;
+        --surface-secondary: #F8F9FA;
+        --surface-tertiary: #F1F3F5;
+        --surface-muted: #E9ECEF;
+        --border-subtle: #DEE2E6;
+        --border-strong: #ADB5BD;
+        --text-primary: #0F1419;
+        --text-secondary: #3C4149;
+        --text-tertiary: #6B7280;
+        --text-muted: #9CA3AF;
+        --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+
+    /* Enable font feature settings for Inter */
+    @supports (font-variation-settings: normal) {
+        :root {
+            font-family: 'Inter var', sans-serif;
+            font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+        }
+    }
+
+    * {
+        -webkit-tap-highlight-color: transparent;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+        @apply min-h-screen font-sans text-base leading-relaxed antialiased;
+        margin: 0;
+        background: #F8F9FA;
+        color: var(--text-primary);
+        -webkit-overflow-scrolling: touch;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    #root {
+        @apply min-h-screen;
+    }
+
+    ::selection {
+        background-color: rgba(91, 95, 255, 0.12);
+        color: var(--text-primary);
+    }
+
+    /* Professional typography hierarchy */
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+        @apply tracking-tight;
+        color: var(--text-primary);
+        font-weight: 600;
+        letter-spacing: -0.02em;
+    }
+
+    h1 {
+        font-weight: 700;
+    }
+
+    p {
+        color: var(--text-secondary);
+        line-height: 1.6;
+    }
+
+    p {
+        color: var(--text-secondary);
+        font-size: 0.9375rem;
+        line-height: 1.6;
+        letter-spacing: -0.01em;
+    }
+
+    a {
+        @apply transition-colors duration-200;
+        color: var(--text-brand);
+        text-decoration: none;
+    }
+
+    a:hover {
+        color: var(--brand-hover);
+    }
+
+    a:focus-visible {
+        @apply outline outline-2 outline-offset-2;
+        outline-color: var(--brand-primary);
+        border-radius: 0.25rem;
+    }
+
+    /* Mobile-optimized form inputs */
+    input,
+    textarea,
+    select {
+        font-size: 15px !important;
+        font-family: inherit;
+    }
+
+    /* Smooth scrolling */
+    @media (prefers-reduced-motion: no-preference) {
+        html {
+            scroll-behavior: smooth;
+        }
+    }
+}
+
+@layer components {
+
+    /* Professional card styles */
+    .card-professional {
+        @apply rounded-xl border bg-white shadow-card transition-shadow duration-200;
+        border-color: var(--border-subtle);
+    }
+
+    .card-professional:hover {
+        @apply shadow-card-hover;
+    }
+
+    /* Touch-friendly targets */
+    .touch-target {
+        @apply min-h-[44px] min-w-[44px];
+    }
+
+    /* Modern glass effect */
+    .glass-panel {
+        @apply rounded-2xl border bg-white/80 backdrop-blur-md shadow-lg;
+        border-color: var(--border-subtle);
+    }
+
+    /* Professional badges */
+    .badge-professional {
+        @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+        background-color: var(--surface-tertiary);
+        color: var(--text-secondary);
+    }
+
+    .badge-success {
+        @apply bg-success-50 text-success-700 ring-1 ring-success-600/20;
+    }
+
+    .badge-warning {
+        @apply bg-warning-50 text-warning-700 ring-1 ring-warning-600/20;
+    }
+
+    .badge-error {
+        @apply bg-error-50 text-error-700 ring-1 ring-error-600/20;
+    }
+
+    .badge-brand {
+        @apply bg-brand-50 text-brand-700 ring-1 ring-brand-600/20;
+    }
+
+    /* Professional chat interface */
+    .chat-shell {
+        @apply mt-4 flex flex-1 flex-col rounded-2xl border bg-white p-3 shadow-sm sm:p-5;
+        border-color: var(--border-subtle);
+    }
+
+    .chat-shell__messages {
+        @apply flex-1 space-y-3 overflow-y-auto sm:space-y-4;
+    }
+
+    .chat-message {
+        @apply rounded-xl border px-3 py-2.5 text-sm leading-relaxed sm:rounded-2xl sm:px-4 sm:py-3;
+    }
+
+    .chat-message--user {
+        @apply bg-brand-50 text-brand-900 border-brand-200;
+    }
+
+    .chat-message--agent {
+        @apply bg-neutral-50 text-neutral-900 border-neutral-200;
+    }
+
+    .chat-message__actions {
+        @apply mt-3 space-y-2;
+    }
+
+    .chat-typing {
+        @apply text-xs font-medium uppercase tracking-wide;
+        color: var(--text-tertiary);
+    }
+
+    .chat-shell__suggestions {
+        @apply mt-3 flex flex-wrap gap-2 sm:mt-4;
+    }
+
+    .suggestion-chip {
+        @apply touch-target rounded-full border px-3 py-2 text-xs font-medium transition-all duration-200;
+        border-color: var(--border-strong);
+        color: var(--text-secondary);
+    }
+
+    .suggestion-chip:hover {
+        @apply bg-brand-50 border-brand-300 text-brand-700;
+    }
+
+    .suggestion-chip:active {
+        @apply scale-95;
+    }
+
+    .chat-shell__input {
+        @apply mt-3 flex items-center gap-2 sm:mt-4;
+    }
+
+    .chat-shell__input input {
+        @apply flex-1 rounded-xl border px-3 py-2.5 text-sm transition-all duration-200;
+        border-color: var(--border-strong);
+        background-color: var(--surface-primary);
+        color: var(--text-primary);
+    }
+
+    .chat-shell__input input::placeholder {
+        color: var(--text-tertiary);
+    }
+
+    .chat-shell__input input:focus {
+        @apply outline-none ring-2;
+        ring-color: var(--brand-primary);
+        border-color: var(--brand-primary);
+    }
+
+    .chat-shell__input button {
+        @apply touch-target rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200;
+        background-color: var(--brand-primary);
+    }
+
+    .chat-shell__input button:hover {
+        background-color: var(--brand-secondary);
+    }
+
+    .chat-shell__input button:active {
+        @apply scale-95;
+    }
+
+    .chat-shell__input button:disabled {
+        @apply cursor-not-allowed opacity-40;
+    }
+
+    /* Professional agent cards */
+    .agent-card {
+        @apply touch-target flex cursor-pointer items-center justify-between rounded-xl border bg-white px-3 py-3 transition-all duration-200 sm:px-4;
+        border-color: var(--border-subtle);
+    }
+
+    .agent-card:hover {
+        @apply shadow-md;
+        border-color: var(--brand-primary);
+        background-color: var(--surface-secondary);
+    }
+
+    .agent-card:active {
+        @apply scale-[0.98];
+    }
+
+    .agent-card__title {
+        @apply flex items-center gap-2;
+    }
+
+    .agent-card__badge {
+        @apply rounded-full border px-2 py-0.5 text-2xs font-medium uppercase tracking-wider;
+        border-color: var(--border-strong);
+        background-color: var(--surface-tertiary);
+        color: var(--text-secondary);
+    }
+
+    .agent-card__cta {
+        @apply rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors duration-200;
+        border-color: var(--border-strong);
+        color: var(--text-secondary);
+    }
+
+    .agent-card__cta:hover {
+        border-color: var(--brand-primary);
+        color: var(--brand-primary);
+    }
+
+    /* Responsive card layouts */
+    .card-responsive {
+        @apply rounded-xl border bg-white p-4 shadow-sm sm:rounded-2xl sm:p-6 lg:p-8;
+        border-color: var(--border-subtle);
+    }
+
+    /* Professional spacing */
+    .section-spacing {
+        @apply space-y-6 sm:space-y-8 lg:space-y-10;
+    }
+
+    .content-spacing {
+        @apply space-y-4 sm:space-y-5;
+    }
+}
+
+/* Remove legacy dark theme classes */
+.bg-night-800\/80,
+.bg-night-900\/80,
+.bg-night-900\/70,
+.bg-night-900\/60,
+.bg-night-900\/50,
+.bg-night-900\/40,
+.bg-night-900\/30,
+.bg-night-900\/20,
+.bg-night-900\/10 {
+    background-color: var(--surface-primary) !important;
+    border-color: var(--border-subtle) !important;
+    color: var(--text-primary);
+}
+
+/* Professional focus states */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+    @apply outline outline-2 outline-offset-2;
+    outline-color: var(--brand-primary);
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+
+    button,
+    a {
+        @apply min-h-[44px];
+    }
+
+    h1 {
+        @apply text-2xl;
+    }
+
+    h2 {
+        @apply text-xl;
+    }
+
+    .container {
+        @apply px-4;
+    }
+}
+
+/* Smooth animations */
+@media (prefers-reduced-motion: no-preference) {
+    * {
+        @apply transition-colors duration-200;
+    }
+
+    .animated-scale {
+        @apply transition-transform duration-200;
+    }
+
+    .animated-scale:active {
+        @apply scale-95;
+    }
+}
+
+
+@layer components {
+
+    /* Touch-friendly minimum sizes */
+    .touch-target {
+        @apply min-h-[44px] min-w-[44px];
+    }
+
+    .glass-panel {
+        @apply rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur-sm sm:rounded-3xl sm:p-6;
+    }
+
+    .metric-chip {
+        @apply rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600;
+    }
+
+    .chat-shell {
+        @apply mt-4 flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:rounded-3xl sm:p-5;
+    }
+
+    .chat-shell__messages {
+        @apply flex-1 space-y-3 overflow-y-auto pr-1 sm:space-y-4;
+    }
+
+    .chat-message {
+        @apply rounded-xl border px-3 py-2.5 text-sm leading-relaxed sm:rounded-2xl sm:px-4 sm:py-3;
+    }
+
+    .chat-message--user {
+        @apply border-brand/20 bg-brand/10 text-brand-dark;
+    }
+
+    .chat-message--agent {
+        @apply border-slate-200 bg-slate-50 text-slate-800;
+    }
+
+    .chat-message__actions {
+        @apply mt-3 space-y-2;
+    }
+
+    .chat-typing {
+        @apply text-xs uppercase tracking-wide text-slate-400;
+    }
+
+    .chat-shell__suggestions {
+        @apply mt-3 flex flex-wrap gap-2 sm:mt-4;
+    }
+
+    .suggestion-chip {
+        @apply touch-target rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:border-brand hover:bg-brand/5 active:scale-95;
+    }
+
+    .chat-shell__input {
+        @apply mt-3 flex items-center gap-2 sm:mt-4;
+    }
+
+    .chat-shell__input input {
+        @apply flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 sm:rounded-2xl sm:px-4 sm:py-3;
+    }
+
+    .chat-shell__input button {
+        @apply touch-target rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand/90 active:scale-95 disabled:cursor-not-allowed disabled:bg-brand/30 sm:rounded-2xl sm:px-4 sm:py-3;
+    }
+
+    .agent-card {
+        @apply touch-target flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-3 text-slate-800 transition hover:border-brand hover:bg-brand/5 active:scale-[0.98] sm:rounded-2xl sm:px-4;
+    }
+
+    .agent-card__title {
+        @apply flex items-center gap-2;
+    }
+
+    .agent-card__badge {
+        @apply rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-600;
+    }
+
+    .agent-card__cta {
+        @apply rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:border-brand hover:text-brand;
+    }
+
+    /* Responsive card layouts */
+    .card-responsive {
+        @apply rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:rounded-2xl sm:p-6 lg:p-8;
+    }
+
+    /* Mobile-optimized spacing */
+    .section-spacing {
+        @apply space-y-6 sm:space-y-8 lg:space-y-12;
+    }
+
+    .content-spacing {
+        @apply space-y-3 sm:space-y-4;
+    }
+}
+
+/* Remove dark theme overrides - now using proper light theme */
+.bg-night-800\/80,
+.bg-night-900\/80,
+.bg-night-900\/70,
+.bg-night-900\/60,
+.bg-night-900\/50,
+.bg-night-900\/40,
+.bg-night-900\/30,
+.bg-night-900\/20,
+.bg-night-900\/10 {
+    background-color: #ffffff !important;
+    border-color: rgba(226, 232, 240, 0.8) !important;
+    color: #0f172a;
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+
+    /* Larger touch targets on mobile */
+    button,
+    a {
+        @apply min-h-[44px];
+    }
+
+    /* Optimize text sizes for mobile */
+    h1 {
+        @apply text-2xl;
+    }
+
+    h2 {
+        @apply text-xl;
+    }
+
+    /* Better spacing on small screens */
+    .container {
+        @apply px-4;
+    }
+}
+
+/* Smooth animations for mobile */
+@media (prefers-reduced-motion: no-preference) {
+    * {
+        @apply transition-colors duration-200;
+    }
+}
+
+
+@layer components {
+    .marketing-surface {
+        background-color: #030712;
+        background-image: radial-gradient(circle at 10% 20%, rgba(30, 64, 175, 0.25), transparent 45%), radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.18), transparent 40%),
+            linear-gradient(180deg, #020617 0%, #050b1b 65%, #020617 100%);
+        color: #e2e8f0;
+    }
+
+    .page-shell {
+        @apply mx-auto w-full max-w-6xl space-y-10 px-4 py-12 sm:px-6 lg:px-8;
+    }
+
+    .glass-panel {
+        @apply rounded-[28px] border p-6 shadow-[0_30px_60px_rgba(2,6,23,0.45)] backdrop-blur-2xl;
+        border-color: rgba(148, 163, 184, 0.25);
+        background: rgba(6, 9, 20, 0.88);
+        color: #f8fafc;
+    }
+
+    .glass-panel--light {
+        @apply rounded-[28px] border p-8 shadow-[0_25px_45px_rgba(15,23,42,0.15)] backdrop-blur-xl;
+        border-color: rgba(15, 23, 42, 0.08);
+        background: rgba(255, 255, 255, 0.94);
+        color: #0f172a;
+    }
+
+    .glass-panel--accent {
+        @apply rounded-[28px] border p-6 shadow-[0_25px_45px_rgba(15,23,42,0.2)] backdrop-blur-xl;
+        border-color: rgba(79, 70, 229, 0.4);
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(14, 165, 233, 0.25));
+    }
+
+    .eyebrow {
+        @apply text-xs font-semibold uppercase tracking-[0.4em];
+        color: #a5b4fc;
+    }
+
+    .stat-chip {
+        @apply rounded-2xl border px-4 py-3 text-left;
+        border-color: rgba(255, 255, 255, 0.25);
+        background-color: rgba(15, 23, 42, 0.35);
+    }
+
+    .stat-chip__value {
+        @apply text-2xl font-semibold;
+        color: #f8fafc;
+    }
+
+    .stat-chip__label {
+        @apply text-xs;
+        color: rgba(226, 232, 240, 0.75);
+    }
+
+    .chat-shell {
+        @apply mt-4 flex flex-1 flex-col rounded-3xl border p-5 shadow-[0_15px_35px_rgba(2,6,23,0.45)] backdrop-blur-xl;
+        border-color: rgba(148, 163, 184, 0.3);
+        background: rgba(248, 250, 252, 0.92);
+        color: #0f172a;
+    }
+
+    .chat-shell__messages {
+        @apply flex-1 space-y-4 overflow-y-auto pr-1;
+    }
+
+    .chat-message {
+        @apply rounded-2xl border px-4 py-3 text-sm leading-relaxed;
+    }
+
+    .chat-message--user {
+        @apply border-brand/30 bg-brand/10 text-brand;
+    }
+
+    .chat-message--agent {
+        @apply border-slate-200 bg-white text-slate-800;
+    }
+
+    .chat-shell__suggestions {
+        @apply mt-4 flex flex-wrap gap-2;
+    }
+
+    .suggestion-chip {
+        @apply rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:border-brand hover:text-brand;
+    }
+
+    .chat-shell__input {
+        @apply mt-4 flex items-center gap-2;
+    }
+
+    .chat-shell__input input {
+        @apply flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand/40;
+    }
+
+    .chat-shell__input button {
+        @apply rounded-2xl bg-brand px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:cursor-not-allowed disabled:bg-brand/30;
+    }
+
+    .agent-card {
+        @apply flex cursor-pointer items-center justify-between rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-slate-900 transition hover:border-brand hover:bg-white;
+    }
+
+    .agent-card__badge {
+        @apply rounded-full border border-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-500;
+    }
+
+    .agent-card__cta {
+        @apply rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:border-brand hover:text-brand;
+    }
+}
+
+/* Legacy dark theme classes remapped to light palette */
+.bg-night-800\/80,
+.bg-night-900\/80,
+.bg-night-900\/70,
+.bg-night-900\/60 {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    border-color: rgba(255, 255, 255, 0.25) !important;
+    color: #0f172a;
+}
+
+.bg-night-900\/50,
+.bg-night-900\/40,
+.bg-night-900\/30,
+.bg-night-900\/20,
+.bg-night-900\/10 {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    color: #0f172a;
+}
+
+.border-white\/10,
+.border-white\/5,
+.border-white\/15 {
+    border-color: rgba(255, 255, 255, 0.35) !important;
+}

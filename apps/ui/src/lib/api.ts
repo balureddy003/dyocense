@@ -1,4 +1,4 @@
-import { API_BASE_URL, DEFAULT_HEADERS, ApiOptions, getAuthHeaders } from "./config";
+import { API_BASE_URL, ApiOptions, DEFAULT_HEADERS, getAuthHeaders } from "./config";
 
 async function fetchJSON<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
@@ -305,6 +305,41 @@ export async function registerUser(payload: UserRegistrationPayload): Promise<Us
   return fetchJSON<UserProfile>("/v1/users/register", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+// --- Dev-friendly signup/verify endpoints (agent_shell service) ---
+export interface DevSignupPayload {
+  email: string;
+  name?: string;
+  company?: string;
+}
+
+export interface DevSignupResponse {
+  user_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  verification_token: string;
+}
+
+export async function devSignup(payload: DevSignupPayload): Promise<DevSignupResponse> {
+  return fetchJSON<DevSignupResponse>("/v1/auth/signup", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface DevVerifyResponse {
+  user_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  jwt: string;
+}
+
+export async function devVerify(token: string): Promise<DevVerifyResponse> {
+  return fetchJSON<DevVerifyResponse>("/v1/auth/verify", {
+    method: "POST",
+    body: JSON.stringify({ token }),
   });
 }
 

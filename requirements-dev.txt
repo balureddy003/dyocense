@@ -31,4 +31,5 @@ langsmith==0.1.147
 tiktoken==0.5.2
 
 playwright>=1.45.0
+python-multipart
 

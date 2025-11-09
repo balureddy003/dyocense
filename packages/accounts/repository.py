@@ -130,6 +130,7 @@ USERS_COLLECTION = get_collection("tenant_users")
 TOKENS_COLLECTION = get_collection("user_tokens")
 INVITES_COLLECTION = get_collection("invitations")
 EVENTS_COLLECTION = get_collection("usage_events")
+VERIFICATION_TOKENS_COLLECTION = get_collection("verification_tokens")
 
 JWT_SECRET = os.getenv("ACCOUNTS_JWT_SECRET", "dyocense-dev-secret")
 JWT_ISSUER = "dyocense-accounts"
@@ -744,3 +745,66 @@ def enforce_trial_for_tenant(tenant_id: str, trial_days: int = 14) -> Tenant:
         tenant.updated_at = _now()
         TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant))
     return tenant
+
+
+# =====================================================================
+# Verification Tokens (Email Signup Flow)
+# =====================================================================
+
+def create_verification_token(
+    email: str,
+    full_name: str,
+    business_name: str,
+    metadata: Optional[dict] = None,
+    ttl_hours: int = 24
+) -> str:
+    """Create a verification token for email signup.
+    
+    Returns the token string to be sent to the user.
+    """
+    token = secrets.token_urlsafe(32)
+    token_id = f"token-{uuid.uuid4().hex[:10]}"
+    
+    verification = {
+        "token_id": token_id,
+        "token": token,
+        "email": email.lower(),
+        "full_name": full_name,
+        "business_name": business_name,
+        "metadata": metadata or {},
+        "expires_at": (_now() + timedelta(hours=ttl_hours)).isoformat(),
+        "created_at": _now().isoformat(),
+        "used": False
+    }
+    
+    VERIFICATION_TOKENS_COLLECTION.insert_one(verification)
+    return token
+
+
+def verify_and_consume_token(token: str) -> Optional[dict]:
+    """Verify token and mark as used.
+    
+    Returns token data if valid, None if invalid/expired/used.
+    """
+    doc = VERIFICATION_TOKENS_COLLECTION.find_one({"token": token, "used": False})
+    if not doc:
+        return None
+    
+    expires_at = datetime.fromisoformat(doc["expires_at"])
+    if _now() > expires_at:
+        # Token expired
+        return None
+    
+    # Mark as used
+    VERIFICATION_TOKENS_COLLECTION.replace_one(
+        {"token": token},
+        {**doc, "used": True, "used_at": _now().isoformat()},
+        upsert=False
+    )
+    
+    return {
+        "email": doc["email"],
+        "full_name": doc["full_name"],
+        "business_name": doc["business_name"],
+        "metadata": doc.get("metadata", {})
+    }

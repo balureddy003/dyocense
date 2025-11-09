@@ -107,6 +107,15 @@ export const HomePage = () => {
     }
   }, [projects, profile?.tenant_id]);
 
+  // If this tenant has no projects yet (first-time user), surface the PlanSelector so
+  // they can create a project/plan immediately instead of seeing an empty agent canvas.
+  useEffect(() => {
+    if (!profile?.tenant_id) return;
+    if (projects.length === 0) {
+      setMode("plan-selector");
+    }
+  }, [profile?.tenant_id, projects.length]);
+
   useEffect(() => {
     if (profile?.tenant_id && currentProjectId) {
       const key = `dyocense-active-project-${profile.tenant_id}`;

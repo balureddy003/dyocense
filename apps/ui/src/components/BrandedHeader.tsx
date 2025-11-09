@@ -1,5 +1,5 @@
+import { Building2, LogOut, Settings } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { Building2, Settings, LogOut, User } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 interface BrandedHeaderProps {
@@ -98,7 +98,7 @@ export const BrandedHeader = ({ showNav = false }: BrandedHeaderProps) => {
                   Sign In
                 </Link>
                 <Link
-                  to="/buy?plan=trial"
+                  to="/signup?plan=trial"
                   className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 shadow-md hover:shadow-lg transition"
                 >
                   Start Free Trial

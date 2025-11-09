@@ -1,0 +1,13 @@
+{
+    "name": "dyocense-admin",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "dev": "keystone dev",
+        "start": "keystone start",
+        "build": "keystone build"
+    },
+    "dependencies": {
+        "@keystone-6/core": "^32.0.0"
+    }
+}

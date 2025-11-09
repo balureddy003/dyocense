@@ -29,12 +29,19 @@ from packages.accounts.repository import (
     find_tenants_for_email,
     AuthenticationError,
     JWT_TTL_SECONDS,
+    create_verification_token,
+    verify_and_consume_token,
 )
 from packages.accounts.oauth import oauth_service, OAuthProvider, OAuthUserInfo
 from packages.kernel_common.deps import require_auth
 from packages.kernel_common.logging import configure_logging
 from packages.kernel_common.mailer import Mailer
 from packages.trust.onboarding import TenantOnboardingService
+# Optional Keystone integration (create tenant record in Keystone when tenants are registered)
+try:
+    from packages.kernel_common.keystone import run_graphql_sync as keystone_run_graphql_sync  # type: ignore
+except Exception:
+    keystone_run_graphql_sync = None
 
 logger = configure_logging("accounts-service")
 mailer = Mailer()
@@ -324,6 +331,40 @@ class ApiTokenCreateResponse(ApiTokenResponse):
     secret: str
 
 
+# =====================================================================
+# Email Signup Models (SMB-optimized magic link flow)
+# =====================================================================
+
+class EmailSignupRequest(BaseModel):
+    """SMB-optimized signup: email + name + business info."""
+    email: EmailStr
+    name: str = Field(..., min_length=2, max_length=120, description="Full name")
+    business_name: str = Field(..., min_length=2, max_length=120, description="Business/company name")
+    intent: str | None = Field(default=None, description="Signup intent: launch, ops, reporting")
+    use_case: str | None = Field(default=None, description="Freeform use case description")
+
+
+class EmailSignupResponse(BaseModel):
+    """Response contains verification token (dev mode) or success message (production)."""
+    token: str | None = Field(default=None, description="Verification token (dev mode only)")
+    message: str = "Verification email sent. Check your inbox."
+    email: str
+
+
+class VerifyRequest(BaseModel):
+    """Verify email token and complete account setup."""
+    token: str
+
+
+class VerifyResponse(BaseModel):
+    """Complete user session info after verification."""
+    jwt: str = Field(..., description="JWT authentication token")
+    token: str = Field(..., description="Alias for jwt (frontend compatibility)")
+    tenant_id: str
+    workspace_id: str | None = Field(default=None, description="Default workspace/project ID")
+    user: dict = Field(..., description="User profile data")
+
+
 @app.get("/health", tags=["system"])
 def health_check() -> dict:
     """Service health check with background job status."""
@@ -391,6 +432,16 @@ def register_new_tenant(payload: TenantRegistrationRequest) -> TenantRegistratio
     except Exception as e:
         logger.warning(f"Keycloak onboarding failed for tenant {tenant.tenant_id}: {e}. Continuing with fallback auth.")
     
+    # Try to create a corresponding Tenant in Keystone (non-blocking)
+    if keystone_run_graphql_sync is not None:
+        try:
+            mutation = '''mutation CreateTenant($name: String!, $externalId: String!) { createTenant(data: { name: $name, externalId: $externalId }) { id name } }'''
+            # Use tenant_id as externalId so Keystone can be correlated
+            keystone_run_graphql_sync(mutation, {"name": tenant.name, "externalId": tenant.tenant_id})
+            logger.info("Created tenant in Keystone for %s", tenant.tenant_id)
+        except Exception as exc:  # pragma: no cover - non-fatal
+            logger.warning("Failed to create tenant in Keystone: %s", exc)
+
     # Send onboarding email
     try:
         temp_pass = tenant.metadata.get("temporary_password")
@@ -908,6 +959,171 @@ def login_user(payload: UserLoginRequest) -> UserLoginResponse:
     except AuthenticationError as exc:
         logger.warning(f"Login failed for tenant={payload.tenant_id}, email={payload.email}: {exc}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password.") from exc
+
+
+# =====================================================================
+# Email Signup & Verification Endpoints (SMB-optimized magic link flow)
+# =====================================================================
+
+@app.post("/v1/auth/signup", response_model=EmailSignupResponse, status_code=status.HTTP_201_CREATED, tags=["auth"])
+def email_signup(payload: EmailSignupRequest) -> EmailSignupResponse:
+    """SMB-optimized email signup with magic link verification.
+    
+    Flow:
+    1. Validate email not already registered
+    2. Create verification token
+    3. Send verification email (or return token in dev mode)
+    4. User clicks link → calls /v1/auth/verify
+    """
+    logger.info(f"Email signup attempt: email={payload.email}, business={payload.business_name}")
+    
+    # Check if email already registered with any tenant
+    existing_tenants = find_tenants_for_email(payload.email)
+    if existing_tenants:
+        logger.warning(f"Signup blocked: email {payload.email} already registered")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email is already registered. Please sign in or use a different email."
+        )
+    
+    # Create verification token
+    metadata = {
+        "intent": payload.intent,
+        "use_case": payload.use_case,
+        "signup_method": "email",
+        "signup_timestamp": datetime.utcnow().isoformat()
+    }
+    
+    token = create_verification_token(
+        email=payload.email,
+        full_name=payload.name,
+        business_name=payload.business_name,
+        metadata=metadata,
+        ttl_hours=24
+    )
+    
+    # Production: Send verification email
+    # try:
+    #     verification_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5179')}/verify?token={token}"
+    #     await mailer.send_verification_email(
+    #         to_email=payload.email,
+    #         full_name=payload.name,
+    #         verification_url=verification_url
+    #     )
+    #     logger.info(f"Verification email sent to {payload.email}")
+    #     return EmailSignupResponse(email=payload.email, message="Verification email sent. Check your inbox.")
+    # except Exception as e:
+    #     logger.error(f"Failed to send verification email: {e}")
+    #     raise HTTPException(status_code=500, detail="Failed to send verification email")
+    
+    # Dev mode: Return token directly for testing
+    logger.info(f"Dev mode: returning verification token for {payload.email}")
+    return EmailSignupResponse(
+        token=token,
+        email=payload.email,
+        message=f"Dev mode: Use this token to verify: {token}"
+    )
+
+
+@app.post("/v1/auth/verify", response_model=VerifyResponse, tags=["auth"])
+def verify_email_token(payload: VerifyRequest) -> VerifyResponse:
+    """Verify email token and complete account provisioning.
+    
+    Creates:
+    - Tenant (organization)
+    - First user account (owner)
+    - Default project/workspace
+    
+    Returns JWT for immediate authenticated access.
+    """
+    logger.info(f"Email verification attempt: token={payload.token[:10]}...")
+    
+    # Verify and consume token
+    token_data = verify_and_consume_token(payload.token)
+    if not token_data:
+        logger.warning(f"Verification failed: invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired verification token. Please request a new signup link."
+        )
+    
+    email = token_data["email"]
+    full_name = token_data["full_name"]
+    business_name = token_data["business_name"]
+    metadata = token_data.get("metadata", {})
+    
+    logger.info(f"Token verified for {email}, provisioning account...")
+    
+    try:
+        # 1. Register tenant (organization)
+        tenant = register_tenant(
+            name=business_name,
+            owner_email=email,
+            plan_tier=PlanTier.FREE,  # Start with free trial
+            metadata={
+                **metadata,
+                "signup_verified_at": datetime.utcnow().isoformat(),
+                "verification_method": "email"
+            }
+        )
+        logger.info(f"Created tenant {tenant.tenant_id} for {email}")
+        
+        # 2. Create default project/workspace
+        try:
+            project = create_project(
+                tenant_id=tenant.tenant_id,
+                name="Default Workspace",
+                description="Your first workspace - customize this later"
+            )
+            workspace_id = project.project_id
+            logger.info(f"Created default workspace {workspace_id} for tenant {tenant.tenant_id}")
+        except Exception as e:
+            logger.warning(f"Failed to create default workspace: {e}")
+            workspace_id = None
+        
+        # 3. Register owner user (no password - using magic links)
+        # Generate a random password since we're using passwordless auth
+        import secrets
+        random_password = secrets.token_urlsafe(32)
+        user = register_user(
+            tenant_id=tenant.tenant_id,
+            email=email,
+            full_name=full_name,
+            password=random_password
+        )
+        logger.info(f"Created user {user.user_id} for tenant {tenant.tenant_id}")
+        
+        # 4. Issue JWT for authenticated session
+        jwt_token = issue_jwt(user)
+        
+        # 5. Trigger onboarding (async task - don't block response)
+        try:
+            onboarding_service = TenantOnboardingService()
+            # Run in background if possible, or just log
+            logger.info(f"TODO: Trigger onboarding for tenant {tenant.tenant_id}")
+            # asyncio.create_task(onboarding_service.run_onboarding(tenant.tenant_id))
+        except Exception as e:
+            logger.warning(f"Onboarding trigger failed (non-blocking): {e}")
+        
+        return VerifyResponse(
+            jwt=jwt_token,
+            token=jwt_token,  # Alias for frontend compatibility
+            tenant_id=tenant.tenant_id,
+            workspace_id=workspace_id,
+            user={
+                "id": user.user_id,
+                "email": user.email,
+                "name": user.full_name,
+                "tenant_id": user.tenant_id
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Account provisioning failed for {email}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create account: {str(e)}"
+        )
 
 
 # =====================================================================

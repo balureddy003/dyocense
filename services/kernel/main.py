@@ -23,11 +23,13 @@ from services.evidence.main import app as evidence_app
 from services.marketplace.main import app as marketplace_app
 from services.orchestrator.main import app as orchestrator_app
 from services.plan.main import app as planner_app
+from services.smb_gateway.main import app as smb_gateway_app
 from services.accounts.main import app as accounts_app
 from services.chat.main import app as chat_app
 from services.analyze.main import app as analyze_app
 from packages.kernel_common import persistence
 from packages.kernel_common.auth import get_auth_health
+from packages.kernel_common.keystone import health_check as get_keystone_health
 
 SUB_APPS = [
     accounts_app,
@@ -43,6 +45,7 @@ SUB_APPS = [
     orchestrator_app,
     planner_app,
     analyze_app,
+    smb_gateway_app,
 ]
 
 # Optionally include connectors service (requires MongoDB) only if enabled
@@ -107,6 +110,7 @@ def detailed_health() -> dict:
         "services": {
             "persistence": persistence.health_check(),
             "authentication": get_auth_health(),
+            "keystone": get_keystone_health(),
             # Add more health checks as other services are implemented
         }
     }

@@ -149,6 +149,25 @@ paths:
         '404':
           description: Run not found
   /v1/runs:
+    get:
+      summary: List orchestration runs
+      operationId: listRuns
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          required: false
+          description: Maximum number of runs to return (default 10)
+      responses:
+        '200':
+          description: Run list response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
     post:
       summary: Submit a goal for end-to-end orchestration
       operationId: submitRun
@@ -185,17 +204,56 @@ paths:
                 $ref: '#/components/schemas/RunStatus'
         '404':
           description: Run not found
+  /v1/tenants/{tenant_id}/plans:
     get:
-      summary: List orchestration runs
-      operationId: listRuns
+      summary: Retrieve the most recent plans for a tenant
+      operationId: listTenantPlans
+      parameters:
+        - in: path
+          name: tenant_id
+          schema:
+            type: string
+          required: true
+          description: Tenant identifier
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+          required: false
+          description: Maximum number of plans to return (default 5)
       responses:
         '200':
-          description: Run list response
+          description: Plan list response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunList'
-  /v1/runs/{run_id}:
+                $ref: '#/components/schemas/PlanListResponse'
+  /v1/onboarding/{tenant_id}:
+    post:
+      summary: Create a sample workspace and plan for onboarding
+      operationId: runOnboarding
+      parameters:
+        - in: path
+          name: tenant_id
+          schema:
+            type: string
+          required: true
+          description: Tenant identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingRequest'
+      responses:
+        '200':
+          description: Onboarding result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingResponse'
   /v1/catalog:
     get:
       summary: List available archetypes, solvers, and connectors
@@ -557,6 +615,45 @@ components:
             type: number
     Catalog:
       $ref: '../../contracts/schemas/catalog.schema.json'
+    Plan:
+      $ref: '../../contracts/schemas/plan.schema.json'
+    Workspace:
+      $ref: '../../contracts/schemas/workspace.schema.json'
+    PlanListResponse:
+      type: object
+      required:
+        - items
+        - count
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Plan'
+        count:
+          type: integer
+    OnboardingRequest:
+      type: object
+      properties:
+        workspace_name:
+          type: string
+          description: Optional name for the sample workspace.
+        plan_title:
+          type: string
+          description: Optional plan title override.
+        archetype_id:
+          type: string
+          description: Template/archetype to seed the sample plan with.
+      additionalProperties: false
+    OnboardingResponse:
+      type: object
+      required:
+        - workspace
+        - plan
+      properties:
+        workspace:
+          $ref: '#/components/schemas/Workspace'
+        plan:
+          $ref: '#/components/schemas/Plan'
     ForecastDataSource:
       type: object
       required:

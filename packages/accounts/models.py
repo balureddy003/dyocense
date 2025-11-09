@@ -102,3 +102,15 @@ class UsageEvent(BaseModel):
     event_type: str
     payload: dict = Field(default_factory=dict)
     timestamp: datetime
+
+
+class VerificationToken(BaseModel):
+    """Email verification token for passwordless signup."""
+    token_id: str
+    email: str
+    full_name: str
+    business_name: str
+    metadata: dict = Field(default_factory=dict)  # Store intent, use_case
+    expires_at: datetime
+    created_at: datetime
+    used: bool = False

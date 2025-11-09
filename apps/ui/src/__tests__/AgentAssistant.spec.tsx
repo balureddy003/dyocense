@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import { AgentAssistant } from "../components/AgentAssistant";
 
 describe("AgentAssistant", () => {
-  it("renders welcome message", () => {
+  it("renders header title", () => {
     render(<AgentAssistant />);
-    expect(screen.getByText(/intelligent AI business assistant/)).toBeInTheDocument();
+    expect(screen.getByText(/AI Business Assistant/)).toBeInTheDocument();
   });
 
   it("renders set preferences button", () => {
@@ -13,10 +13,10 @@ describe("AgentAssistant", () => {
     expect(screen.getAllByText(/Set Preferences/).length).toBeGreaterThan(0);
   });
 
-  it("renders chat input with default placeholder", () => {
+  it("renders chat input with correct placeholder", () => {
     render(<AgentAssistant />);
-    // Check for the input element with the specific placeholder (modal is hidden so only 1 visible)
-    const inputs = screen.getAllByPlaceholderText("Ask me anything about your goals...");
+    // Should match one of the new placeholder texts
+    const inputs = screen.getAllByPlaceholderText(/Describe your business goal in your own words...|Ask me anything...|Type your answer.../);
     expect(inputs.length).toBeGreaterThan(0);
     expect(inputs[0]).toBeInTheDocument();
   });
