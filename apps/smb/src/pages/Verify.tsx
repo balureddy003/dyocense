@@ -19,28 +19,33 @@ export default function Verify() {
             return
         }
         let isMounted = true
-        ;(async () => {
-            try {
-                const data = await tryPost<{ jwt?: string; token?: string; tenant_id?: string; tenant?: string; user?: any }>(
-                    '/v1/auth/verify',
-                    { token },
-                )
-                const jwt = data?.jwt || data?.token || 'dev-jwt'
-                const tenantId = data?.tenant_id || data?.tenant || 'dev-tenant'
-                if (typeof window !== 'undefined') {
-                    localStorage.setItem('apiToken', jwt)
-                    localStorage.setItem('tenantId', tenantId)
+            ; (async () => {
+                try {
+                    const data = await tryPost<{ jwt?: string; token?: string; tenant_id?: string; tenant?: string; user?: any }>(
+                        '/v1/auth/verify',
+                        { token },
+                    )
+                    const jwt = data?.jwt || data?.token || 'dev-jwt'
+                    const tenantId = data?.tenant_id || data?.tenant || 'dev-tenant'
+                    if (typeof window !== 'undefined') {
+                        localStorage.setItem('apiToken', jwt)
+                        localStorage.setItem('tenantId', tenantId)
+                    }
+                    if (isMounted) {
+                        setAuth({ apiToken: jwt, tenantId, user: data?.user ?? { name: 'Owner' } })
+
+                        // Check if user has completed onboarding
+                        const hasCompletedOnboarding = localStorage.getItem('hasCompletedOnboarding')
+                        const destination = hasCompletedOnboarding ? next : '/welcome'
+
+                        navigate(destination, { replace: true })
+                    }
+                } catch (err) {
+                    if (!isMounted) return
+                    setStatus('error')
+                    setMessage('Verification failed. Request a new magic link below.')
                 }
-                if (isMounted) {
-                    setAuth({ apiToken: jwt, tenantId, user: data?.user ?? { name: 'Owner' } })
-                    navigate(next, { replace: true })
-                }
-            } catch (err) {
-                if (!isMounted) return
-                setStatus('error')
-                setMessage('Verification failed. Request a new magic link below.')
-            }
-        })()
+            })()
         return () => {
             isMounted = false
         }

@@ -28,10 +28,10 @@ export default function BusinessHealthScore({ score, trend = 0, size = 180 }: Bu
                 sections={[{ value: score, color: status.color }]}
                 label={
                     <Stack gap={4} align="center">
-                        <Text size="xl" fw={700} c="neutral.900">
+                        <Text size="xl" fw={700} c="gray.9">
                             {score}
                         </Text>
-                        <Text size="xs" c="neutral.600" fw={500}>
+                        <Text size="xs" c="gray.6" fw={500}>
                             /100
                         </Text>
                     </Stack>
@@ -40,7 +40,7 @@ export default function BusinessHealthScore({ score, trend = 0, size = 180 }: Bu
 
             <Stack gap={4} align="center">
                 <Group gap={6}>
-                    <Text size="lg" fw={600} c="neutral.900">
+                    <Text size="lg" fw={600} c="gray.9">
                         {status.icon} {status.label}
                     </Text>
                     {trend !== 0 && (
@@ -49,7 +49,7 @@ export default function BusinessHealthScore({ score, trend = 0, size = 180 }: Bu
                         </Text>
                     )}
                 </Group>
-                <Text size="xs" c="neutral.600">
+                <Text size="xs" c="gray.6">
                     Business Health Score
                 </Text>
             </Stack>

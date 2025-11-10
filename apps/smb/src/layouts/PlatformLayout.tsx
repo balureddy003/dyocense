@@ -10,8 +10,10 @@ const navItems = [
     { path: '/home', label: 'Dashboard', icon: '📊', description: 'Your daily business snapshot' },
     { path: '/goals', label: 'Goals', icon: '🎯', description: 'Set and track objectives' },
     { path: '/planner', label: 'Action Plan', icon: '✅', description: 'Weekly tasks and priorities' },
-    { path: '/copilot', label: 'Coach', icon: '💡', description: 'AI business coach' },
-    { path: '/connectors', label: 'Data', icon: '�', description: 'Connected sources' },
+    { path: '/coach', label: 'Coach', icon: '💡', description: 'AI business coach' },
+    { path: '/analytics', label: 'Analytics', icon: '📈', description: 'Track your progress' },
+    { path: '/achievements', label: 'Achievements', icon: '🏆', description: 'Unlock badges' },
+    { path: '/connectors', label: 'Data', icon: '🔗', description: 'Connected sources' },
 ]
 
 export default function PlatformLayout({ children }: PlatformLayoutProps) {

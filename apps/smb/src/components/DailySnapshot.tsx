@@ -14,10 +14,10 @@ function MetricCard({ value, label, trend, trendLabel }: MetricCardProps) {
     return (
         <Card radius="lg" withBorder p="md" className="flex-1">
             <Stack gap="xs" align="center">
-                <Text size="xl" fw={700} c="neutral.900">
+                <Text size="xl" fw={700} c="gray.9">
                     {value}
                 </Text>
-                <Text size="xs" c="neutral.600" fw={500} ta="center">
+                <Text size="xs" c="gray.6" fw={500} ta="center">
                     {label}
                 </Text>
                 {trend !== undefined && (
@@ -42,7 +42,7 @@ interface DailySnapshotProps {
 export default function DailySnapshot({ metrics }: DailySnapshotProps) {
     return (
         <Stack gap="sm">
-            <Text size="sm" fw={600} c="neutral.700" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+            <Text size="sm" fw={600} c="gray.7" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                 Today's Snapshot
             </Text>
             <Group gap="sm" className="flex-wrap md:flex-nowrap">

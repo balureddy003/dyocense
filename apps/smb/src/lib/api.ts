@@ -49,6 +49,16 @@ export async function del(path: string, token?: string): Promise<void> {
     if (!res.ok) throw new Error(`DELETE ${path} failed with ${res.status}`)
 }
 
+export async function put<T = any>(path: string, body: any = {}, token?: string): Promise<T> {
+    const res = await fetch(`${API_BASE}${path}`, {
+        method: 'PUT',
+        headers: buildHeaders(token),
+        body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`PUT ${path} failed with ${res.status}`)
+    return readBody(res)
+}
+
 export async function tryGet<T = any>(path: string, token?: string): Promise<T | null> {
     try {
         return await get<T>(path, token)

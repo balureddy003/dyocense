@@ -4,34 +4,51 @@ import { toolConfigs } from '../data/tools'
 import { primaryButton, secondaryButton } from '../lib/theme'
 import { useAuthStore } from '../stores/auth'
 
+// Fitness-aligned headline bullets focusing on health, coaching, motivation
 const heroHighlights = [
-    'Copilots tuned for owner-operators',
-    'No extra headcount or spreadsheets',
-    'Works with ERPNext, Shopify, GrandNode, CSV',
+    'Live Business Health Score (close your rings for revenue, ops & customers)',
+    'Weekly action plan from your AI coach',
+    'Milestone celebrations & streak tracking to sustain momentum',
 ]
 
 const benefitCards = [
     {
-        title: 'Plan faster',
-        copy: 'Point Dyocense at your goals and it drafts explainable milestones, risks, and owner-ready briefs.',
-        icon: '⚡',
+        title: 'Know Your Health',
+        copy: 'Real-time business fitness score across revenue, cash flow, customers, inventory & operations.',
+        icon: '📊',
     },
     {
-        title: 'Automate follow-ups',
-        copy: 'Assign agents to send updates, QA deliverables, and sync status without chasing your team.',
-        icon: '🤝',
+        title: 'Set Clear Goals',
+        copy: 'Type “Grow Q4 revenue 25%” — the coach turns it into a SMART, trackable objective.',
+        icon: '🎯',
     },
     {
-        title: 'Prove impact',
-        copy: 'Every run logs evidence so exporting an audit or investor update is a single click.',
-        icon: '📈',
+        title: 'Weekly Action Plan',
+        copy: 'Receive 5–7 focused tasks. Check them off, build streaks, watch your score climb.',
+        icon: '✅',
+    },
+    {
+        title: 'Celebrate Progress',
+        copy: 'Confetti for milestones, badges for streaks, uplifting coach insights keep motivation high.',
+        icon: '🏆',
+    },
+    {
+        title: 'Stay On Track',
+        copy: 'Smart nudges when metrics slip or tasks stall—support without micromanagement.',
+        icon: '🕒',
+    },
+    {
+        title: 'Own Your Data',
+        copy: 'Lightweight connectors (ERP, storefront, CSV). You control scopes & retention—no customer PII.',
+        icon: '�',
     },
 ]
 
 const journeySteps = [
-    'Pick a workspace template for retail, services, or ecommerce.',
-    'Connect a data source (ERP, storefront, or start with the guided pilot).',
-    'Let Dyocense copilots plan, execute, and report with you.',
+    'Take a 60‑second assessment to generate your Business Health Score.',
+    'Set or refine 1–3 priority goals (revenue, customers, cash flow, operations).',
+    'Get your personalized weekly action plan from the AI coach.',
+    'Check off tasks, build streaks, and watch your score improve.',
 ]
 
 const connectors = [
@@ -101,9 +118,9 @@ export default function LandingPage() {
         <div className="page-shell space-y-12">
             <section className="glass-panel--light grid gap-8 text-slate-900 md:grid-cols-[1fr_0.8fr]">
                 <div className="space-y-6">
-                    <p className="eyebrow text-brand-400">GenAI workspace for SMB owners</p>
-                    <h1 className="text-4xl font-semibold leading-tight md:text-5xl">Plan, launch, and prove impact without adding headcount</h1>
-                    <p className="text-lg text-slate-600">Dyocense is the AI operations desk for lean teams. Plug in your data, invite your crew, and a copilot keeps every plan, agent, and report moving.</p>
+                    <p className="eyebrow text-brand-400">Your business fitness coach</p>
+                    <h1 className="text-4xl font-semibold leading-tight md:text-5xl">Set goals. Track progress. Achieve more.</h1>
+                    <p className="text-lg text-slate-600">60‑second assessment → health score → weekly action plan. Motivation & celebration built in—no extra headcount.</p>
                     <ul className="space-y-2 text-sm text-slate-600">
                         {heroHighlights.map((item) => (
                             <li className="flex items-start gap-2" key={item}>
@@ -114,7 +131,7 @@ export default function LandingPage() {
                     </ul>
                     <div className="flex flex-col gap-3 sm:flex-row">
                         <Link className={`${primaryButton} w-full justify-center sm:w-auto`} to="/signup">
-                            Start pilot in minutes
+                            Start free assessment
                         </Link>
                         <Link className={`${secondaryButton} w-full justify-center sm:w-auto`} to="/contact">
                             See pricing with an advisor
@@ -144,7 +161,7 @@ export default function LandingPage() {
             <section className="glass-panel space-y-6" id="features">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <h2 className="text-3xl font-semibold">Why owners choose Dyocense</h2>
-                    <p className="text-slate-100">Everything you need to launch work with confidence.</p>
+                    <p className="text-slate-100">Like a fitness coach—but for your business performance.</p>
                 </div>
                 <div className="grid gap-5 md:grid-cols-3">
                     {benefitCards.map((benefit) => (
@@ -159,8 +176,8 @@ export default function LandingPage() {
 
             <section className="grid gap-6 md:grid-cols-2">
                 <div className="glass-panel space-y-6">
-                    <h2 className="text-3xl font-semibold">Built for small teams</h2>
-                    <p className="text-slate-100">You don’t need a RevOps army. Follow the three-step playbook.</p>
+                    <h2 className="text-3xl font-semibold">How the journey works</h2>
+                    <p className="text-slate-100">Simple 4‑step loop that compounds results week after week.</p>
                     <ol className="space-y-4 text-slate-100">
                         {journeySteps.map((step, index) => (
                             <li className="flex gap-4" key={step}>
@@ -171,7 +188,7 @@ export default function LandingPage() {
                     </ol>
                 </div>
                 <div className="glass-panel space-y-4">
-                    <p className="eyebrow text-brand-200">Connect what you already use</p>
+                    <p className="eyebrow text-brand-200">Plug in lightweight data signals</p>
                     <ul className="space-y-4 text-slate-100">
                         {connectors.map((connector) => (
                             <li className="flex flex-col" key={connector.label}>
@@ -189,8 +206,8 @@ export default function LandingPage() {
             <section className="glass-panel space-y-6" id="tools">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <h2 className="text-3xl font-semibold">Pick the cockpit that fits today’s job</h2>
-                        <p className="text-slate-100">Copilots for planning, automation, and evidence—all powered by the same kernel.</p>
+                        <h2 className="text-3xl font-semibold">Your coaching spaces</h2>
+                        <p className="text-slate-100">Focused views for goals, weekly plan, health trends, and coach insights.</p>
                     </div>
                     <Link to="/tools" className="text-sm font-semibold text-brand hover:underline">
                         View all tools →
@@ -225,8 +242,8 @@ export default function LandingPage() {
             <section className="glass-panel space-y-6" id="pricing">
                 <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                     <div>
-                        <h2 className="text-3xl font-semibold">Pricing for growing operators</h2>
-                        <p className="text-slate-100">Predictable seats with flexible automation allowances.</p>
+                        <h2 className="text-3xl font-semibold">Pricing that grows with your momentum</h2>
+                        <p className="text-slate-100">Start free, prove value early, scale when weekly improvements are consistent.</p>
                     </div>
                     <p className="text-sm text-slate-200">Every plan includes onboarding specialists, templates, and compliance reviews.</p>
                 </div>
@@ -257,8 +274,8 @@ export default function LandingPage() {
             <section className="glass-panel space-y-6" id="trust">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <h2 className="text-3xl font-semibold">Data requirements & controls</h2>
-                        <p className="text-slate-100">You decide what Dyocense ingests—and how long we keep it.</p>
+                        <h2 className="text-3xl font-semibold">Data boundaries & controls</h2>
+                        <p className="text-slate-100">We only ingest what fuels coaching. You define scopes & retention windows.</p>
                     </div>
                     <span className="rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white">
                         Zero customer PII
@@ -275,16 +292,16 @@ export default function LandingPage() {
                         </li>
                     ))}
                 </ul>
-                <p className="text-slate-100">Audit trails, role-based access, and redaction policies ship by default so compliance receives a finished package.</p>
+                <p className="text-slate-100">Audit trails, role-based access, and redaction policies ship by default—no customer PII, ever.</p>
             </section>
 
             <section className="glass-panel--light text-center">
-                <p className="text-sm uppercase tracking-[0.3em] text-brand">Ready to launch?</p>
-                <h2 className="mt-4 text-3xl font-semibold text-slate-900">Pilot Dyocense with your team this week</h2>
-                <p className="mt-3 text-slate-600">Invite your crew, connect a data source, and watch the copilot run your first plan.</p>
+                <p className="text-sm uppercase tracking-[0.3em] text-brand">Ready to start your assessment?</p>
+                <h2 className="mt-4 text-3xl font-semibold text-slate-900">Get your Business Health Score & first weekly plan</h2>
+                <p className="mt-3 text-slate-600">60‑second assessment → health score → AI‑generated action plan. No credit card.</p>
                 <div className="mt-6 flex flex-col items-center justify-center gap-4 sm:flex-row">
                     <Link className={`${primaryButton} w-full justify-center sm:w-auto`} to="/signup">
-                        Start free pilot
+                        Start free assessment
                     </Link>
                     <Link className={`${secondaryButton} w-full justify-center sm:w-auto`} to="/contact">
                         Book a walkthrough

@@ -1,6 +1,7 @@
-import { ActionIcon, Card, Group, Stack, Text, Textarea } from '@mantine/core'
+import { ActionIcon, Card, Group, Loader, Stack, Text, Textarea } from '@mantine/core'
 import { IconSend, IconSparkles } from '@tabler/icons-react'
 import { useState } from 'react'
+import { useAuthStore } from '../stores/auth'
 
 interface Insight {
     id: string
@@ -14,7 +15,12 @@ interface AICopilotInsightsProps {
 }
 
 export default function AICopilotInsights({ insights }: AICopilotInsightsProps) {
+    const tenantId = useAuthStore((s) => s.tenantId)
+    const apiToken = useAuthStore((s) => s.apiToken)
+
     const [message, setMessage] = useState('')
+    const [isLoading, setIsLoading] = useState(false)
+    const [chatMessages, setChatMessages] = useState<Insight[]>(insights)
 
     const getInsightIcon = (type: Insight['type']) => {
         switch (type) {
@@ -38,11 +44,114 @@ export default function AICopilotInsights({ insights }: AICopilotInsightsProps) 
         }
     }
 
-    const handleSend = () => {
-        if (!message.trim()) return
-        // TODO: Send message to AI backend
-        console.log('Sending message:', message)
+    const handleSend = async () => {
+        if (!message.trim() || isLoading) return
+
+        const userMessage = message
         setMessage('')
+        setIsLoading(true)
+
+        // Add user message to chat
+        const timestamp = new Date().toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+        })
+
+        setChatMessages(prev => [...prev, {
+            id: Date.now().toString(),
+            message: userMessage,
+            type: 'insight',
+            timestamp: timestamp
+        }])
+
+        // Add empty AI message that we'll stream into
+        const aiMessageId = (Date.now() + 1).toString()
+        setChatMessages(prev => [...prev, {
+            id: aiMessageId,
+            message: '',
+            type: 'suggestion',
+            timestamp: new Date().toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            })
+        }])
+
+        try {
+            // Use EventSource for streaming
+            const url = new URL(`/v1/tenants/${tenantId}/coach/chat/stream`, window.location.origin)
+
+            // Send request with fetch first to initiate streaming
+            const response = await fetch(url.toString(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiToken}`
+                },
+                body: JSON.stringify({
+                    message: userMessage,
+                    conversation_history: [],
+                })
+            })
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`)
+            }
+
+            // Read the stream
+            const reader = response.body?.getReader()
+            const decoder = new TextDecoder()
+
+            if (!reader) {
+                throw new Error('No response body')
+            }
+
+            let accumulatedMessage = ''
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                // Decode the chunk
+                const chunk = decoder.decode(value, { stream: true })
+
+                // Parse SSE data (format: "data: {...}\n\n")
+                const lines = chunk.split('\n')
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.substring(6))
+                            if (!data.done) {
+                                accumulatedMessage += data.delta
+                                // Update the AI message in real-time
+                                setChatMessages(prev => prev.map(msg =>
+                                    msg.id === aiMessageId
+                                        ? { ...msg, message: accumulatedMessage }
+                                        : msg
+                                ))
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse SSE chunk:', e)
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('AI Coach error:', error)
+            // Update AI message with error
+            setChatMessages(prev => prev.map(msg =>
+                msg.id === aiMessageId
+                    ? {
+                        ...msg,
+                        message: "I'm having trouble connecting right now. Please try again in a moment.",
+                        type: 'alert'
+                    }
+                    : msg
+            ))
+        } finally {
+            setIsLoading(false)
+        }
     }
 
     return (
@@ -50,11 +159,11 @@ export default function AICopilotInsights({ insights }: AICopilotInsightsProps) 
             <Group justify="space-between" align="center">
                 <Group gap="xs">
                     <IconSparkles size={16} color="var(--mantine-color-brand-6)" />
-                    <Text size="sm" fw={600} c="neutral.700" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
-                        AI Copilot
+                    <Text size="sm" fw={600} c="gray.7" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                        AI Coach
                     </Text>
                 </Group>
-                <Text size="xs" c="neutral.500">
+                <Text size="xs" c="gray.5">
                     Powered by GPT-4
                 </Text>
             </Group>
@@ -63,28 +172,36 @@ export default function AICopilotInsights({ insights }: AICopilotInsightsProps) 
                 <Stack gap="md">
                     {/* Insights */}
                     <Stack gap="sm">
-                        {insights.map((insight) => (
+                        {chatMessages.map((insight) => (
                             <div
                                 key={insight.id}
                                 className={`p-3 rounded-lg border ${getInsightBg(insight.type)}`}
                             >
                                 <Group gap="xs" align="flex-start" mb="xs">
                                     <Text size="sm">{getInsightIcon(insight.type)}</Text>
-                                    <Text size="xs" c="neutral.600" fw={500}>
+                                    <Text size="xs" c="gray.6" fw={500}>
                                         {insight.timestamp}
                                     </Text>
                                 </Group>
-                                <Text size="sm" c="neutral.800">
+                                <Text size="sm" c="gray.8">
                                     {insight.message}
                                 </Text>
                             </div>
                         ))}
+
+                        {/* Loading indicator */}
+                        {isLoading && (
+                            <Group gap="xs" justify="center" py="sm">
+                                <Loader size="sm" />
+                                <Text size="sm" c="dimmed">AI Coach is thinking...</Text>
+                            </Group>
+                        )}
                     </Stack>
 
                     {/* Chat Input */}
                     <Group gap="xs" align="flex-end">
                         <Textarea
-                            placeholder="Ask AI copilot anything..."
+                            placeholder="Ask AI coach anything..."
                             value={message}
                             onChange={(e) => setMessage(e.currentTarget.value)}
                             onKeyDown={(e) => {

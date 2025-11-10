@@ -20,7 +20,7 @@ export default function Tools() {
             <section className="glass-panel--light space-y-4 text-center">
                 <p className="eyebrow text-brand-600">Planner · Agents · Executor</p>
                 <Title order={1}>Pick the right cockpit for today’s work</Title>
-                <Text c="neutral.600" maw={560} mx="auto">
+                <Text c="gray.6" maw={560} mx="auto">
                     Every workflow is powered by the Dyocense decision kernel. Start in Planner, delegate to Agents, and track outcomes without context switching.
                 </Text>
             </section>
@@ -50,7 +50,7 @@ export default function Tools() {
                             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                                 <div className="space-y-3">
                                     <Title order={3}>{tool.title}</Title>
-                                    <Text c="neutral.600">{tool.summary}</Text>
+                                    <Text c="gray.6">{tool.summary}</Text>
                                     <div className="flex flex-wrap gap-2">
                                         {tool.metrics.map((metric) => (
                                             <Badge key={metric} color="brand" variant="light">
@@ -95,7 +95,7 @@ export default function Tools() {
                                             cta="See demo"
                                             onSelect={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
                                         />
-                                        <Text size="xs" c="neutral.500">
+                                        <Text size="xs" c="gray.5">
                                             Login to connect your workspace and unlock live orchestration runs.
                                         </Text>
                                     </div>

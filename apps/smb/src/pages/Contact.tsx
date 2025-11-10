@@ -42,7 +42,7 @@ export default function Contact() {
                 <Stack gap="xs">
                     <Text className="eyebrow text-brand-600">Talk to an expert</Text>
                     <Title order={2}>Design your Dyocense rollout</Title>
-                    <Text c="neutral.600">
+                    <Text c="gray.6">
                         Share a few details about your team and we’ll scope the automations, integrations, and security review you need.
                     </Text>
                 </Stack>

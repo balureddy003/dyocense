@@ -5,9 +5,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { tryPost } from '../lib/api'
 
 const goals = [
-    { label: 'Plan launch', value: 'launch' },
-    { label: 'Improve ops', value: 'ops' },
-    { label: 'Automate reporting', value: 'reporting' },
+    { label: '💰 Grow my revenue', value: 'revenue' },
+    { label: '💵 Improve cash flow', value: 'cash_flow' },
+    { label: '🎯 Win more customers', value: 'customers' },
+    { label: '📊 Get better insights', value: 'insights' },
 ]
 
 type SignupForm = {
@@ -63,33 +64,33 @@ export default function Signup() {
             <div className="grid gap-8 md:grid-cols-[0.9fr_1.1fr]">
                 <div className="glass-panel space-y-6">
                     <div className="space-y-3">
-                        <p className="eyebrow text-brand-200">Start your pilot</p>
+                        <p className="eyebrow text-brand-200">Start your journey</p>
                         <Title order={2} c="white">
-                            Create your Dyocense workspace
+                            Welcome! Let's Get to Know Your Business
                         </Title>
-                        <Text c="gray.2">Use any email you check daily—we’ll send a one-click magic link.</Text>
+                        <Text c="gray.2">In 60 seconds, you'll have your business health score and personalized action plan.</Text>
                     </div>
                     <Paper radius="xl" p="lg" className="bg-white/10 backdrop-blur" withBorder={false}>
                         <Text size="xs" fw={600} tt="uppercase" c="gray.2" style={{ letterSpacing: '0.25em' }}>
-                            See the copilot in action
+                            What you'll get
                         </Text>
-                        <Stack gap="xs" mt="sm" textWrap="pretty" c="gray.1">
-                            <Text size="sm">“Draft a launch plan for our spring promo.” → Planner cards appear instantly.</Text>
-                            <Text size="sm">“Email the staff about the schedule change.” → Agent triggers a workflow.</Text>
-                            <Text size="sm">“Explain today’s forecast to the owner.” → Evidence summary ready to send.</Text>
+                        <Stack gap="xs" mt="sm" c="gray.1">
+                            <Text size="sm">✓ Business health score in 30 seconds</Text>
+                            <Text size="sm">✓ Personalized weekly action plan</Text>
+                            <Text size="sm">✓ AI coach to guide you every step</Text>
                         </Stack>
                     </Paper>
                     <Badge size="lg" radius="sm" color="brand" variant="light" className="w-fit">
-                        Pilot seats available
+                        Free assessment • No credit card
                     </Badge>
                 </div>
 
                 <div className="glass-panel--light space-y-6">
                     <Stack gap="xs">
-                        <Text className="eyebrow text-brand-600">Step 1 · Invite yourself</Text>
-                        <Text c="neutral.600">Tell us about your business so we can preload the right template.</Text>
+                        <Text className="eyebrow text-brand-600">Step 1 · Quick assessment</Text>
+                        <Text c="gray.6">Tell us about your business so the coach can personalize your plan.</Text>
                     </Stack>
-                    {mutation.isError && <Alert color="red">We couldn’t reach signup. Using a dev token fallback.</Alert>}
+                    {mutation.isError && <Alert color="red">We couldn't reach signup. Using a dev token fallback.</Alert>}
                     <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
                         <Controller
                             control={control}
@@ -120,8 +121,8 @@ export default function Signup() {
                             name="goal"
                             render={({ field }) => (
                                 <div className="space-y-2">
-                                    <Text size="sm" fw={600} c="neutral.600">
-                                        What brings you here?
+                                    <Text size="sm" fw={600} c="gray.6">
+                                        What's your #1 priority right now?
                                     </Text>
                                     <SegmentedControl fullWidth data={goals} {...field} />
                                 </div>
@@ -131,13 +132,13 @@ export default function Signup() {
                             control={control}
                             name="useCase"
                             render={({ field }) => (
-                                <Textarea label="Anything else?" placeholder="e.g. Need help syncing Shopify promos" minRows={3} {...field} />
+                                <Textarea label="Anything else we should know?" placeholder="e.g., I need help with inventory turnover" minRows={3} {...field} />
                             )}
                         />
                         <Button type="submit" fullWidth radius="xl" loading={mutation.isPending}>
-                            {mutation.isPending ? 'Sending link…' : 'Send me a magic link'}
+                            {mutation.isPending ? 'Preparing your assessment…' : 'Start my free assessment'}
                         </Button>
-                        <Text size="xs" ta="center" c="neutral.600">
+                        <Text size="xs" ta="center" c="gray.6">
                             Already a customer? <Link to={`/verify?next=${encodeURIComponent(next)}`}>Get a new link</Link>
                         </Text>
                     </form>

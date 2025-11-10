@@ -1,9 +1,14 @@
 import { ActionIcon, Badge, Button, Card, Container, Group, Modal, Progress, Stack, Text, Textarea, Title } from '@mantine/core'
 import { IconPlus, IconSparkles, IconTrash } from '@tabler/icons-react'
-import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import StreakCounter from '../components/StreakCounter'
+import { del, get, post, put } from '../lib/api'
+import { celebrateGoalMilestone } from '../utils/celebrations'
 
 interface Goal {
     id: string
+    tenant_id: string
     title: string
     description: string
     current: number
@@ -12,61 +17,81 @@ interface Goal {
     category: 'revenue' | 'operations' | 'customer' | 'growth' | 'custom'
     status: 'active' | 'completed' | 'archived'
     deadline: string
-    createdAt: string
-    autoTracked: boolean
-    connectorSource?: string
+    created_at: string
+    updated_at: string
+    auto_tracked: boolean
+    connector_source?: string
+    last_celebrated_milestone?: number // Track which milestones we've already celebrated
 }
 
 export default function Goals() {
-    const [goals, setGoals] = useState<Goal[]>([
-        {
-            id: '1',
-            title: 'Seasonal Revenue Boost',
-            description: 'Increase Q4 revenue by 25% through holiday promotions and new product launches',
-            current: 78500,
-            target: 100000,
-            unit: 'USD',
-            category: 'revenue',
-            status: 'active',
-            deadline: '2025-12-01',
-            createdAt: '2025-11-01',
-            autoTracked: true,
-            connectorSource: 'GrandNode',
+    const tenantId = localStorage.getItem('tenantId') || 'tenant-demo'
+    const apiToken = localStorage.getItem('api_token') || ''
+    const queryClient = useQueryClient()
+
+    // Fetch goals from API
+    const { data: goals = [], isLoading } = useQuery({
+        queryKey: ['goals', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/goals?status=active`, apiToken),
+        staleTime: 30 * 1000, // 30 seconds
+    })
+
+    // Create goal mutation
+    const createGoalMutation = useMutation({
+        mutationFn: (goalData: any) => post(`/v1/tenants/${tenantId}/goals`, goalData, apiToken),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['goals', tenantId] })
         },
-        {
-            id: '2',
-            title: 'Inventory Optimization',
-            description: 'Improve inventory turnover rate to reduce holding costs and prevent stockouts',
-            current: 87,
-            target: 95,
-            unit: '% Turnover',
-            category: 'operations',
-            status: 'active',
-            deadline: '2025-12-10',
-            createdAt: '2025-11-01',
-            autoTracked: true,
-            connectorSource: 'Salesforce Kennedy ERP',
+    })
+
+    // Update goal mutation
+    const updateGoalMutation = useMutation({
+        mutationFn: ({ goalId, data }: { goalId: string; data: any }) =>
+            put(`/v1/tenants/${tenantId}/goals/${goalId}`, data, apiToken),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['goals', tenantId] })
         },
-        {
-            id: '3',
-            title: 'Customer Retention',
-            description: 'Build loyalty program to increase repeat customer rate from 28% to 35%',
-            current: 142,
-            target: 200,
-            unit: 'Repeat Customers',
-            category: 'customer',
-            status: 'active',
-            deadline: '2025-11-24',
-            createdAt: '2025-11-01',
-            autoTracked: true,
-            connectorSource: 'GrandNode',
+    })
+
+    // Delete goal mutation
+    const deleteGoalMutation = useMutation({
+        mutationFn: (goalId: string) => del(`/v1/tenants/${tenantId}/goals/${goalId}`, apiToken),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['goals', tenantId] })
         },
-    ])
+    })
 
     const [showCreateModal, setShowCreateModal] = useState(false)
     const [goalInput, setGoalInput] = useState('')
     const [aiSuggestion, setAiSuggestion] = useState<Partial<Goal> | null>(null)
     const [isGenerating, setIsGenerating] = useState(false)
+
+    // Monitor goals for milestone achievements
+    useEffect(() => {
+        if (!goals) return
+
+        goals.forEach((goal: Goal) => {
+            const progress = calculateProgress(goal)
+            const milestones = [25, 50, 75, 100]
+
+            milestones.forEach((milestone) => {
+                // Check if we've crossed this milestone and haven't celebrated it yet
+                if (
+                    progress >= milestone &&
+                    (!goal.last_celebrated_milestone || goal.last_celebrated_milestone < milestone)
+                ) {
+                    // Celebrate milestone
+                    celebrateGoalMilestone(goal.title, milestone)
+
+                    // Update the goal to track this milestone
+                    updateGoalMutation.mutate({
+                        goalId: goal.id,
+                        data: { last_celebrated_milestone: milestone },
+                    })
+                }
+            })
+        })
+    }, [goals])
 
     const handleGenerateGoal = async () => {
         if (!goalInput.trim()) return
@@ -83,7 +108,7 @@ export default function Goals() {
             unit: extractUnit(goalInput),
             category: detectCategory(goalInput),
             deadline: suggestDeadline(goalInput),
-            autoTracked: canAutoTrack(goalInput),
+            auto_tracked: canAutoTrack(goalInput),
         }
 
         setAiSuggestion(suggestion)
@@ -140,29 +165,26 @@ export default function Goals() {
     const handleCreateGoal = () => {
         if (!aiSuggestion) return
 
-        const newGoal: Goal = {
-            id: Date.now().toString(),
+        const newGoalData = {
             title: aiSuggestion.title!,
             description: aiSuggestion.description!,
             current: 0,
             target: aiSuggestion.target!,
             unit: aiSuggestion.unit!,
             category: aiSuggestion.category!,
-            status: 'active',
             deadline: aiSuggestion.deadline!,
-            createdAt: new Date().toISOString().split('T')[0],
-            autoTracked: aiSuggestion.autoTracked!,
-            connectorSource: aiSuggestion.autoTracked ? 'Auto-detected' : undefined,
+            auto_tracked: aiSuggestion.auto_tracked!,
+            connector_source: aiSuggestion.auto_tracked ? 'Auto-detected' : undefined,
         }
 
-        setGoals([newGoal, ...goals])
+        createGoalMutation.mutate(newGoalData)
         setShowCreateModal(false)
         setGoalInput('')
         setAiSuggestion(null)
     }
 
     const handleDeleteGoal = (goalId: string) => {
-        setGoals(goals.filter((g) => g.id !== goalId))
+        deleteGoalMutation.mutate(goalId)
     }
 
     const getCategoryColor = (category: Goal['category']) => {
@@ -191,8 +213,16 @@ export default function Goals() {
         return diff
     }
 
-    const activeGoals = goals.filter((g) => g.status === 'active')
-    const completedGoals = goals.filter((g) => g.status === 'completed')
+    const activeGoals = goals.filter((g: Goal) => g.status === 'active')
+    const completedGoals = goals.filter((g: Goal) => g.status === 'completed')
+
+    if (isLoading) {
+        return (
+            <Container size="xl" className="py-6">
+                <Text>Loading goals...</Text>
+            </Container>
+        )
+    }
 
     return (
         <Container size="xl" className="py-6">
@@ -200,10 +230,10 @@ export default function Goals() {
                 {/* Header */}
                 <Group justify="space-between" align="center">
                     <div>
-                        <Title order={1} size="h2" c="neutral.900">
+                        <Title order={1} size="h2" c="gray.9">
                             Your Goals 🎯
                         </Title>
-                        <Text size="sm" c="neutral.600" mt={4}>
+                        <Text size="sm" c="gray.6" mt={4}>
                             Set ambitious goals and let AI help you achieve them
                         </Text>
                     </div>
@@ -213,17 +243,17 @@ export default function Goals() {
                 </Group>
 
                 {/* Stats Summary */}
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-4">
                     <Card withBorder radius="md" p="md">
-                        <Text size="xs" c="neutral.600" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                        <Text size="xs" c="gray.6" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                             Active Goals
                         </Text>
-                        <Text size="xl" fw={700} c="neutral.900" mt="xs">
+                        <Text size="xl" fw={700} c="gray.9" mt="xs">
                             {activeGoals.length}
                         </Text>
                     </Card>
                     <Card withBorder radius="md" p="md">
-                        <Text size="xs" c="neutral.600" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                        <Text size="xs" c="gray.6" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                             Completed
                         </Text>
                         <Text size="xl" fw={700} c="teal.6" mt="xs">
@@ -231,22 +261,25 @@ export default function Goals() {
                         </Text>
                     </Card>
                     <Card withBorder radius="md" p="md">
-                        <Text size="xs" c="neutral.600" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                        <Text size="xs" c="gray.6" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                             Auto-Tracked
                         </Text>
                         <Text size="xl" fw={700} c="blue.6" mt="xs">
-                            {activeGoals.filter((g) => g.autoTracked).length}
+                            {activeGoals.filter((g: Goal) => g.auto_tracked).length}
                         </Text>
                     </Card>
+                    <div>
+                        <StreakCounter variant="compact" />
+                    </div>
                 </div>
 
                 {/* Active Goals */}
                 <Stack gap="md">
-                    <Text size="sm" fw={600} c="neutral.700" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                    <Text size="sm" fw={600} c="gray.7" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                         Active Goals ({activeGoals.length})
                     </Text>
 
-                    {activeGoals.map((goal) => {
+                    {activeGoals.map((goal: Goal) => {
                         const progress = calculateProgress(goal)
                         const daysLeft = getDaysRemaining(goal.deadline)
                         const isUrgent = daysLeft < 7
@@ -260,16 +293,16 @@ export default function Goals() {
                                             <Badge size="sm" color={getCategoryColor(goal.category)} variant="light">
                                                 {goal.category}
                                             </Badge>
-                                            {goal.autoTracked && (
+                                            {goal.auto_tracked && (
                                                 <Badge size="sm" color="blue" variant="outline" leftSection={<IconSparkles size={12} />}>
                                                     Auto-tracked
                                                 </Badge>
                                             )}
                                         </Group>
-                                        <Title order={3} size="h4" c="neutral.900">
+                                        <Title order={3} size="h4" c="gray.9">
                                             {goal.title}
                                         </Title>
-                                        <Text size="sm" c="neutral.600" mt="xs">
+                                        <Text size="sm" c="gray.6" mt="xs">
                                             {goal.description}
                                         </Text>
                                     </div>
@@ -280,10 +313,10 @@ export default function Goals() {
 
                                 <Stack gap="xs">
                                     <Group justify="space-between">
-                                        <Text size="sm" c="neutral.700" fw={500}>
+                                        <Text size="sm" c="gray.7" fw={500}>
                                             {goal.current.toLocaleString()} / {goal.target.toLocaleString()} {goal.unit}
                                         </Text>
-                                        <Text size="sm" c={isUrgent ? 'red.6' : 'neutral.600'} fw={500}>
+                                        <Text size="sm" c={isUrgent ? 'red.6' : 'gray.'} fw={500}>
                                             {daysLeft} days left {isUrgent && '⚠️'}
                                         </Text>
                                     </Group>
@@ -292,9 +325,9 @@ export default function Goals() {
                                         <Text size="xs" c={`${progressColor}.6`} fw={600}>
                                             {progress.toFixed(0)}% complete
                                         </Text>
-                                        {goal.connectorSource && (
-                                            <Text size="xs" c="neutral.500">
-                                                Data from {goal.connectorSource}
+                                        {goal.connector_source && (
+                                            <Text size="xs" c="gray.5">
+                                                Data from {goal.connector_source}
                                             </Text>
                                         )}
                                     </Group>
@@ -305,10 +338,10 @@ export default function Goals() {
 
                     {activeGoals.length === 0 && (
                         <Card withBorder radius="md" p="xl" className="text-center">
-                            <Text size="lg" c="neutral.600" mb="sm">
+                            <Text size="lg" c="gray.6" mb="sm">
                                 No active goals yet
                             </Text>
-                            <Text size="sm" c="neutral.500" mb="md">
+                            <Text size="sm" c="gray.5" mb="md">
                                 Create your first goal using AI to get personalized recommendations
                             </Text>
                             <Button leftSection={<IconSparkles size={18} />} onClick={() => setShowCreateModal(true)}>
@@ -338,7 +371,7 @@ export default function Goals() {
                 <Stack gap="md">
                     {!aiSuggestion ? (
                         <>
-                            <Text size="sm" c="neutral.600">
+                            <Text size="sm" c="gray.6">
                                 Describe your goal in natural language. AI will help structure it into a trackable, achievable goal.
                             </Text>
 
@@ -379,40 +412,40 @@ export default function Goals() {
                                 </Group>
                                 <Stack gap="sm">
                                     <div>
-                                        <Text size="xs" c="neutral.600" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                                        <Text size="xs" c="gray.6" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                                             Title
                                         </Text>
-                                        <Text size="md" fw={600} c="neutral.900" mt={4}>
+                                        <Text size="md" fw={600} c="gray.9" mt={4}>
                                             {aiSuggestion.title}
                                         </Text>
                                     </div>
                                     <div>
-                                        <Text size="xs" c="neutral.600" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+                                        <Text size="xs" c="gray.6" fw={500} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                                             Description
                                         </Text>
-                                        <Text size="sm" c="neutral.700" mt={4}>
+                                        <Text size="sm" c="gray.7" mt={4}>
                                             {aiSuggestion.description}
                                         </Text>
                                     </div>
                                     <Group>
                                         <div>
-                                            <Text size="xs" c="neutral.600" fw={500}>
+                                            <Text size="xs" c="gray.6" fw={500}>
                                                 Target
                                             </Text>
-                                            <Text size="sm" fw={600} c="neutral.900" mt={2}>
+                                            <Text size="sm" fw={600} c="gray.9" mt={2}>
                                                 {aiSuggestion.target} {aiSuggestion.unit}
                                             </Text>
                                         </div>
                                         <div>
-                                            <Text size="xs" c="neutral.600" fw={500}>
+                                            <Text size="xs" c="gray.6" fw={500}>
                                                 Deadline
                                             </Text>
-                                            <Text size="sm" fw={600} c="neutral.900" mt={2}>
+                                            <Text size="sm" fw={600} c="gray.9" mt={2}>
                                                 {aiSuggestion.deadline}
                                             </Text>
                                         </div>
                                         <div>
-                                            <Text size="xs" c="neutral.600" fw={500}>
+                                            <Text size="xs" c="gray.6" fw={500}>
                                                 Category
                                             </Text>
                                             <Badge size="sm" color={getCategoryColor(aiSuggestion.category!)} variant="light" mt={2}>
@@ -420,7 +453,7 @@ export default function Goals() {
                                             </Badge>
                                         </div>
                                     </Group>
-                                    {aiSuggestion.autoTracked && (
+                                    {aiSuggestion.auto_tracked && (
                                         <div className="rounded-md bg-teal-50 p-3">
                                             <Text size="xs" c="teal.7" fw={500}>
                                                 ✨ This goal can be auto-tracked using your connected data sources!
@@ -430,7 +463,7 @@ export default function Goals() {
                                 </Stack>
                             </div>
 
-                            <Text size="sm" c="neutral.600">
+                            <Text size="sm" c="gray.6">
                                 Review the AI-generated goal. You can edit it later or regenerate with different input.
                             </Text>
 

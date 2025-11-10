@@ -16,7 +16,7 @@ interface GoalProgressProps {
 export default function GoalProgress({ goals }: GoalProgressProps) {
     return (
         <Stack gap="sm">
-            <Text size="sm" fw={600} c="neutral.700" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
+            <Text size="sm" fw={600} c="gray.7" tt="uppercase" style={{ letterSpacing: '0.5px' }}>
                 Active Goals
             </Text>
             <Stack gap="xs">
@@ -29,14 +29,14 @@ export default function GoalProgress({ goals }: GoalProgressProps) {
                             <Stack gap="xs">
                                 <Group justify="space-between" align="flex-start">
                                     <div>
-                                        <Text size="sm" fw={600} c="neutral.900">
+                                        <Text size="sm" fw={600} c="gray.9">
                                             {goal.title}
                                         </Text>
-                                        <Text size="xs" c="neutral.600" mt={4}>
+                                        <Text size="xs" c="gray.6" mt={4}>
                                             {goal.current.toLocaleString()} / {goal.target.toLocaleString()} {goal.unit}
                                         </Text>
                                     </div>
-                                    <Text size="xs" c="neutral.500" fw={500}>
+                                    <Text size="xs" c="gray.5" fw={500}>
                                         {goal.daysRemaining} days left
                                     </Text>
                                 </Group>

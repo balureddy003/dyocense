@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Card, Divider, Group, Loader, Progress, SimpleGrid, Space, Stack, Text, Title } from '@mantine/core'
+import { Alert, Badge, Button, Card, Divider, Group, Loader, Progress, SimpleGrid, Stack, Text, Title } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -78,9 +78,9 @@ export default function Planner() {
         : `Template: ${selectedTemplate.name} focuses on ${selectedTemplate.goals[0]?.title}.`
     const planPrompts = plan
         ? [
-              `Rewrite the "${plan.tasks[0]?.label ?? 'first'}" task with more detail`,
-              ...selectedTemplate.prompts.planner,
-          ]
+            `Rewrite the "${plan.tasks[0]?.label ?? 'first'}" task with more detail`,
+            ...selectedTemplate.prompts.planner,
+        ]
         : selectedTemplate.prompts.planner
 
     const focusTasks = plan?.tasks.slice(0, 2) ?? []
@@ -315,7 +315,7 @@ export default function Planner() {
                 </div>
                 <div id="planner-chat">
                     <ChatShell
-                        title="Plan copilot"
+                        title="AI Coach"
                         description="Ask for refinements, risk analysis, or follow-ups. Responses include one-click cards."
                         prompts={planPrompts}
                         templateId={selectedTemplate.archetypeId}

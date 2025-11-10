@@ -8,7 +8,10 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import RequireAuth from './components/RequireAuth'
 import PlatformLayout from './layouts/PlatformLayout'
 import PublicLayout from './layouts/PublicLayout'
+import { Achievements } from './pages/Achievements'
 import Agents from './pages/Agents'
+import { Analytics } from './pages/Analytics'
+import Coach from './pages/Coach'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
@@ -17,9 +20,11 @@ import Goals from './pages/Goals'
 import Home from './pages/Home'
 import LandingPage from './pages/LandingPage'
 import Planner from './pages/Planner'
+import Settings from './pages/Settings'
 import Signup from './pages/Signup'
 import Tools from './pages/Tools'
 import Verify from './pages/Verify'
+import Welcome from './pages/Welcome'
 import './styles.css'
 
 const queryClient = new QueryClient()
@@ -105,6 +110,16 @@ function App() {
 
                         {/* Platform Routes - Authenticated Access */}
                         <Route
+                            path="/welcome"
+                            element={
+                                <RequireAuth>
+                                    <PublicLayout showNav={false}>
+                                        <Welcome />
+                                    </PublicLayout>
+                                </RequireAuth>
+                            }
+                        />
+                        <Route
                             path="/home"
                             element={
                                 <RequireAuth>
@@ -170,6 +185,46 @@ function App() {
                                 <RequireAuth>
                                     <PlatformLayout>
                                         <Executor />
+                                    </PlatformLayout>
+                                </RequireAuth>
+                            }
+                        />
+                        <Route
+                            path="/settings"
+                            element={
+                                <RequireAuth>
+                                    <PlatformLayout>
+                                        <Settings />
+                                    </PlatformLayout>
+                                </RequireAuth>
+                            }
+                        />
+                        <Route
+                            path="/coach"
+                            element={
+                                <RequireAuth>
+                                    <PlatformLayout>
+                                        <Coach />
+                                    </PlatformLayout>
+                                </RequireAuth>
+                            }
+                        />
+                        <Route
+                            path="/analytics"
+                            element={
+                                <RequireAuth>
+                                    <PlatformLayout>
+                                        <Analytics />
+                                    </PlatformLayout>
+                                </RequireAuth>
+                            }
+                        />
+                        <Route
+                            path="/achievements"
+                            element={
+                                <RequireAuth>
+                                    <PlatformLayout>
+                                        <Achievements />
                                     </PlatformLayout>
                                 </RequireAuth>
                             }
