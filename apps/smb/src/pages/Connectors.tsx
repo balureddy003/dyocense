@@ -19,8 +19,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import React from 'react'
 import { useForm } from 'react-hook-form'
 import AgentActionCard from '../components/AgentActionCard'
-import { createConnector, deleteConnector, testConnector, type TenantConnector } from '../lib/api'
 import { useConnectorsQuery } from '../hooks/useConnectors'
+import { createConnector, deleteConnector, testConnector, type TenantConnector } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 type ConnectorField = {
@@ -203,6 +203,16 @@ export default function Connectors() {
                     <Text c="gray.4" maw={560}>
                         Start with lightweight connectors like CSV uploads or Google Drive folders. Once connected, Planner, Agents, and Executor use the same live metrics the business trusts.
                     </Text>
+                    <Group mt="md" gap="sm">
+                        <Badge size="lg" color="blue" variant="light">
+                            {connectors.length} Connected
+                        </Badge>
+                        <Link to="/marketplace">
+                            <Button variant="subtle" size="sm" leftSection={<span>🏪</span>}>
+                                Browse Marketplace
+                            </Button>
+                        </Link>
+                    </Group>
                 </div>
                 <Button
                     radius="xl"

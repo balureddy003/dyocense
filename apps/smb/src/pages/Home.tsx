@@ -1,11 +1,11 @@
 import { Container, Stack, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
-import AICopilotInsights from '../components/AICopilotInsights'
 import BusinessHealthScore from '../components/BusinessHealthScore'
 import DailySnapshot from '../components/DailySnapshot'
 import GoalProgress from '../components/GoalProgress'
+import MultiHorizonPlanner from '../components/MultiHorizonPlanner'
+import SmartInsights from '../components/SmartInsights'
 import StreakCounter from '../components/StreakCounter'
-import WeeklyPlan from '../components/WeeklyPlan'
 import { get } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 import { type Goal as PlanGoal } from '../utils/planGenerator'
@@ -55,12 +55,33 @@ export default function Home() {
         deadline: goal.deadline,
     }))
 
-    // Fetch tasks from API
-    const { data: tasksData = [] } = useQuery({
-        queryKey: ['tasks', tenantId],
-        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo&limit=5`, apiToken),
+    // Fetch tasks from API for different horizons
+    const { data: dailyTasksData = [] } = useQuery({
+        queryKey: ['tasks', 'daily', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo&horizon=daily&limit=5`, apiToken),
         enabled: !!tenantId && !!apiToken,
-        staleTime: 30 * 1000, // 30 seconds
+        staleTime: 30 * 1000,
+    })
+
+    const { data: weeklyTasksData = [] } = useQuery({
+        queryKey: ['tasks', 'weekly', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo&horizon=weekly&limit=5`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+        staleTime: 30 * 1000,
+    })
+
+    const { data: quarterlyTasksData = [] } = useQuery({
+        queryKey: ['tasks', 'quarterly', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo&horizon=quarterly&limit=5`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+        staleTime: 30 * 1000,
+    })
+
+    const { data: yearlyTasksData = [] } = useQuery({
+        queryKey: ['tasks', 'yearly', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo&horizon=yearly&limit=5`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+        staleTime: 30 * 1000,
     })
 
     // Use real health score data or default values while loading
@@ -92,13 +113,20 @@ export default function Home() {
         }
     })
 
-    // Convert API tasks to component format
-    const tasks = tasksData.map((task: any) => ({
+    // Convert API tasks to component format for each horizon
+    const convertTasks = (tasksData: any[]) => tasksData.map((task: any) => ({
         id: task.id,
         title: task.title,
         category: task.category,
         completed: task.status === 'completed',
+        due_date: task.due_date,
+        priority: task.priority,
     }))
+
+    const dailyTasks = convertTasks(dailyTasksData)
+    const weeklyTasks = convertTasks(weeklyTasksData)
+    const quarterlyTasks = convertTasks(quarterlyTasksData)
+    const yearlyTasks = convertTasks(yearlyTasksData)
 
     const mockInsights = [
         {
@@ -134,7 +162,11 @@ export default function Home() {
                 </div>
 
                 {/* Business Health Score - Apple Fitness Ring Style */}
-                <BusinessHealthScore score={healthScore.score} trend={healthScore.trend} />
+                <BusinessHealthScore
+                    score={healthScore.score}
+                    trend={healthScore.trend}
+                    breakdown={healthScoreData?.breakdown}
+                />
 
                 {/* Daily Snapshot - 4 Metric Cards */}
                 <DailySnapshot metrics={mockMetrics} />
@@ -146,8 +178,14 @@ export default function Home() {
                         {/* Active Goals */}
                         <GoalProgress goals={goalsForDisplay} />
 
-                        {/* Weekly Plan */}
-                        <WeeklyPlan tasks={tasks} />
+                        {/* Multi-Horizon Planner */}
+                        <MultiHorizonPlanner
+                            dailyTasks={dailyTasks}
+                            weeklyTasks={weeklyTasks}
+                            quarterlyTasks={quarterlyTasks}
+                            yearlyTasks={yearlyTasks}
+                            defaultHorizon="weekly"
+                        />
                     </Stack>
 
                     {/* Right Column */}
@@ -155,8 +193,8 @@ export default function Home() {
                         {/* Streak Counter */}
                         <StreakCounter variant="detailed" />
 
-                        {/* AI Coach Insights */}
-                        <AICopilotInsights insights={mockInsights} />
+                        {/* Smart AI Insights - Context-Aware */}
+                        <SmartInsights />
                     </Stack>
                 </div>
             </Stack>

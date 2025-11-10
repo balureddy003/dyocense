@@ -15,8 +15,11 @@ import {
     Title,
 } from '@mantine/core'
 import { IconRobot, IconSend, IconSparkles, IconUser } from '@tabler/icons-react'
-import { useState } from 'react'
-import { post } from '../lib/api'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { CoachMessage } from '../components/CoachMessage'
+import { get, post } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 interface Message {
@@ -38,6 +41,32 @@ export default function Coach() {
     const user = useAuthStore((s) => s.user)
     const tenantId = useAuthStore((s) => s.tenantId)
     const apiToken = useAuthStore((s) => s.apiToken)
+    const location = useLocation()
+
+    // Fetch business context for sidebar
+    const { data: healthScore } = useQuery({
+        queryKey: ['health-score', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/health-score`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+    })
+
+    const { data: goalsData } = useQuery({
+        queryKey: ['goals', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/goals`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+    })
+
+    const { data: tasksData } = useQuery({
+        queryKey: ['tasks', tenantId, 'todo'],
+        queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+    })
+
+    const { data: dataSourceInfo } = useQuery({
+        queryKey: ['data-source', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/data-source`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+    })
 
     const [conversations] = useState<Conversation[]>([
         {
@@ -66,6 +95,21 @@ export default function Coach() {
 
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
+
+    // Handle navigation with context (from insights or other pages)
+    useEffect(() => {
+        const state = location.state as { question?: string } | null
+        if (state?.question) {
+            setInput(state.question)
+            // Clear the state so it doesn't auto-fill again on page refresh
+            window.history.replaceState({}, document.title)
+
+            // Auto-send the question
+            setTimeout(() => {
+                handleSendMessage(state.question)
+            }, 500)
+        }
+    }, [location.state])
 
     const quickActions = [
         {
@@ -220,22 +264,50 @@ export default function Coach() {
                                     <Text size="xs" c="dimmed">
                                         Health Score
                                     </Text>
-                                    <Badge variant="light" color="teal" size="lg">
-                                        78 - Strong
+                                    <Badge
+                                        variant="light"
+                                        color={healthScore?.score >= 80 ? 'teal' : healthScore?.score >= 60 ? 'yellow' : 'red'}
+                                        size="lg"
+                                    >
+                                        {healthScore?.score || 78} - {healthScore?.score >= 80 ? 'Strong' : healthScore?.score >= 60 ? 'Good' : 'Needs Work'}
                                     </Badge>
                                 </div>
                                 <div>
                                     <Text size="xs" c="dimmed">
                                         Active Goals
                                     </Text>
-                                    <Text size="sm">3 goals</Text>
+                                    <Text size="sm">{goalsData?.length || 0} goals</Text>
                                 </div>
                                 <div>
                                     <Text size="xs" c="dimmed">
-                                        This Week
+                                        Pending Tasks
                                     </Text>
-                                    <Text size="sm">2/5 tasks done</Text>
+                                    <Text size="sm">{tasksData?.length || 0} tasks</Text>
                                 </div>
+                                {dataSourceInfo && (
+                                    <>
+                                        <div>
+                                            <Text size="xs" c="dimmed">
+                                                Data Sources
+                                            </Text>
+                                            <Text size="sm">
+                                                {dataSourceInfo.hasRealData ? (
+                                                    <Badge size="sm" color="green">Connected</Badge>
+                                                ) : (
+                                                    <Badge size="sm" color="orange">Sample Data</Badge>
+                                                )}
+                                            </Text>
+                                        </div>
+                                        <div>
+                                            <Text size="xs" c="dimmed">
+                                                Records
+                                            </Text>
+                                            <Text size="xs">
+                                                {dataSourceInfo.orders} orders, {dataSourceInfo.customers} customers
+                                            </Text>
+                                        </div>
+                                    </>
+                                )}
                             </Stack>
                         </Card>
                     </Stack>
@@ -266,19 +338,12 @@ export default function Coach() {
                                                 radius="lg"
                                                 style={{
                                                     backgroundColor:
-                                                        message.role === 'user' ? '#0ea5e9' : '#f1f5f9',
+                                                        message.role === 'user' ? '#0ea5e9' : '#f8fafc',
                                                     color: message.role === 'user' ? 'white' : '#1e293b',
+                                                    border: message.role === 'assistant' ? '1px solid #e2e8f0' : 'none',
                                                 }}
                                             >
-                                                <Text
-                                                    size="sm"
-                                                    style={{
-                                                        whiteSpace: 'pre-wrap',
-                                                        color: message.role === 'user' ? 'white' : '#1e293b',
-                                                    }}
-                                                >
-                                                    {message.content}
-                                                </Text>
+                                                <CoachMessage content={message.content} isUser={message.role === 'user'} />
                                             </Paper>
 
                                             {message.suggestions && message.suggestions.length > 0 && (

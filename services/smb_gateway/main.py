@@ -4,7 +4,7 @@ import uuid
 from importlib import resources
 import json
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -25,6 +25,7 @@ from .tasks_service import (
     UpdateTaskRequest,
     Task,
     TaskStatus,
+    TaskHorizon,
 )
 from .coach_service import (
     get_coach_service,
@@ -34,6 +35,9 @@ from .coach_service import (
 )
 from .conversational_coach import (
     get_conversational_coach,
+)
+from .multi_agent_coach import (
+    get_multi_agent_coach,
 )
 from .analytics_service import (
     get_analytics_service,
@@ -168,39 +172,112 @@ async def _fetch_connector_data(tenant_id: str) -> Dict:
     Fetch data from connectors (GrandNode, Salesforce, etc.)
     
     TODO: Replace with actual connector service integration
-    For now, check if we have mock data, otherwise return sample data
+    For now, check if we have mock data, otherwise return realistic sample data
     """
     if tenant_id in TENANT_CONNECTOR_DATA:
         return TENANT_CONNECTOR_DATA[tenant_id]
     
-    # Sample data for CycloneRake (outdoor equipment business)
-    # This should be replaced with actual connector API calls
-    now = datetime.now().isoformat()
-    sample_data = {
-        "orders": [
-            # Current period orders (last 30 days)
-            {"id": f"ord-{i}", "customer_id": f"cust-{i % 50}", "total_amount": 150 + (i * 10), "created_at": now}
-            for i in range(100)
-        ] + [
-            # Previous period orders (30-60 days ago)
-            {"id": f"ord-prev-{i}", "customer_id": f"cust-{i % 40}", "total_amount": 140 + (i * 10), "created_at": (datetime.now().replace(day=1) if datetime.now().day > 1 else datetime.now()).isoformat()}
-            for i in range(80)
-        ],
-        "inventory": [
-            {"id": f"inv-{i}", "sku": f"SKU-{i}", "quantity": 10 + (i % 20), "value": 50 + (i * 5)}
-            for i in range(50)
-        ] + [
-            # Some stockout items
-            {"id": f"inv-stockout-{i}", "sku": f"SKU-SO-{i}", "quantity": 0, "value": 100}
-            for i in range(3)
-        ],
-        "customers": [
-            {"id": f"cust-{i}", "name": f"Customer {i}", "email": f"customer{i}@example.com"}
-            for i in range(150)
-        ]
+    # Generate realistic sample data based on tenant
+    # In production, this would call connector service APIs to get synced data
+    now = datetime.now()
+    
+    # Create realistic order data with trends
+    orders = []
+    for days_ago in range(90):  # Last 90 days
+        date = now - timedelta(days=days_ago)
+        # More orders on weekdays, fewer on weekends
+        is_weekend = date.weekday() >= 5
+        daily_orders = 3 if is_weekend else 8
+        
+        for i in range(daily_orders):
+            order_id = f"ORD-{date.strftime('%Y%m%d')}-{i+1}"
+            orders.append({
+                "id": order_id,
+                "customer_id": f"cust-{(days_ago * 10 + i) % 200}",
+                "total_amount": round(120 + (i * 15) + (days_ago % 50), 2),
+                "status": "completed" if days_ago > 2 else "pending",
+                "items_count": 1 + (i % 3),
+                "created_at": date.isoformat(),
+                "product_category": ["outdoor-gear", "equipment", "accessories", "clothing"][i % 4]
+            })
+    
+    # Realistic inventory with some low-stock items
+    inventory = []
+    categories = {
+        "outdoor-gear": ["Tent", "Backpack", "Sleeping Bag", "Camping Stove", "Headlamp"],
+        "equipment": ["Hiking Boots", "Trekking Poles", "Water Filter", "Multi-tool", "Compass"],
+        "accessories": ["Water Bottle", "First Aid Kit", "Rope", "Carabiner", "Whistle"],
+        "clothing": ["Rain Jacket", "Thermal Pants", "Gloves", "Hat", "Socks"]
     }
     
-    return sample_data
+    sku_id = 1
+    for category, products in categories.items():
+        for product in products:
+            # Vary quantity - some items low/out of stock
+            base_qty = 15
+            if sku_id % 7 == 0:  # ~14% low stock
+                quantity = 2
+                status = "low_stock"
+            elif sku_id % 11 == 0:  # ~9% out of stock
+                quantity = 0
+                status = "out_of_stock"
+            else:
+                quantity = base_qty + (sku_id % 20)
+                status = "in_stock"
+            
+            inventory.append({
+                "id": f"inv-{sku_id}",
+                "sku": f"SKU-{sku_id:04d}",
+                "product_name": product,
+                "category": category,
+                "quantity": quantity,
+                "reorder_point": 5,
+                "unit_cost": 25 + (sku_id * 3),
+                "retail_price": 50 + (sku_id * 5),
+                "status": status,
+                "supplier": f"Supplier {(sku_id % 5) + 1}"
+            })
+            sku_id += 1
+    
+    # Realistic customer data with engagement levels
+    customers = []
+    for i in range(200):
+        # Create customer segments
+        if i < 20:  # VIP customers (10%)
+            total_orders = 15 + (i % 10)
+            lifetime_value = 5000 + (i * 200)
+            segment = "vip"
+        elif i < 80:  # Regular customers (30%)
+            total_orders = 5 + (i % 5)
+            lifetime_value = 1500 + (i * 50)
+            segment = "regular"
+        else:  # Occasional customers (60%)
+            total_orders = 1 + (i % 3)
+            lifetime_value = 300 + (i * 10)
+            segment = "occasional"
+        
+        customers.append({
+            "id": f"cust-{i}",
+            "name": f"Customer {i}",
+            "email": f"customer{i}@example.com",
+            "total_orders": total_orders,
+            "lifetime_value": round(lifetime_value, 2),
+            "segment": segment,
+            "last_order_date": (now - timedelta(days=i % 30)).isoformat(),
+            "created_at": (now - timedelta(days=180 + i)).isoformat()
+        })
+    
+    return {
+        "orders": orders,
+        "inventory": inventory,
+        "customers": customers,
+        "_meta": {
+            "generated": now.isoformat(),
+            "tenant_id": tenant_id,
+            "data_source": "sample" ,  # Mark as sample data
+            "note": "This is sample data. Connect real data sources for accurate insights."
+        }
+    }
 
 
 # ===================================
@@ -300,12 +377,13 @@ async def create_task(tenant_id: str, request: CreateTaskRequest):
 async def get_tasks(
     tenant_id: str,
     status: Optional[TaskStatus] = Query(None),
+    horizon: Optional[TaskHorizon] = Query(None),
     goal_id: Optional[str] = Query(None),
     limit: Optional[int] = Query(None),
 ):
     """Get all tasks for the tenant with optional filters"""
     tasks_service = get_tasks_service()
-    tasks = tasks_service.get_tasks(tenant_id, status=status, goal_id=goal_id, limit=limit)
+    tasks = tasks_service.get_tasks(tenant_id, status=status, horizon=horizon, goal_id=goal_id, limit=limit)
     return tasks
 
 
@@ -370,6 +448,27 @@ async def generate_tasks_from_goal(tenant_id: str, goal_id: str):
 # AI Coach Endpoints
 # ===================================
 
+@app.get("/v1/tenants/{tenant_id}/data-source")
+async def get_data_source_info(tenant_id: str):
+    """Get information about connected data sources"""
+    # Fetch connector data
+    connector_data = await _fetch_connector_data(tenant_id)
+    has_real_data = tenant_id in TENANT_CONNECTOR_DATA
+    
+    # Count records
+    total_orders = len(connector_data.get("orders", []))
+    total_inventory = len(connector_data.get("inventory", []))
+    total_customers = len(connector_data.get("customers", []))
+    
+    return {
+        "orders": total_orders,
+        "inventory": total_inventory,
+        "customers": total_customers,
+        "hasRealData": has_real_data,
+        "connectedSources": [] if not has_real_data else ["shopify"],  # Example
+        "lastSyncedAt": connector_data.get("_meta", {}).get("generated") if not has_real_data else None
+    }
+
 @app.post("/v1/tenants/{tenant_id}/coach/chat", response_model=ChatResponse)
 async def coach_chat(tenant_id: str, request: ChatRequest):
     """Chat with AI business coach"""
@@ -404,15 +503,55 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
         settings = settings_service.get_settings(tenant_id)
         business_name = settings.account.business_name or "your business"
         
-        # Build context
+        # Calculate key business metrics from actual data
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        thirty_days_ago = now - timedelta(days=30)
+        
+        orders = connector_data.get("orders", [])
+        inventory = connector_data.get("inventory", [])
+        customers = connector_data.get("customers", [])
+        
+        # Revenue metrics
+        recent_orders = [o for o in orders if datetime.fromisoformat(o.get("created_at", now.isoformat())) >= thirty_days_ago]
+        total_revenue_30d = sum(o.get("total_amount", 0) for o in recent_orders)
+        avg_order_value = total_revenue_30d / len(recent_orders) if recent_orders else 0
+        
+        # Inventory metrics
+        low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
+        out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
+        total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
+        
+        # Customer metrics
+        vip_customers = [c for c in customers if c.get("segment") == "vip"]
+        repeat_customers = [c for c in customers if c.get("total_orders", 0) > 1]
+        repeat_rate = (len(repeat_customers) / len(customers) * 100) if customers else 0
+        
+        # Build context with ACTUAL data
         business_context = {
             "business_name": business_name,
-            "industry": "retail",  # Generic industry
+            "industry": "retail",
             "has_data_connected": has_data_connected,
+            "is_sample_data": not has_real_data,
             "data_sources": {
                 "orders": total_orders,
                 "inventory": total_inventory,
                 "customers": total_customers,
+            },
+            "metrics": {
+                "revenue_last_30_days": round(total_revenue_30d, 2),
+                "orders_last_30_days": len(recent_orders),
+                "avg_order_value": round(avg_order_value, 2),
+                "low_stock_items": len(low_stock_items),
+                "out_of_stock_items": len(out_of_stock_items),
+                "total_inventory_value": round(total_inventory_value, 2),
+                "total_customers": len(customers),
+                "vip_customers": len(vip_customers),
+                "repeat_customer_rate": round(repeat_rate, 1),
+            },
+            "alerts": {
+                "low_stock_products": [i.get("product_name") for i in low_stock_items[:3]],
+                "out_of_stock_products": [i.get("product_name") for i in out_of_stock_items[:3]],
             },
             "health_score": {
                 "score": health_score.score,
@@ -437,8 +576,9 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
 
 @app.post("/v1/tenants/{tenant_id}/coach/chat/stream")
 async def coach_chat_stream(tenant_id: str, request: ChatRequest):
-    """Stream conversational AI coach responses via Server-Sent Events"""
-    coach = get_conversational_coach()
+    """Stream conversational AI coach responses via Server-Sent Events with multi-agent orchestration"""
+    # Use multi-agent coach for specialized queries
+    coach = get_multi_agent_coach()
     goals_service = get_goals_service()
     tasks_service = get_tasks_service()
     settings_service = get_settings_service()
@@ -469,15 +609,55 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         settings = settings_service.get_settings(tenant_id)
         business_name = settings.account.business_name or "your business"
         
-        # Build context
+        # Calculate key business metrics from actual data
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        thirty_days_ago = now - timedelta(days=30)
+        
+        orders = connector_data.get("orders", [])
+        inventory = connector_data.get("inventory", [])
+        customers = connector_data.get("customers", [])
+        
+        # Revenue metrics
+        recent_orders = [o for o in orders if datetime.fromisoformat(o.get("created_at", now.isoformat())) >= thirty_days_ago]
+        total_revenue_30d = sum(o.get("total_amount", 0) for o in recent_orders)
+        avg_order_value = total_revenue_30d / len(recent_orders) if recent_orders else 0
+        
+        # Inventory metrics
+        low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
+        out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
+        total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
+        
+        # Customer metrics
+        vip_customers = [c for c in customers if c.get("segment") == "vip"]
+        repeat_customers = [c for c in customers if c.get("total_orders", 0) > 1]
+        repeat_rate = (len(repeat_customers) / len(customers) * 100) if customers else 0
+        
+        # Build context with ACTUAL data
         business_context = {
             "business_name": business_name,
             "industry": "retail",
             "has_data_connected": has_data_connected,
+            "is_sample_data": not has_real_data,
             "data_sources": {
                 "orders": total_orders,
                 "inventory": total_inventory,
                 "customers": total_customers,
+            },
+            "metrics": {
+                "revenue_last_30_days": round(total_revenue_30d, 2),
+                "orders_last_30_days": len(recent_orders),
+                "avg_order_value": round(avg_order_value, 2),
+                "low_stock_items": len(low_stock_items),
+                "out_of_stock_items": len(out_of_stock_items),
+                "total_inventory_value": round(total_inventory_value, 2),
+                "total_customers": len(customers),
+                "vip_customers": len(vip_customers),
+                "repeat_customer_rate": round(repeat_rate, 1),
+            },
+            "alerts": {
+                "low_stock_products": [i.get("product_name") for i in low_stock_items[:3]],
+                "out_of_stock_products": [i.get("product_name") for i in out_of_stock_items[:3]],
             },
             "health_score": {
                 "score": health_score.score,
@@ -795,4 +975,194 @@ async def update_integration_settings(
     """Update integration settings"""
     settings_service = get_settings_service()
     return settings_service.update_integrations(tenant_id, settings)
+
+
+# ===================================
+# Connector Marketplace Endpoints
+# ===================================
+
+@app.get("/v1/marketplace/connectors")
+async def get_marketplace_connectors(
+    category: Optional[str] = Query(None, description="Filter by category (ecommerce, finance, crm, etc)"),
+    tier: Optional[str] = Query(None, description="Filter by tier (free, standard, premium, enterprise)"),
+    popular: Optional[bool] = Query(None, description="Filter to popular connectors only"),
+    search: Optional[str] = Query(None, description="Search query for name/description"),
+):
+    """
+    Get available connectors from the marketplace
+    
+    Browse the connector catalog to discover integrations for your business.
+    Filter by category, pricing tier, popularity, or search by keywords.
+    """
+    try:
+        from packages.connectors.marketplace import marketplace, ConnectorCategory, ConnectorTier
+        
+        # Apply filters
+        if search:
+            connectors = marketplace.search(search)
+        elif category:
+            try:
+                cat = ConnectorCategory(category)
+                connectors = marketplace.get_by_category(cat)
+            except ValueError:
+                connectors = marketplace.get_all()
+        elif tier:
+            try:
+                tier_enum = ConnectorTier(tier)
+                connectors = marketplace.get_by_tier(tier_enum)
+            except ValueError:
+                connectors = marketplace.get_all()
+        else:
+            connectors = marketplace.get_all()
+        
+        # Filter by popularity if requested
+        if popular is True:
+            connectors = [c for c in connectors if c.get('popular', False)]
+        
+        return {
+            "connectors": connectors,
+            "total": len(connectors),
+            "categories": [c.value for c in ConnectorCategory if c != ConnectorCategory.ALL],
+            "tiers": [t.value for t in ConnectorTier],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching marketplace: {str(e)}")
+
+
+@app.get("/v1/marketplace/connectors/{connector_id}")
+async def get_marketplace_connector_detail(connector_id: str):
+    """
+    Get detailed information about a specific connector
+    
+    Returns full details including setup instructions, config fields,
+    features, limitations, and pricing information.
+    """
+    try:
+        from packages.connectors.marketplace import marketplace
+        
+        connector = marketplace.get_by_id(connector_id)
+        if not connector:
+            raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+        
+        return connector
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching connector: {str(e)}")
+
+
+@app.get("/v1/marketplace/connectors/{connector_id}/config")
+async def get_connector_config_fields(connector_id: str):
+    """
+    Get configuration fields required for a connector
+    
+    Returns the form fields needed to set up this connector,
+    including field types, labels, validation rules, and help text.
+    """
+    try:
+        from packages.connectors.marketplace import marketplace
+        
+        config_fields = marketplace.get_config_fields(connector_id)
+        return {
+            "connector_id": connector_id,
+            "config_fields": config_fields
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching config: {str(e)}")
+
+
+@app.get("/v1/marketplace/categories")
+async def get_marketplace_categories():
+    """
+    Get all connector categories
+    
+    Returns the list of categories used to organize connectors
+    in the marketplace (ecommerce, finance, crm, etc).
+    """
+    try:
+        from packages.connectors.marketplace import ConnectorCategory, marketplace
+        
+        # Get category counts
+        category_counts = {}
+        all_connectors = marketplace.get_all()
+        for connector in all_connectors:
+            cat = connector['category']
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+        
+        return {
+            "categories": [
+                {
+                    "id": cat.value,
+                    "name": cat.value.replace('_', ' ').title(),
+                    "count": category_counts.get(cat.value, 0)
+                }
+                for cat in ConnectorCategory
+                if cat != ConnectorCategory.ALL
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching categories: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/connectors/connected")
+async def get_connected_connectors(tenant_id: str):
+    """
+    Get connectors that are currently connected for this tenant
+    
+    Returns a list of active integrations with sync status,
+    last sync time, and data availability.
+    """
+    # TODO: Integrate with actual connector repository
+    # For now, return empty list
+    return {
+        "connectors": [],
+        "total": 0,
+        "has_real_data": False
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/connectors/connect")
+async def connect_connector(
+    tenant_id: str,
+    request: BaseModel  # TODO: Define ConnectorConnectionRequest model
+):
+    """
+    Connect a new data source
+    
+    Creates a new connector instance with the provided configuration.
+    Validates credentials and initiates the first data sync.
+    """
+    # TODO: Implement connector connection logic
+    # 1. Validate connector_type exists in marketplace
+    # 2. Encrypt credentials
+    # 3. Test connection
+    # 4. Create connector record
+    # 5. Trigger initial sync
+    
+    raise HTTPException(status_code=501, detail="Connector connection not yet implemented")
+
+
+@app.delete("/v1/tenants/{tenant_id}/connectors/{connector_id}")
+async def disconnect_connector(tenant_id: str, connector_id: str):
+    """
+    Disconnect a data source
+    
+    Removes the connector and stops future data syncs.
+    Historical data is retained but will no longer be updated.
+    """
+    # TODO: Implement connector disconnection logic
+    raise HTTPException(status_code=501, detail="Connector disconnection not yet implemented")
+
+
+@app.post("/v1/tenants/{tenant_id}/connectors/{connector_id}/sync")
+async def trigger_connector_sync(tenant_id: str, connector_id: str):
+    """
+    Manually trigger a data sync
+    
+    Initiates an immediate sync for this connector.
+    Useful for testing or getting the latest data on-demand.
+    """
+    # TODO: Implement manual sync trigger
+    raise HTTPException(status_code=501, detail="Manual sync not yet implemented")
+
 

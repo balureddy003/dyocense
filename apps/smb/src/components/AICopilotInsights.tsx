@@ -1,6 +1,7 @@
 import { ActionIcon, Card, Group, Loader, Stack, Text, Textarea } from '@mantine/core'
 import { IconSend, IconSparkles } from '@tabler/icons-react'
 import { useState } from 'react'
+import { API_BASE } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 interface Insight {
@@ -79,11 +80,11 @@ export default function AICopilotInsights({ insights }: AICopilotInsightsProps) 
         }])
 
         try {
-            // Use EventSource for streaming
-            const url = new URL(`/v1/tenants/${tenantId}/coach/chat/stream`, window.location.origin)
+            // Use fetch for streaming SSE
+            const url = `${API_BASE}/v1/tenants/${tenantId}/coach/chat/stream`
 
-            // Send request with fetch first to initiate streaming
-            const response = await fetch(url.toString(), {
+            // Send request with fetch to initiate streaming
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

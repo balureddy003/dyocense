@@ -33,3 +33,6 @@ tiktoken==0.5.2
 playwright>=1.45.0
 python-multipart
 
+# Azure OpenAI is supported through the openai package (v1.0+)
+# For additional Azure SDK features, optionally install:
+# azure-identity>=1.15,<2

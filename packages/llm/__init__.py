@@ -90,28 +90,35 @@ def _invoke_azure_openai(prompt: str) -> Optional[str]:  # pragma: no cover - op
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+    
     if not (endpoint and api_key and deployment):
         logger.warning("Azure OpenAI environment variables missing; skipping invocation")
         return None
 
     try:
-        from azure.ai.openai import OpenAIClient  # type: ignore
-        from azure.core.credentials import AzureKeyCredential  # type: ignore
+        from openai import AzureOpenAI
     except ImportError:
-        logger.warning("azure-ai-openai package not installed; cannot invoke Azure OpenAI")
+        logger.warning("openai package not installed; cannot invoke Azure OpenAI")
         return None
 
     try:
-        client = OpenAIClient(endpoint=endpoint, credential=AzureKeyCredential(api_key))
-        response = client.get_completions(
-            deployment_id=deployment,
-            prompt=prompt,
-            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.0")),
+        client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version,
+        )
+        
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7")),
             max_tokens=int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048")),
         )
+        
         if not response.choices:
             return None
-        return (response.choices[0].text or "").strip()
+        return (response.choices[0].message.content or "").strip()
     except Exception as exc:
         logger.warning("Azure OpenAI invocation failed: %s", exc)
         return None

@@ -6,12 +6,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import RequireAuth from './components/RequireAuth'
+import { BusinessContextProvider } from './contexts/BusinessContext'
 import PlatformLayout from './layouts/PlatformLayout'
 import PublicLayout from './layouts/PublicLayout'
 import { Achievements } from './pages/Achievements'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
 import Coach from './pages/Coach'
+import ConnectorMarketplace from './pages/ConnectorMarketplace'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
@@ -64,173 +66,185 @@ function App() {
         <QueryClientProvider client={queryClient}>
             <MantineProvider theme={theme} defaultColorScheme="light">
                 <Notifications position="top-right" />
-                <BrowserRouter future={{ v7_relativesplatPath: true, v7_startTransition: true }}>
-                    <Routes>
-                        {/* Public Routes - Anonymous Access */}
-                        <Route
-                            path="/"
-                            element={
-                                <PublicLayout>
-                                    <LandingPage />
-                                </PublicLayout>
-                            }
-                        />
-                        <Route
-                            path="/signup"
-                            element={
-                                <PublicLayout showNav={false}>
-                                    <Signup />
-                                </PublicLayout>
-                            }
-                        />
-                        <Route
-                            path="/verify"
-                            element={
-                                <PublicLayout showNav={false}>
-                                    <Verify />
-                                </PublicLayout>
-                            }
-                        />
-                        <Route
-                            path="/contact"
-                            element={
-                                <PublicLayout>
-                                    <Contact />
-                                </PublicLayout>
-                            }
-                        />
-                        <Route
-                            path="/tools"
-                            element={
-                                <PublicLayout>
-                                    <Tools />
-                                </PublicLayout>
-                            }
-                        />
-
-                        {/* Platform Routes - Authenticated Access */}
-                        <Route
-                            path="/welcome"
-                            element={
-                                <RequireAuth>
-                                    <PublicLayout showNav={false}>
-                                        <Welcome />
+                <BusinessContextProvider>
+                    <BrowserRouter future={{ v7_relativesplatPath: true, v7_startTransition: true }}>
+                        <Routes>
+                            {/* Public Routes - Anonymous Access */}
+                            <Route
+                                path="/"
+                                element={
+                                    <PublicLayout>
+                                        <LandingPage />
                                     </PublicLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/home"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Home />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/copilot"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Copilot />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/planner"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Planner />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/connectors"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Connectors />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/agents"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Agents />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/goals"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Goals />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/executor"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Executor />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/settings"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Settings />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/coach"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Coach />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/analytics"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Analytics />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                        <Route
-                            path="/achievements"
-                            element={
-                                <RequireAuth>
-                                    <PlatformLayout>
-                                        <Achievements />
-                                    </PlatformLayout>
-                                </RequireAuth>
-                            }
-                        />
-                    </Routes>
-                </BrowserRouter>
+                                }
+                            />
+                            <Route
+                                path="/signup"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <Signup />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
+                                path="/verify"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <Verify />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
+                                path="/contact"
+                                element={
+                                    <PublicLayout>
+                                        <Contact />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
+                                path="/tools"
+                                element={
+                                    <PublicLayout>
+                                        <Tools />
+                                    </PublicLayout>
+                                }
+                            />
+
+                            {/* Platform Routes - Authenticated Access */}
+                            <Route
+                                path="/welcome"
+                                element={
+                                    <RequireAuth>
+                                        <PublicLayout showNav={false}>
+                                            <Welcome />
+                                        </PublicLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/home"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Home />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/copilot"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Copilot />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/planner"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Planner />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/connectors"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Connectors />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/marketplace"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <ConnectorMarketplace />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/agents"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Agents />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/goals"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Goals />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/executor"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Executor />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/settings"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Settings />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/coach"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Coach />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/analytics"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Analytics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/achievements"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Achievements />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                        </Routes>
+                    </BrowserRouter>
+                </BusinessContextProvider>
             </MantineProvider>
         </QueryClientProvider>
     )
