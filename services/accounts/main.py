@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import psycopg2
 from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -25,6 +26,7 @@ from packages.accounts.repository import (
     delete_api_token,
     get_tenant_by_token,
     get_user,
+    get_user_by_email,
     count_users_for_tenant,
     find_tenants_for_email,
     AuthenticationError,
@@ -56,9 +58,9 @@ background_task_handle = None
 
 async def trial_enforcement_job():
     """Background job to enforce trial expiration every 24 hours."""
-    from packages.accounts.repository import TENANT_COLLECTION, PlanTier
+    from packages.accounts.repository import PlanTier, enforce_trial_for_tenant, find_expired_trials
     from datetime import datetime, timedelta
-    
+
     while background_tasks_running:
         try:
             logger.info("Running trial enforcement job...")
@@ -66,17 +68,11 @@ async def trial_enforcement_job():
             cutoff_date = datetime.utcnow() - timedelta(days=trial_days)
             
             # Find silver tenants created more than trial_days ago with status=trial
-            query = {
-                "plan_tier": PlanTier.SILVER.value,
-                "status": "trial",
-                "created_at": {"$lt": cutoff_date}
-            }
-            
             downgraded_count = 0
-            for doc in TENANT_COLLECTION.find(query):
-                tenant_id = doc.get("tenant_id")
+            expired_tenants = find_expired_trials(PlanTier.SILVER, cutoff_date)
+            for tenant in expired_tenants:
+                tenant_id = tenant.tenant_id
                 try:
-                    from packages.accounts.repository import enforce_trial_for_tenant
                     enforce_trial_for_tenant(tenant_id, trial_days=trial_days)
                     downgraded_count += 1
                     logger.info(f"Trial expired for tenant {tenant_id}, downgraded to free")
@@ -95,12 +91,118 @@ async def trial_enforcement_job():
         await asyncio.sleep(86400)
 
 
+def run_startup_migrations():
+    """Run database migrations on startup."""
+    # Allow opt-out
+    if os.getenv("DISABLE_STARTUP_MIGRATIONS", "false").lower() in {"1","true","yes"}:
+        logger.info("Startup migrations disabled via DISABLE_STARTUP_MIGRATIONS")
+        return
+
+    migration_files = [
+        # Baseline schema (consolidated)
+        "infra/postgres/migrations/001_full_schema.sql",
+    ]
+
+    # Build / obtain a connection
+    conn = None
+    try:
+        from packages.kernel_common.persistence_v2 import get_backend, PostgresBackend
+        backend = get_backend()
+        if isinstance(backend, PostgresBackend) and getattr(backend, 'pool', None):
+            # Borrow a connection from pool for migrations
+            conn = backend.pool.getconn()
+            release_to_pool = True
+        else:
+            # Fallback: construct connection params from discrete POSTGRES_* env vars
+            pg_url = os.getenv("POSTGRES_URL")
+            if pg_url:
+                conn = psycopg2.connect(pg_url)
+            else:
+                host = os.getenv("POSTGRES_HOST", "localhost")
+                port = int(os.getenv("POSTGRES_PORT", "5432"))
+                db   = os.getenv("POSTGRES_DB", "dyocense")
+                user = os.getenv("POSTGRES_USER", "dyocense")
+                pwd  = os.getenv("POSTGRES_PASSWORD", "")
+                conn = psycopg2.connect(host=host, port=port, dbname=db, user=user, password=pwd)
+            release_to_pool = False
+
+        logger.info("Running startup migrations (idempotent)...")
+
+        def _execute_migration_file(path: str):
+            # Read file and split into individual statements (basic splitter)
+            with open(path, 'r') as f:
+                raw = f.read()
+            statements: list[str] = []
+            current: list[str] = []
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if stripped.startswith('--') or stripped == '':
+                    continue
+                current.append(line)
+                if stripped.endswith(';'):
+                    stmt = '\n'.join(current).strip()
+                    if stmt:
+                        statements.append(stmt.rstrip(';'))
+                    current = []
+            # Any trailing statement without semicolon
+            if current:
+                stmt = '\n'.join(current).strip()
+                if stmt:
+                    statements.append(stmt)
+            applied = 0
+            with conn.cursor() as cur:
+                for stmt in statements:
+                    try:
+                        cur.execute(stmt)
+                        applied += 1
+                    except Exception as se:
+                        # Safe to ignore 'duplicate object' errors; log others
+                        msg = str(se).lower()
+                        if any(keyword in msg for keyword in ["already exists", "duplicate key", "exists"]):
+                            logger.debug(f"Skipping existing object: {se}")
+                        else:
+                            logger.error(f"Error executing statement: {se}\nStatement: {stmt[:200]}...")
+                            conn.rollback()
+                            raise
+            conn.commit()
+            logger.info(f"Applied {applied} statements from {os.path.basename(path)}")
+
+        for migration_file in migration_files:
+            migration_path = os.path.join(os.getcwd(), migration_file)
+            if not os.path.exists(migration_path):
+                logger.warning(f"Migration file not found: {migration_path}")
+                continue
+            try:
+                _execute_migration_file(migration_path)
+            except Exception as mf_err:
+                logger.error(f"Migration failed for {migration_file}: {mf_err}")
+                # Continue to next migration; don't abort startup
+                continue
+
+        logger.info("Startup migrations complete")
+    except Exception as e:
+        logger.error(f"Startup migrations encountered an error: {e}")
+    finally:
+        if conn is not None:
+            try:
+                if 'release_to_pool' in locals() and release_to_pool:
+                    backend.pool.putconn(conn)  # type: ignore[attr-defined]
+                else:
+                    conn.close()
+            except Exception:
+                pass
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage background tasks lifecycle."""
     global background_tasks_running, background_task_handle
     
     # Startup
+    logger.info("Running database migrations...")
+    run_startup_migrations()
+    
     logger.info("Starting background tasks...")
     background_tasks_running = True
     background_task_handle = asyncio.create_task(trial_enforcement_job())
@@ -354,6 +456,18 @@ class EmailSignupResponse(BaseModel):
 class VerifyRequest(BaseModel):
     """Verify email token and complete account setup."""
     token: str
+
+
+class EmailLoginRequest(BaseModel):
+    """Passwordless login request for existing users."""
+    email: EmailStr
+
+
+class EmailLoginResponse(BaseModel):
+    """Response contains verification token (dev mode) or success message (production)."""
+    token: str | None = Field(default=None, description="Verification token (dev mode only)")
+    message: str = "Login link sent. Check your inbox."
+    email: str
 
 
 class VerifyResponse(BaseModel):
@@ -1025,14 +1139,94 @@ def email_signup(payload: EmailSignupRequest) -> EmailSignupResponse:
     )
 
 
+@app.post("/v1/auth/login", response_model=EmailLoginResponse, tags=["auth"])
+def email_login(payload: EmailLoginRequest) -> EmailLoginResponse:
+    """Passwordless login for existing users.
+    
+    Flow:
+    1. Validate email is registered
+    2. Create verification token
+    3. Send login email (or return token in dev mode)
+    4. User clicks link → calls /v1/auth/verify
+    """
+    logger.info(f"Email login attempt: email={payload.email}")
+    
+    # Check if email is registered with any tenant
+    existing_tenant_ids = find_tenants_for_email(payload.email)
+    if not existing_tenant_ids:
+        logger.warning(f"Login blocked: email {payload.email} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this email. Please sign up first."
+        )
+    
+    # Get user info from first tenant (users can have multiple tenants)
+    tenant_id = existing_tenant_ids[0]
+    try:
+        user = get_user_by_email(tenant_id, payload.email)
+        if not user:
+            raise ValueError("User not found")
+        tenant = get_tenant(tenant_id)
+        if not tenant:
+            raise ValueError("Tenant not found")
+    except Exception as e:
+        logger.error(f"Failed to get user/tenant info: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process login request"
+        )
+    
+    # Create verification token for login
+    metadata = {
+        "intent": "login",
+        "login_method": "email",
+        "login_timestamp": datetime.utcnow().isoformat(),
+        "tenant_id": tenant.tenant_id,
+    }
+    
+    token = create_verification_token(
+        email=payload.email,
+        full_name=user.full_name,
+        business_name=tenant.name,
+        metadata=metadata,
+        ttl_hours=1  # Shorter TTL for login links
+    )
+    
+    # Production: Send login email
+    # try:
+    #     verification_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5179')}/verify?token={token}"
+    #     await mailer.send_login_email(
+    #         to_email=payload.email,
+    #         full_name=user.full_name,
+    #         verification_url=verification_url
+    #     )
+    #     logger.info(f"Login email sent to {payload.email}")
+    #     return EmailLoginResponse(email=payload.email, message="Login link sent. Check your inbox.")
+    # except Exception as e:
+    #     logger.error(f"Failed to send login email: {e}")
+    #     raise HTTPException(status_code=500, detail="Failed to send login email")
+    
+    # Dev mode: Return token directly for testing
+    logger.info(f"Dev mode: returning login token for {payload.email}")
+    return EmailLoginResponse(
+        token=token,
+        email=payload.email,
+        message=f"Dev mode: Use this token to verify: {token}"
+    )
+
+
 @app.post("/v1/auth/verify", response_model=VerifyResponse, tags=["auth"])
 def verify_email_token(payload: VerifyRequest) -> VerifyResponse:
-    """Verify email token and complete account provisioning.
+    """Verify email token and complete account provisioning or login.
     
-    Creates:
-    - Tenant (organization)
-    - First user account (owner)
-    - Default project/workspace
+    For signup tokens:
+    - Creates tenant (organization)
+    - Creates first user account (owner)
+    - Creates default project/workspace
+    
+    For login tokens:
+    - Validates existing user
+    - Issues JWT for authenticated session
     
     Returns JWT for immediate authenticated access.
     """
@@ -1044,15 +1238,64 @@ def verify_email_token(payload: VerifyRequest) -> VerifyResponse:
         logger.warning(f"Verification failed: invalid or expired token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired verification token. Please request a new signup link."
+            detail="Invalid or expired verification token. Please request a new link."
         )
     
     email = token_data["email"]
     full_name = token_data["full_name"]
     business_name = token_data["business_name"]
     metadata = token_data.get("metadata", {})
+    intent = metadata.get("intent", "signup")
     
-    logger.info(f"Token verified for {email}, provisioning account...")
+    # Check if this is a login token (existing user)
+    if intent == "login":
+        logger.info(f"Login token verified for {email}")
+        tenant_id = metadata.get("tenant_id")
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid login token: missing tenant information"
+            )
+        
+        try:
+            user = get_user_by_email(tenant_id, email)
+            if not user:
+                raise ValueError("User not found")
+            tenant = get_tenant(tenant_id)
+            if not tenant:
+                raise ValueError("Tenant not found")
+        except Exception as e:
+            logger.error(f"Failed to get user/tenant for login: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account not found. Please sign up first."
+            )
+        
+        # Issue JWT for authenticated session
+        jwt_token = issue_jwt(user)
+        
+        # Get default workspace
+        try:
+            projects = list_projects(tenant_id)
+            workspace_id = projects[0].project_id if projects else None
+        except Exception:
+            workspace_id = None
+        
+        logger.info(f"Login successful for user {user.user_id}")
+        return VerifyResponse(
+            jwt=jwt_token,
+            token=jwt_token,
+            tenant_id=tenant.tenant_id,
+            workspace_id=workspace_id,
+            user={
+                "user_id": user.user_id,
+                "email": user.email,
+                "full_name": user.full_name,
+            }
+        )
+    
+    # Signup flow - provision new account
+    logger.info(f"Signup token verified for {email}, provisioning account...")
     
     try:
         # 1. Register tenant (organization)
@@ -1873,4 +2116,3 @@ def get_run(run_id: str, identity: dict = Depends(require_auth)) -> RunStatusRes
     Note: This is a stub implementation for SMB/unified mode.
     """
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-

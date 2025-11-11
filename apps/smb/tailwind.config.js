@@ -6,42 +6,105 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Professional brand palette - Deep indigo (Linear-inspired)
+        // Modern SaaS Brand Palette - Premium Indigo
         brand: {
-          50: '#F0F2FF',
-          100: '#E0E4FF',
-          200: '#C7CFFF',
-          300: '#A5B0FF',
-          400: '#8089FF',
-          500: '#5B5FFF', // Primary brand - more vibrant
-          600: '#4F46E5',
-          700: '#4338CA',
-          800: '#3730A3',
-          900: '#312E81',
-          DEFAULT: '#5B5FFF',
+          50: '#F0F1FF',
+          100: '#E0E2FF',
+          200: '#C7CBFF',
+          300: '#A5ABFF',
+          400: '#8188FF',
+          500: '#6366F1', // Primary
+          600: '#5558E3',
+          700: '#4A4DD1',
+          800: '#3E41B8',
+          900: '#31349A',
+          DEFAULT: '#6366F1',
         },
-        // Professional neutral palette - True neutrals (Notion/Stripe-inspired)
-        neutral: {
-          0: '#FFFFFF',
-          50: '#FAFAFA',
-          100: '#F4F4F5',
-          200: '#E4E4E7',
-          300: '#D1D1D6',
-          400: '#9CA3AF',
-          500: '#6B7280',
-          600: '#4B5563',
-          700: '#374151',
-          800: '#1F2937',
-          900: '#111827',
-          950: '#0A0A0B',
+        // Sophisticated Dark Neutrals
+        dark: {
+          50: '#F8F9FA',
+          100: '#F1F3F5',
+          200: '#E9ECEF',
+          300: '#DEE2E6',
+          400: '#CED4DA',
+          500: '#ADB5BD',
+          600: '#868E96',
+          700: '#495057',
+          800: '#343A40',
+          900: '#212529',
         },
-        // Success/error states
+        // Success - Trustworthy Green
+        green: {
+          50: '#ECFDF5',
+          100: '#D1FAE5',
+          200: '#A7F3D0',
+          300: '#6EE7B7',
+          400: '#34D399',
+          500: '#10B981', // Primary
+          600: '#059669',
+          700: '#047857',
+          800: '#065F46',
+          900: '#064E3B',
+        },
+        // Warning - Balanced Amber
+        yellow: {
+          50: '#FFFBEB',
+          100: '#FEF3C7',
+          200: '#FDE68A',
+          300: '#FCD34D',
+          400: '#FBBF24',
+          500: '#F59E0B', // Primary
+          600: '#D97706',
+          700: '#B45309',
+          800: '#92400E',
+          900: '#78350F',
+        },
+        // Error - Clear Red
+        red: {
+          50: '#FEF2F2',
+          100: '#FEE2E2',
+          200: '#FECACA',
+          300: '#FCA5A5',
+          400: '#F87171',
+          500: '#EF4444', // Primary
+          600: '#DC2626',
+          700: '#B91C1C',
+          800: '#991B1B',
+          900: '#7F1D1D',
+        },
+        // Accent - Violet
+        violet: {
+          50: '#F5F3FF',
+          100: '#EDE9FE',
+          200: '#DDD6FE',
+          300: '#C4B5FD',
+          400: '#A78BFA',
+          500: '#8B5CF6', // Primary
+          600: '#7C3AED',
+          700: '#6D28D9',
+          800: '#5B21B6',
+          900: '#4C1D95',
+        },
+        // Accent - Teal
+        teal: {
+          50: '#F0FDFA',
+          100: '#CCFBF1',
+          200: '#99F6E4',
+          300: '#5EEAD4',
+          400: '#2DD4BF',
+          500: '#14B8A6', // Primary
+          600: '#0D9488',
+          700: '#0F766E',
+          800: '#115E59',
+          900: '#134E4A',
+        },
+        // Legacy aliases for backward compatibility
         success: {
-          50: '#F0FDF4',
-          100: '#DCFCE7',
-          500: '#22C55E',
-          600: '#16A34A',
-          700: '#15803D',
+          50: '#ECFDF5',
+          100: '#D1FAE5',
+          500: '#10B981',
+          600: '#059669',
+          700: '#047857',
         },
         warning: {
           50: '#FFFBEB',
@@ -56,6 +119,21 @@ module.exports = {
           500: '#EF4444',
           600: '#DC2626',
           700: '#B91C1C',
+        },
+        // Legacy neutral alias
+        neutral: {
+          0: '#FFFFFF',
+          50: '#F8F9FA',
+          100: '#F1F3F5',
+          200: '#E9ECEF',
+          300: '#DEE2E6',
+          400: '#CED4DA',
+          500: '#ADB5BD',
+          600: '#868E96',
+          700: '#495057',
+          800: '#343A40',
+          900: '#212529',
+          950: '#0A0A0B',
         },
         // Accent for CTAs and highlights
         accent: {

@@ -21,18 +21,41 @@ export default function Verify() {
         let isMounted = true
             ; (async () => {
                 try {
-                    const data = await tryPost<{ jwt?: string; token?: string; tenant_id?: string; tenant?: string; user?: any }>(
+                    const data = await tryPost<{
+                        jwt?: string
+                        token?: string
+                        tenant_id?: string
+                        tenantId?: string
+                        tenant?: string
+                        workspace_id?: string
+                        user?: {
+                            user_id?: string
+                            email?: string
+                            full_name?: string
+                            name?: string
+                        }
+                    }>(
                         '/v1/auth/verify',
                         { token },
                     )
-                    const jwt = data?.jwt || data?.token || 'dev-jwt'
-                    const tenantId = data?.tenant_id || data?.tenant || 'dev-tenant'
-                    if (typeof window !== 'undefined') {
-                        localStorage.setItem('apiToken', jwt)
-                        localStorage.setItem('tenantId', tenantId)
+
+                    const jwt = data?.jwt || data?.token
+                    const tenantId = data?.tenant_id || data?.tenantId || data?.tenant
+
+                    if (!jwt || !tenantId) {
+                        throw new Error('Invalid authentication response')
                     }
+
+                    // Extract user information
+                    const user = data?.user ? {
+                        user_id: data.user.user_id,
+                        email: data.user.email,
+                        full_name: data.user.full_name || data.user.name,
+                    } : null
+
                     if (isMounted) {
-                        setAuth({ apiToken: jwt, tenantId, user: data?.user ?? { name: 'Owner' } })
+                        // Set auth in store (which persists to localStorage automatically)
+                        setAuth({ apiToken: jwt, tenantId, user })
 
                         // Check if user has completed onboarding
                         const hasCompletedOnboarding = localStorage.getItem('hasCompletedOnboarding')

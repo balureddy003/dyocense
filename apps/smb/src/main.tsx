@@ -1,3 +1,4 @@
+import '@chatscope/chat-ui-kit-styles/dist/default/styles.min.css'
 import { MantineProvider, createTheme } from '@mantine/core'
 import '@mantine/core/styles.css'
 import { Notifications } from '@mantine/notifications'
@@ -13,6 +14,8 @@ import { Achievements } from './pages/Achievements'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
 import Coach from './pages/Coach'
+import CoachV3 from './pages/CoachV3'
+import CoachV4 from './pages/CoachV4'
 import ConnectorMarketplace from './pages/ConnectorMarketplace'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
@@ -21,6 +24,8 @@ import Executor from './pages/Executor'
 import Goals from './pages/Goals'
 import Home from './pages/Home'
 import LandingPage from './pages/LandingPage'
+import Login from './pages/Login'
+import OAuthCallback from './pages/OAuthCallback'
 import Planner from './pages/Planner'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
@@ -31,34 +36,212 @@ import './styles.css'
 
 const queryClient = new QueryClient()
 
-// Professional SaaS theme
+// Modern SaaS Design System - Refined & Professional
 const theme = createTheme({
     primaryColor: 'brand',
-    fontFamily: 'Inter var, Inter, -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+    fontFamily: '"Inter var", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    fontFamilyMonospace: '"JetBrains Mono", "Fira Code", Consolas, Monaco, "Courier New", monospace',
     headings: {
-        fontFamily: 'Inter var, Inter, -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
-        fontWeight: 600,
+        fontFamily: '"Inter var", Inter, -apple-system, BlinkMacSystemFont, sans-serif',
+        fontWeight: '700',
         sizes: {
-            h1: { fontSize: '3.5rem', fontWeight: 700 },
-            h2: { fontSize: '2.5rem', fontWeight: 700 },
-            h3: { fontSize: '1.75rem', fontWeight: 600 },
+            h1: { fontSize: '2.75rem', lineHeight: '1.2', fontWeight: '800' },
+            h2: { fontSize: '2rem', lineHeight: '1.3', fontWeight: '700' },
+            h3: { fontSize: '1.5rem', lineHeight: '1.4', fontWeight: '600' },
+            h4: { fontSize: '1.25rem', lineHeight: '1.4', fontWeight: '600' },
+            h5: { fontSize: '1.125rem', lineHeight: '1.5', fontWeight: '600' },
+            h6: { fontSize: '1rem', lineHeight: '1.5', fontWeight: '600' },
         },
     },
     colors: {
-        brand: ['#EEF2FF', '#E0E7FF', '#C7D2FE', '#A5B4FC', '#818CF8', '#6366F1', '#4F46E5', '#4338CA', '#3730A3', '#312E81'],
-        night: ['#EDF1F6', '#D7DEEA', '#BCC8DA', '#9FB1CA', '#839AB9', '#687EA1', '#4D6288', '#394B6B', '#26344E', '#101522'],
-        neutral: ['#F9FAFB', '#F3F4F6', '#E5E7EB', '#D1D5DB', '#9CA3AF', '#6B7280', '#4B5563', '#374151', '#1F2937', '#0F172A'],
+        // Premium indigo brand - more vibrant and professional
+        brand: [
+            '#F0F1FF',  // 50
+            '#E0E2FF',  // 100
+            '#C7CBFF',  // 200
+            '#A5ABFF',  // 300
+            '#8188FF',  // 400
+            '#6366F1',  // 500 - Primary
+            '#5558E3',  // 600
+            '#4A4DD1',  // 700
+            '#3E41B8',  // 800
+            '#31349A',  // 900
+        ],
+        // Sophisticated neutrals - better contrast
+        dark: [
+            '#F8F9FA',  // 50
+            '#F1F3F5',  // 100
+            '#E9ECEF',  // 200
+            '#DEE2E6',  // 300
+            '#CED4DA',  // 400
+            '#ADB5BD',  // 500
+            '#868E96',  // 600
+            '#495057',  // 700
+            '#343A40',  // 800
+            '#212529',  // 900
+        ],
+        // Success green - more trustworthy
+        green: [
+            '#ECFDF5',
+            '#D1FAE5',
+            '#A7F3D0',
+            '#6EE7B7',
+            '#34D399',
+            '#10B981',  // Primary
+            '#059669',
+            '#047857',
+            '#065F46',
+            '#064E3B',
+        ],
+        // Alert states - balanced
+        yellow: [
+            '#FFFBEB',
+            '#FEF3C7',
+            '#FDE68A',
+            '#FCD34D',
+            '#FBBF24',
+            '#F59E0B',  // Primary
+            '#D97706',
+            '#B45309',
+            '#92400E',
+            '#78350F',
+        ],
+        red: [
+            '#FEF2F2',
+            '#FEE2E2',
+            '#FECACA',
+            '#FCA5A5',
+            '#F87171',
+            '#EF4444',  // Primary
+            '#DC2626',
+            '#B91C1C',
+            '#991B1B',
+            '#7F1D1D',
+        ],
+        // Accent colors
+        violet: [
+            '#F5F3FF',
+            '#EDE9FE',
+            '#DDD6FE',
+            '#C4B5FD',
+            '#A78BFA',
+            '#8B5CF6',  // Primary
+            '#7C3AED',
+            '#6D28D9',
+            '#5B21B6',
+            '#4C1D95',
+        ],
+        teal: [
+            '#F0FDFA',
+            '#CCFBF1',
+            '#99F6E4',
+            '#5EEAD4',
+            '#2DD4BF',
+            '#14B8A6',  // Primary
+            '#0D9488',
+            '#0F766E',
+            '#115E59',
+            '#134E4A',
+        ],
     },
-    defaultRadius: 'lg',
+    defaultRadius: 'md',
+    radius: {
+        xs: '0.375rem',   // 6px
+        sm: '0.5rem',     // 8px
+        md: '0.75rem',    // 12px
+        lg: '1rem',       // 16px
+        xl: '1.5rem',     // 24px
+    },
+    spacing: {
+        xs: '0.625rem',   // 10px
+        sm: '0.75rem',    // 12px
+        md: '1rem',       // 16px
+        lg: '1.25rem',    // 20px
+        xl: '1.5rem',     // 24px
+    },
     shadows: {
-        xs: '0 1px 2px 0 rgba(15, 18, 27, 0.05)',
-        sm: '0 4px 6px rgba(15, 18, 27, 0.08)',
-        md: '0 10px 20px rgba(15, 18, 27, 0.12)',
-        lg: '0 25px 40px rgba(15, 18, 27, 0.15)',
-        xl: '0 35px 60px rgba(15, 18, 27, 0.2)',
+        xs: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+        sm: '0 2px 8px 0 rgba(0, 0, 0, 0.08), 0 1px 3px 0 rgba(0, 0, 0, 0.04)',
+        md: '0 4px 16px 0 rgba(0, 0, 0, 0.12), 0 2px 4px 0 rgba(0, 0, 0, 0.06)',
+        lg: '0 12px 32px 0 rgba(0, 0, 0, 0.15), 0 4px 8px 0 rgba(0, 0, 0, 0.08)',
+        xl: '0 24px 48px 0 rgba(0, 0, 0, 0.18), 0 8px 16px 0 rgba(0, 0, 0, 0.10)',
     },
     white: '#FFFFFF',
-    black: '#050A16',
+    black: '#0A0A0A',
+    other: {
+        // Custom design tokens
+        borderRadius: {
+            card: '1rem',
+            button: '0.75rem',
+            input: '0.625rem',
+            modal: '1.25rem',
+        },
+        transition: {
+            fast: '150ms cubic-bezier(0.4, 0, 0.2, 1)',
+            base: '250ms cubic-bezier(0.4, 0, 0.2, 1)',
+            slow: '350ms cubic-bezier(0.4, 0, 0.2, 1)',
+        },
+    },
+    components: {
+        Button: {
+            defaultProps: {
+                radius: 'md',
+            },
+            styles: {
+                root: {
+                    fontWeight: 600,
+                    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+                    '&:hover': {
+                        transform: 'translateY(-1px)',
+                    },
+                    '&:active': {
+                        transform: 'translateY(0)',
+                    },
+                },
+            },
+        },
+        Card: {
+            defaultProps: {
+                radius: 'lg',
+                withBorder: true,
+            },
+            styles: {
+                root: {
+                    transition: 'all 200ms ease',
+                },
+            },
+        },
+        Input: {
+            defaultProps: {
+                radius: 'md',
+            },
+            styles: {
+                input: {
+                    fontSize: '0.9375rem',
+                    '&:focus': {
+                        borderColor: '#6366F1',
+                    },
+                },
+            },
+        },
+        Modal: {
+            defaultProps: {
+                radius: 'xl',
+                overlayProps: { opacity: 0.55, blur: 3 },
+            },
+        },
+        Badge: {
+            defaultProps: {
+                radius: 'sm',
+            },
+            styles: {
+                root: {
+                    fontWeight: 600,
+                    textTransform: 'none',
+                },
+            },
+        },
+    },
 })
 
 function App() {
@@ -67,7 +250,7 @@ function App() {
             <MantineProvider theme={theme} defaultColorScheme="light">
                 <Notifications position="top-right" />
                 <BusinessContextProvider>
-                    <BrowserRouter future={{ v7_relativesplatPath: true, v7_startTransition: true }}>
+                    <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
                         <Routes>
                             {/* Public Routes - Anonymous Access */}
                             <Route
@@ -87,10 +270,26 @@ function App() {
                                 }
                             />
                             <Route
+                                path="/login"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <Login />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
                                 path="/verify"
                                 element={
                                     <PublicLayout showNav={false}>
                                         <Verify />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
+                                path="/auth/:provider/callback"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <OAuthCallback />
                                     </PublicLayout>
                                 }
                             />
@@ -214,6 +413,26 @@ function App() {
                             />
                             <Route
                                 path="/coach"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CoachV4 />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/coach-v3"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CoachV3 />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/coach-old"
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>

@@ -19,6 +19,9 @@ boto3>=1.34,<2
 PyJWT==2.9.0
 python-keycloak>=3.0,<4  # Keycloak Admin API client for tenant provisioning
 psycopg2-binary>=2.9,<3  # PostgreSQL adapter for SMB-optimized deployments
+aiohttp>=3.9,<4
+asyncpg>=0.29,<1
+cryptography>=42,<45
 
 # Multi-Agent System Dependencies (Pinned for stability - all versions locked)
 langgraph==0.0.40

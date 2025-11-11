@@ -154,6 +154,7 @@ class MultiAgentCoach:
         }
         
         # Build comprehensive context message with actual data insights
+        metrics = business_context.get("metrics", {})
         context_msg = f"""
 Business Context for {business_context.get('business_name', 'the business')}:
 
@@ -162,6 +163,17 @@ DATA AVAILABILITY:
 - Inventory: {data_sources.get('inventory', 0)} items
 - Customers: {data_sources.get('customers', 0)} records
 - Data Type: {"Sample/Demo Data" if not business_context.get('has_data_connected') else "Real Connected Data"}
+
+KEY BUSINESS METRICS:
+- Revenue (Last 30 Days): ${metrics.get('revenue_last_30_days', 0):,.2f}
+- Orders (Last 30 Days): {metrics.get('orders_last_30_days', 0)}
+- Average Order Value: ${metrics.get('avg_order_value', 0):,.2f}
+- Total Customers: {metrics.get('total_customers', 0)}
+- VIP Customers: {metrics.get('vip_customers', 0)}
+- Repeat Customer Rate: {metrics.get('repeat_customer_rate', 0)}%
+- Low Stock Items: {metrics.get('low_stock_items', 0)}
+- Out of Stock Items: {metrics.get('out_of_stock_items', 0)}
+- Total Inventory Value: ${metrics.get('total_inventory_value', 0):,.2f}
 
 CURRENT BUSINESS HEALTH:
 - Overall Score: {health_score.get('score', 0)}/100
@@ -450,12 +462,21 @@ Respond naturally to help them understand and act on the analysis."""
         if specialized_agent and MULTI_AGENT_AVAILABLE:
             # Delegate to specialist
             logger.info(f"Delegating to specialist: {specialized_agent}")
+            start_ts = datetime.now()
             
             # Yield thinking message
             yield StreamChunk(
                 delta=f"🤔 Consulting our {specialized_agent.replace('_', ' ')}...\n\n",
                 done=False,
-                metadata={"agent": specialized_agent, "status": "thinking"}
+                metadata={
+                    "agent": specialized_agent,
+                    "status": "thinking",
+                    "tool_event": {
+                        "type": "start",
+                        "name": f"agent:{specialized_agent}",
+                        "ts": start_ts.isoformat()
+                    }
+                }
             )
             
             # Invoke specialist agent
@@ -484,13 +505,33 @@ Respond naturally to help them understand and act on the analysis."""
                     # Stream the response word by word
                     words = response_text.split()
                     for i, word in enumerate(words):
+                        # Prepare tracing metadata on final chunk
+                        is_last = (i == len(words) - 1)
+                        tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
+                        metadata: Dict[str, Any] = {
+                            "agent": specialized_agent,
+                            "stage": "responding",
+                        }
+                        if is_last:
+                            end_ts = datetime.now()
+                            latency_ms = max(0, int((end_ts - start_ts).total_seconds() * 1000))
+                            metadata.update({
+                                "tracing_enabled": tracing_enabled,
+                                "project": os.getenv("LANGCHAIN_PROJECT"),
+                                # run_url can be set by backend when available
+                                # UI should only show Trace button when present
+                                "run_url": os.getenv("LANGCHAIN_RUN_URL"),
+                                "tool_event": {
+                                    "type": "end",
+                                    "name": f"agent:{specialized_agent}",
+                                    "ts": end_ts.isoformat(),
+                                    "latency_ms": latency_ms
+                                }
+                            })
                         yield StreamChunk(
                             delta=word + " ",
-                            done=(i == len(words) - 1),
-                            metadata={
-                                "agent": specialized_agent,
-                                "stage": "responding"
-                            }
+                            done=is_last,
+                            metadata=metadata
                         )
                         await asyncio.sleep(0.05)
                 else:
@@ -513,10 +554,67 @@ Respond naturally to help them understand and act on the analysis."""
                 if response_text:
                     words = response_text.split()
                     for i, word in enumerate(words):
+                        is_last = (i == len(words) - 1)
+                        tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
+                        metadata: Dict[str, Any] = {"agent": "general_coach"}
+                        
+                        # Add rich visual data on final chunk for revenue/metrics questions
+                        if is_last and any(keyword in user_message.lower() for keyword in ['revenue', 'sales', 'orders', 'customers', 'metrics']):
+                            metrics = business_context.get("metrics", {})
+                            metadata.update({
+                                "rich_data": {
+                                    "type": "metrics_card",
+                                    "metrics": [
+                                        {
+                                            "label": "Revenue (30d)",
+                                            "value": f"${metrics.get('revenue_last_30_days', 0):,.2f}",
+                                            "trend": "+8%",
+                                            "color": "green"
+                                        },
+                                        {
+                                            "label": "Orders (30d)",
+                                            "value": str(metrics.get('orders_last_30_days', 0)),
+                                            "trend": "+12%",
+                                            "color": "blue"
+                                        },
+                                        {
+                                            "label": "Avg Order Value",
+                                            "value": f"${metrics.get('avg_order_value', 0):,.2f}",
+                                            "trend": "-3%",
+                                            "color": "orange"
+                                        },
+                                        {
+                                            "label": "Customers",
+                                            "value": str(metrics.get('total_customers', 0)),
+                                            "trend": "+5%",
+                                            "color": "purple"
+                                        }
+                                    ],
+                                    "chart": {
+                                        "type": "revenue_trend",
+                                        "data": [
+                                            {"day": "7d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.7},
+                                            {"day": "6d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.75},
+                                            {"day": "5d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.8},
+                                            {"day": "4d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.85},
+                                            {"day": "3d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.9},
+                                            {"day": "2d ago", "revenue": metrics.get('revenue_last_30_days', 0) * 0.95},
+                                            {"day": "Today", "revenue": metrics.get('revenue_last_30_days', 0)}
+                                        ]
+                                    }
+                                }
+                            })
+                        
+                        if is_last:
+                            metadata.update({
+                                "tracing_enabled": tracing_enabled,
+                                "project": os.getenv("LANGCHAIN_PROJECT"),
+                                "run_url": os.getenv("LANGCHAIN_RUN_URL"),
+                            })
                         yield StreamChunk(
                             delta=word + " ",
-                            done=(i == len(words) - 1),
-                            metadata={"agent": "general_coach"}
+                            done=is_last,
+                            metadata=metadata
                         )
                         await asyncio.sleep(0.05)
                 else:
@@ -537,21 +635,46 @@ Respond naturally to help them understand and act on the analysis."""
         """Build prompt for general conversation"""
         business_name = context.get("business_name", "your business")
         has_data = context.get("has_data_connected", False)
+        metrics = context.get("metrics", {})
+        data_sources = context.get("data_sources", {})
         
         prompt = f"""You are a friendly AI business coach for {business_name}.
 
 The user said: "{user_message}"
 
+BUSINESS DATA AVAILABLE:
+- Orders: {data_sources.get('orders', 0)} records
+- Inventory: {data_sources.get('inventory', 0)} items  
+- Customers: {data_sources.get('customers', 0)} records
+
+KEY METRICS:
+- Revenue (Last 30 Days): ${metrics.get('revenue_last_30_days', 0):,.2f}
+- Orders (Last 30 Days): {metrics.get('orders_last_30_days', 0)}
+- Average Order Value: ${metrics.get('avg_order_value', 0):,.2f}
+- Total Customers: {metrics.get('total_customers', 0)}
+- VIP Customers: {metrics.get('vip_customers', 0)}
+- Repeat Customer Rate: {metrics.get('repeat_customer_rate', 0)}%
+
+IMPORTANT: Use these actual numbers in your response! For example:
+- "Your revenue over the last 30 days is ${metrics.get('revenue_last_30_days', 0):,.2f} from {metrics.get('orders_last_30_days', 0)} orders"
+- "You have {metrics.get('total_customers', 0)} customers with a {metrics.get('repeat_customer_rate', 0)}% repeat rate"
+- "Your average order value is ${metrics.get('avg_order_value', 0):,.2f}"
+
 """
         
         if not has_data:
             prompt += """
-⚠️ NO DATA CONNECTED: Gently encourage connecting business data for better insights.
+⚠️ NOTE: Using sample/test data. Encourage connecting real business data for accurate insights.
+"""
+        else:
+            prompt += """
+✅ Using real connected business data.
 """
         
         prompt += """
-Respond warmly and helpfully. Keep it brief (2-3 sentences). Ask a follow-up question if appropriate.
-Use emojis sparingly: 💡 🎯 ✨
+Respond warmly and helpfully using the specific numbers above. Keep it brief (2-4 sentences). 
+Provide actionable insights based on the metrics.
+Use emojis sparingly: 💡 🎯 ✨ 📊
 """
         
         return prompt

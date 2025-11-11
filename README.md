@@ -46,6 +46,11 @@ Open http://localhost:8001/docs to see the API
 
 ---
 
+### Need the Postgres-based stack?
+If you're working with the newer Postgres repositories (accounts, connectors, evidence), skip the legacy instructions above and follow the simplified end-to-end guide in [`docs/SIMPLE_LOCAL_SETUP.md`](docs/SIMPLE_LOCAL_SETUP.md). It covers Docker + pgvector, migrations, and how to restart services after code changes.
+
+---
+
 ## 📦 What's Included
 
 ### SMB Mode Features

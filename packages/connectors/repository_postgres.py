@@ -47,6 +47,66 @@ class ConnectorRepositoryPG:
             raise RuntimeError("ConnectorRepositoryPG requires PostgresBackend")
         self._backend: PostgresBackend = backend
         self.encryption = get_encryption()
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        """Ensure required columns exist in connectors table."""
+        try:
+            print("🔍 Checking connectors.connectors schema...")
+            with self._backend.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Check if connector_name column exists
+                    cur.execute("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_schema = 'connectors' 
+                        AND table_name = 'connectors' 
+                        AND column_name = 'connector_name'
+                    """)
+                    
+                    result = cur.fetchone()
+                    if not result:
+                        print("⚠️ Missing columns detected. Starting migration...")
+                        logger.info("Adding missing columns to connectors.connectors table...")
+                        
+                        # Add missing columns with defaults
+                        cur.execute("""
+                            ALTER TABLE connectors.connectors 
+                            ADD COLUMN IF NOT EXISTS connector_name TEXT NOT NULL DEFAULT '',
+                            ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
+                            ADD COLUMN IF NOT EXISTS category TEXT,
+                            ADD COLUMN IF NOT EXISTS icon TEXT,
+                            ADD COLUMN IF NOT EXISTS data_types TEXT[] DEFAULT ARRAY[]::TEXT[],
+                            ADD COLUMN IF NOT EXISTS sync_frequency TEXT DEFAULT 'manual',
+                            ADD COLUMN IF NOT EXISTS created_by TEXT,
+                            ADD COLUMN IF NOT EXISTS sync_status TEXT,
+                            ADD COLUMN IF NOT EXISTS sync_error TEXT,
+                            ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'
+                        """)
+                        print("✅ Columns added")
+                        
+                        # Update existing rows
+                        cur.execute("""
+                            UPDATE connectors.connectors 
+                            SET connector_name = connector_type,
+                                display_name = connector_type,
+                                sync_frequency = COALESCE(sync_frequency, 'manual')
+                            WHERE connector_name = '' OR display_name = ''
+                        """)
+                        print("✅ Existing rows updated")
+                        
+                        conn.commit()
+                        print("✅ Schema migration completed successfully")
+                        logger.info("✅ Schema migration completed successfully")
+                    else:
+                        print("✅ Schema is up to date")
+                    
+        except Exception as e:
+            print(f"❌ Schema migration failed: {e}")
+            logger.warning(f"Schema check/migration failed (non-fatal): {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail startup if schema migration fails
 
     # ------------------------------------------------------------------
     # Creation
@@ -81,13 +141,14 @@ class ConnectorRepositoryPG:
         params = [
             connector_id, tenant_id, connector_type, connector_name, display_name,
             category, icon, data_types, sync_frequency, created_by,
-            encrypted_config.encode(), ConnectorStatus.TESTING.value, metadata.model_dump_json(),
+            encrypted_config.encode(), ConnectorStatus.INACTIVE.value, metadata.model_dump_json(),
         ]
 
         with self._backend.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(insert_sql, params)
                 row = cur.fetchone()
+            conn.commit()
 
         connector = TenantConnector(
             connector_id=connector_id,
@@ -99,7 +160,7 @@ class ConnectorRepositoryPG:
             icon=icon,
             encrypted_config=encrypted_config,
             data_types=data_types,
-            status=ConnectorStatus.TESTING,
+            status=ConnectorStatus.INACTIVE,
             sync_frequency=SyncFrequency(sync_frequency),
             metadata=metadata,
             created_at=row[0] if row else datetime.utcnow(),
@@ -167,14 +228,21 @@ class ConnectorRepositoryPG:
             sql += " AND status=%s"
             params.append(status.value)
         sql += " ORDER BY created_at DESC"
+        
+        logger.info(f"Querying connectors: tenant_id={tenant_id}, status={status}, sql={sql}")
+        
         results: list[TenantConnector] = []
         with self._backend.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 colnames = [desc[0] for desc in cur.description] if cur.description else []
-                for row in cur.fetchall():
+                rows = cur.fetchall()
+                logger.info(f"Query returned {len(rows)} rows")
+                for row in rows:
                     row_dict = dict(zip(colnames, row)) if colnames else row
                     results.append(self._row_to_model(row_dict))
+        
+        logger.info(f"Converted to {len(results)} TenantConnector models")
         return results
 
     # ------------------------------------------------------------------
@@ -228,6 +296,63 @@ class ConnectorRepositoryPG:
         if deleted:
             logger.info(f"Deleted connector {connector_id} (tenant={tenant_id}) from Postgres")
         return deleted
+
+    def update(
+        self,
+        connector_id: str,
+        tenant_id: str,
+        *,
+        display_name: Optional[str] = None,
+        config: Optional[dict] = None,
+        sync_frequency: Optional[str] = None,
+        status: Optional[ConnectorStatus] = None,
+        metadata: Optional[ConnectorMetadata] = None,
+    ) -> Optional[TenantConnector]:
+        """
+        Update connector properties and re-encrypt configuration if provided.
+        """
+        existing = self.get_by_id(connector_id)
+        if not existing or existing.tenant_id != tenant_id:
+            return None
+
+        new_display_name = display_name or existing.display_name
+        new_sync_frequency = sync_frequency or existing.sync_frequency.value
+        new_status = status or existing.status
+        new_metadata = metadata or existing.metadata
+
+        if config is not None:
+            encrypted_config = self.encryption.encrypt_config(config)
+        else:
+            encrypted_config = existing.encrypted_config
+
+        update_sql = """
+            UPDATE connectors.connectors
+               SET display_name=%s,
+                   sync_frequency=%s,
+                   config_encrypted=%s,
+                   status=%s,
+                   metadata=%s,
+                   updated_at=NOW()
+             WHERE connector_id=%s AND tenant_id=%s
+        """
+
+        params = [
+            new_display_name,
+            new_sync_frequency,
+            encrypted_config.encode() if isinstance(encrypted_config, str) else encrypted_config,
+            new_status.value,
+            new_metadata.model_dump_json(),
+            connector_id,
+            tenant_id,
+        ]
+
+        with self._backend.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(update_sql, params)
+            conn.commit()
+
+        logger.info(f"Updated connector {connector_id} (tenant={tenant_id}) in Postgres")
+        return self.get_by_id(connector_id)
 
     # ------------------------------------------------------------------
     # Secure config access

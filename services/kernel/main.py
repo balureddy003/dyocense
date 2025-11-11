@@ -27,6 +27,7 @@ from services.smb_gateway.main import app as smb_gateway_app
 from services.accounts.main import app as accounts_app
 from services.chat.main import app as chat_app
 from services.analyze.main import app as analyze_app
+from services.connectors.main import app as connectors_app
 from packages.kernel_common import persistence
 from packages.kernel_common.auth import get_auth_health
 from packages.kernel_common.keystone import health_check as get_keystone_health
@@ -46,6 +47,7 @@ SUB_APPS = [
     planner_app,
     analyze_app,
     smb_gateway_app,
+    connectors_app,
 ]
 
 # Optionally include connectors service (requires MongoDB) only if enabled

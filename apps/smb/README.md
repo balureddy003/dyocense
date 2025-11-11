@@ -2,11 +2,17 @@ SMB App — Minimal scaffold
 
 This is a minimal Vite + React scaffold created as a focused place to build the SMB onboarding flow.
 
-How to run:
+## Running locally
 
 1. cd apps/smb
 2. npm install
 3. npm run dev
+
+## Goals flow (inline wizard + versions)
+
+The Goals page now includes an inline, AI‑assisted wizard for the first goal and lightweight version history for each goal. See `GOALS_FLOW.md` for details.
+
+## API configuration
 
 This app by default points to the local Keystone proxy at <http://localhost:8002>. You can configure the API host and proxy key using Vite env variables:
 

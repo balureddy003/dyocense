@@ -3,13 +3,20 @@ from __future__ import annotations
 import uuid
 from importlib import resources
 import json
-from typing import Dict, List, Optional
+import os
+import logging
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import jsonschema
+
+# PostgreSQL persistence layer
+from packages.kernel_common.persistence_v2 import get_backend
+
+logger = logging.getLogger(__name__)
 
 from .health_score import HealthScoreCalculator, HealthScoreResponse
 from .goals_service import (
@@ -33,11 +40,20 @@ from .coach_service import (
     ChatResponse,
     ChatMessage,
 )
+from .coach_personas import PersonaConfig, CoachPersona
 from .conversational_coach import (
     get_conversational_coach,
 )
 from .multi_agent_coach import (
     get_multi_agent_coach,
+)
+from .run_logs import (
+    create_run as create_runlog,
+    append_event as runlog_append_event,
+    append_output as runlog_append_output,
+    finalize_run as runlog_finalize,
+    list_runs as runlog_list,
+    get_run as runlog_get,
 )
 from .analytics_service import (
     get_analytics_service,
@@ -63,6 +79,11 @@ from .settings_service import (
 # Load shared schemas
 plan_schema = json.loads(resources.files("packages.contracts.schemas").joinpath("plan.schema.json").read_text(encoding="utf-8"))
 workspace_schema = json.loads(resources.files("packages.contracts.schemas").joinpath("workspace.schema.json").read_text(encoding="utf-8"))
+
+# Initialize PostgreSQL backend
+db_backend = get_backend()
+if not db_backend.connect():
+    logger.warning("Failed to connect to PostgreSQL. Some features may not work.")
 
 
 def _sample_plan(title: str) -> Dict:
@@ -146,6 +167,55 @@ def list_plans(tenant_id: str, limit: int = Query(default=5, ge=1, le=20)):
     return {"items": items[:limit], "count": len(items)}
 
 
+class PlanCreateRequest(BaseModel):
+    goal_id: Optional[str] = None
+    archetype_id: Optional[str] = Field(default="forecasting_basic", description="Template/archetype ID")
+    regenerate: bool = Field(default=False, description="Force regeneration even if plan exists")
+
+
+@app.post("/v1/tenants/{tenant_id}/plans")
+async def create_plan(tenant_id: str, request: PlanCreateRequest):
+    """
+    Create or regenerate an action plan for the tenant.
+    Links to goal if goal_id provided; calls planner service for structured execution.
+    """
+    # Build plan goal/title from linked goal if available
+    goals_service = get_goals_service()
+    plan_title = "Action Plan"
+    goal_context = None
+    
+    if request.goal_id:
+        try:
+            goal_obj = goals_service.get_goal(tenant_id, request.goal_id)
+            if goal_obj:
+                plan_title = f"Action Plan: {goal_obj.title}"
+                goal_context = {
+                    "goal_id": goal_obj.id,
+                    "title": goal_obj.title,
+                    "category": goal_obj.category,
+                    "target": goal_obj.target,
+                    "current": goal_obj.current,
+                }
+        except Exception:
+            pass  # proceed without goal context
+    
+    # Generate a structured plan via the planner service (optional integration)
+    # For MVP, create a sample plan and store it
+    plan = _sample_plan(plan_title)
+    
+    # Enrich with goal linkage and metadata
+    plan["goal_id"] = request.goal_id
+    plan["archetype_id"] = request.archetype_id
+    plan["created_at"] = datetime.now().isoformat()
+    plan["tenant_id"] = tenant_id
+    
+    # Validate and store
+    jsonschema.validate(instance=plan, schema=plan_schema)
+    _store_plan(tenant_id, plan)
+    
+    return plan
+
+
 @app.get("/v1/tenants/{tenant_id}/health-score", response_model=HealthScoreResponse)
 async def get_health_score(tenant_id: str):
     """
@@ -169,115 +239,267 @@ async def get_health_score(tenant_id: str):
 
 async def _fetch_connector_data(tenant_id: str) -> Dict:
     """
-    Fetch data from connectors (GrandNode, Salesforce, etc.)
+    Fetch connector data for a tenant.
     
-    TODO: Replace with actual connector service integration
-    For now, check if we have mock data, otherwise return realistic sample data
+    Strategy:
+    1. Check in-memory mock data first (for development/testing)
+    2. Query connectors API to check for active connectors
+    3. If connectors exist with synced data, fetch from connector_data table
+    4. Otherwise return empty structure
+    
+    Returns dict with orders, inventory, customers arrays.
     """
+    # Check in-memory mock data first (for development/testing)
     if tenant_id in TENANT_CONNECTOR_DATA:
+        logger.info(f"[_fetch_connector_data] Using in-memory data for tenant {tenant_id}")
         return TENANT_CONNECTOR_DATA[tenant_id]
     
-    # Generate realistic sample data based on tenant
-    # In production, this would call connector service APIs to get synced data
-    now = datetime.now()
-    
-    # Create realistic order data with trends
-    orders = []
-    for days_ago in range(90):  # Last 90 days
-        date = now - timedelta(days=days_ago)
-        # More orders on weekdays, fewer on weekends
-        is_weekend = date.weekday() >= 5
-        daily_orders = 3 if is_weekend else 8
+    # Use connectors repository to check for active connectors
+    try:
+        from packages.connectors.repository_postgres import ConnectorRepositoryPG
+        from packages.connectors.models import ConnectorStatus
         
-        for i in range(daily_orders):
-            order_id = f"ORD-{date.strftime('%Y%m%d')}-{i+1}"
-            orders.append({
-                "id": order_id,
-                "customer_id": f"cust-{(days_ago * 10 + i) % 200}",
-                "total_amount": round(120 + (i * 15) + (days_ago % 50), 2),
-                "status": "completed" if days_ago > 2 else "pending",
-                "items_count": 1 + (i % 3),
-                "created_at": date.isoformat(),
-                "product_category": ["outdoor-gear", "equipment", "accessories", "clothing"][i % 4]
-            })
-    
-    # Realistic inventory with some low-stock items
-    inventory = []
-    categories = {
-        "outdoor-gear": ["Tent", "Backpack", "Sleeping Bag", "Camping Stove", "Headlamp"],
-        "equipment": ["Hiking Boots", "Trekking Poles", "Water Filter", "Multi-tool", "Compass"],
-        "accessories": ["Water Bottle", "First Aid Kit", "Rope", "Carabiner", "Whistle"],
-        "clothing": ["Rain Jacket", "Thermal Pants", "Gloves", "Hat", "Socks"]
-    }
-    
-    sku_id = 1
-    for category, products in categories.items():
-        for product in products:
-            # Vary quantity - some items low/out of stock
-            base_qty = 15
-            if sku_id % 7 == 0:  # ~14% low stock
-                quantity = 2
-                status = "low_stock"
-            elif sku_id % 11 == 0:  # ~9% out of stock
-                quantity = 0
-                status = "out_of_stock"
-            else:
-                quantity = base_qty + (sku_id % 20)
-                status = "in_stock"
-            
-            inventory.append({
-                "id": f"inv-{sku_id}",
-                "sku": f"SKU-{sku_id:04d}",
-                "product_name": product,
-                "category": category,
-                "quantity": quantity,
-                "reorder_point": 5,
-                "unit_cost": 25 + (sku_id * 3),
-                "retail_price": 50 + (sku_id * 5),
-                "status": status,
-                "supplier": f"Supplier {(sku_id % 5) + 1}"
-            })
-            sku_id += 1
-    
-    # Realistic customer data with engagement levels
-    customers = []
-    for i in range(200):
-        # Create customer segments
-        if i < 20:  # VIP customers (10%)
-            total_orders = 15 + (i % 10)
-            lifetime_value = 5000 + (i * 200)
-            segment = "vip"
-        elif i < 80:  # Regular customers (30%)
-            total_orders = 5 + (i % 5)
-            lifetime_value = 1500 + (i * 50)
-            segment = "regular"
-        else:  # Occasional customers (60%)
-            total_orders = 1 + (i % 3)
-            lifetime_value = 300 + (i * 10)
-            segment = "occasional"
+        logger.info(f"[_fetch_connector_data] Checking connectors for tenant {tenant_id}")
         
-        customers.append({
-            "id": f"cust-{i}",
-            "name": f"Customer {i}",
-            "email": f"customer{i}@example.com",
-            "total_orders": total_orders,
-            "lifetime_value": round(lifetime_value, 2),
-            "segment": segment,
-            "last_order_date": (now - timedelta(days=i % 30)).isoformat(),
-            "created_at": (now - timedelta(days=180 + i)).isoformat()
-        })
-    
-    return {
-        "orders": orders,
-        "inventory": inventory,
-        "customers": customers,
-        "_meta": {
-            "generated": now.isoformat(),
-            "tenant_id": tenant_id,
-            "data_source": "sample" ,  # Mark as sample data
-            "note": "This is sample data. Connect real data sources for accurate insights."
+        connector_repo = ConnectorRepositoryPG()
+        connectors = connector_repo.list_by_tenant(tenant_id, status=ConnectorStatus.ACTIVE)
+        
+        if not connectors:
+            logger.info(f"[_fetch_connector_data] No active connectors for tenant {tenant_id}")
+            return {
+                "orders": [],
+                "inventory": [],
+                "customers": [],
+                "has_data_connected": False,
+                "_meta": {
+                    "fetched_at": datetime.now().isoformat(),
+                    "tenant_id": tenant_id,
+                    "data_source": "connectors_api",
+                    "note": "No active connectors found. Add and activate a connector to import data."
+                }
+            }
+        
+        logger.info(f"[_fetch_connector_data] Found {len(connectors)} active connectors for tenant {tenant_id}")
+        
+        # TODO: Query connector_data table for actual synced data
+        # For now, return empty arrays indicating connectors exist but no data synced yet
+        return {
+            "orders": [],
+            "inventory": [],
+            "customers": [],
+            "has_data_connected": True,
+            "_meta": {
+                "fetched_at": datetime.now().isoformat(),
+                "tenant_id": tenant_id,
+                "data_source": "connectors_api",
+                "active_connectors": len(connectors),
+                "connector_types": [c.connector_type for c in connectors],
+                "note": "Connectors configured but no data synced yet. Use connector sync to import data."
+            }
         }
-    }
+    
+    except Exception as e:
+        logger.error(f"[_fetch_connector_data] Failed to fetch connector data for tenant {tenant_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "orders": [],
+            "inventory": [],
+            "customers": [],
+            "has_data_connected": False,
+            "_meta": {
+                "fetched_at": datetime.now().isoformat(),
+                "tenant_id": tenant_id,
+                "data_source": "error",
+                "note": f"Error fetching connector data: {str(e)}"
+            }
+        }
+
+
+# ===================================
+# Business Profile & Onboarding Endpoints
+# ===================================
+
+class BusinessProfileRequest(BaseModel):
+    """Business profile data from welcome wizard"""
+    industry: Optional[str] = None
+    company_size: Optional[str] = None
+    team_size: Optional[str] = None
+    primary_goal: Optional[str] = None
+    business_type: Optional[str] = None
+    additional_info: Optional[Dict[str, Any]] = None
+
+
+class OnboardingCompleteRequest(BaseModel):
+    """Complete onboarding with welcome wizard selections"""
+    health_score: Optional[int] = None
+    selected_goal: Optional[Dict[str, Any]] = None
+    business_profile: Optional[Dict[str, Any]] = None
+
+
+@app.post("/v1/tenants/{tenant_id}/profile/business")
+async def update_business_profile(tenant_id: str, profile: BusinessProfileRequest):
+    """
+    Save or update business profile for tenant.
+    Updates tenant metadata in PostgreSQL with profile information.
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor, Json
+        import os
+        
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            # Build connection string
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                # Build profile dict
+                profile_data = {
+                    "industry": profile.industry,
+                    "company_size": profile.company_size,
+                    "team_size": profile.team_size,
+                    "primary_goal": profile.primary_goal,
+                    "business_type": profile.business_type,
+                    "profile_updated_at": datetime.utcnow().isoformat(),
+                }
+                
+                # Add additional info if provided
+                if profile.additional_info:
+                    profile_data.update(profile.additional_info)
+                
+                # Update tenant metadata
+                cur.execute("""
+                    UPDATE tenants.tenants
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE tenant_id = %s
+                    RETURNING tenant_id
+                """, (Json(profile_data), tenant_id))
+                
+                result = cur.fetchone()
+                conn.commit()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                logger.info(f"Updated business profile for tenant {tenant_id}")
+                
+                return {
+                    "success": True,
+                    "message": "Business profile updated successfully",
+                    "profile": profile_data
+                }
+        finally:
+            conn.close()
+            
+    except psycopg2.Error as e:
+        logger.error(f"Database error updating profile for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error updating profile for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/tenants/{tenant_id}/onboarding/complete")
+async def complete_onboarding(tenant_id: str, request: OnboardingCompleteRequest):
+    """
+    Mark onboarding as complete and save welcome wizard selections.
+    
+    Saves:
+    - Health score baseline
+    - Selected goal (creates goal if provided)
+    - Business profile
+    - Onboarding completion timestamp
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor, Json
+        import os
+        
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                # Build onboarding metadata
+                onboarding_data = {
+                    "onboarding_completed": True,
+                    "onboarding_completed_at": datetime.utcnow().isoformat(),
+                    "initial_health_score": request.health_score,
+                }
+                
+                # Add business profile if provided
+                if request.business_profile:
+                    onboarding_data.update(request.business_profile)
+                
+                # Update tenant metadata
+                cur.execute("""
+                    UPDATE tenants.tenants
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE tenant_id = %s
+                    RETURNING tenant_id
+                """, (Json(onboarding_data), tenant_id))
+                
+                result = cur.fetchone()
+                if not result:
+                    conn.rollback()
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                conn.commit()
+                
+                # Create goal if provided
+                goal_id = None
+                if request.selected_goal:
+                    try:
+                        goals_service = get_goals_service()
+                        goal_request = CreateGoalRequest(
+                            title=request.selected_goal.get('title', 'Business Goal'),
+                            description=request.selected_goal.get('description', ''),
+                            current=request.selected_goal.get('current', 0.0),
+                            target=request.selected_goal.get('target', 100.0),
+                            unit=request.selected_goal.get('unit', 'units'),
+                            deadline=request.selected_goal.get('deadline', (datetime.utcnow() + timedelta(days=90)).strftime('%Y-%m-%d')),
+                            category=request.selected_goal.get('category', 'revenue'),
+                        )
+                        goal = goals_service.create_goal(tenant_id, goal_request)
+                        goal_id = goal.id
+                        logger.info(f"Created onboarding goal {goal_id} for tenant {tenant_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create onboarding goal: {e}")
+                
+                logger.info(f"Completed onboarding for tenant {tenant_id}")
+                
+                return {
+                    "success": True,
+                    "message": "Onboarding completed successfully",
+                    "goal_id": goal_id,
+                    "tenant_id": tenant_id
+                }
+        finally:
+            conn.close()
+            
+    except psycopg2.Error as e:
+        logger.error(f"Database error completing onboarding for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error completing onboarding for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===================================
@@ -574,6 +796,62 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Coach error: {str(e)}")
 
 
+@app.get("/v1/coach/personas")
+async def list_coach_personas():
+    """Get available coach personas for selection"""
+    personas = []
+    for persona_id, config in PersonaConfig.PERSONAS.items():
+        personas.append({
+            "id": persona_id,
+            "name": config["name"],
+            "emoji": config["emoji"],
+            "description": config["description"],
+            "expertise": config["expertise"],
+            "tone": config["tone"],
+        })
+    return {"personas": personas}
+
+
+@app.get("/v1/tenants/{tenant_id}/data-sources")
+async def list_data_sources(tenant_id: str):
+    """Get available data sources for the tenant"""
+    connector_data = await _fetch_connector_data(tenant_id)
+    
+    data_sources = []
+    
+    # Check orders
+    if connector_data.get("orders"):
+        data_sources.append({
+            "id": "orders",
+            "name": "Orders & Revenue",
+            "connector": "E-commerce",
+            "record_count": len(connector_data["orders"]),
+            "available": True,
+        })
+    
+    # Check inventory
+    if connector_data.get("inventory"):
+        data_sources.append({
+            "id": "inventory",
+            "name": "Inventory Management",
+            "connector": "Inventory System",
+            "record_count": len(connector_data["inventory"]),
+            "available": True,
+        })
+    
+    # Check customers
+    if connector_data.get("customers"):
+        data_sources.append({
+            "id": "customers",
+            "name": "Customer Data",
+            "connector": "CRM",
+            "record_count": len(connector_data["customers"]),
+            "available": True,
+        })
+    
+    return {"data_sources": data_sources}
+
+
 @app.post("/v1/tenants/{tenant_id}/coach/chat/stream")
 async def coach_chat_stream(tenant_id: str, request: ChatRequest):
     """Stream conversational AI coach responses via Server-Sent Events with multi-agent orchestration"""
@@ -672,6 +950,19 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
             "tasks": [t.dict() for t in tasks],
         }
         
+        # Create local run log for this conversation turn
+        run_id = create_runlog(tenant_id, input_text=request.message, persona=request.persona, metadata={
+            "source": "coach_chat_stream"
+        })
+        
+        # Log business context for debugging
+        logger.info(
+            f"[coach_chat_stream] Business context for tenant {tenant_id}: "
+            f"has_data={has_data_connected}, orders={total_orders}, "
+            f"revenue_30d={business_context['metrics']['revenue_last_30_days']}, "
+            f"customers={total_customers}"
+        )
+
         # Create event generator for SSE streaming
         async def event_generator():
             try:
@@ -681,7 +972,32 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
                     business_context=business_context,
                     conversation_history=request.conversation_history or []
                 ):
-                    # Format as SSE event
+                    # Accumulate output and record tool events
+                    try:
+                        if getattr(chunk, "delta", None):
+                            runlog_append_output(tenant_id, run_id, getattr(chunk, "delta"))
+                        meta = getattr(chunk, "metadata", {}) or {}
+                        if isinstance(meta, dict) and meta.get("tool_event"):
+                            runlog_append_event(tenant_id, run_id, meta["tool_event"]) 
+                        # Inject local run_url on final chunk
+                        if getattr(chunk, "done", False):
+                            # finalize the run and attach run_url
+                            run_url = f"/v1/tenants/{tenant_id}/coach/runs/{run_id}"
+                            runlog_finalize(tenant_id, run_id, metadata={"run_url": run_url})
+                            # augment chunk metadata
+                            meta = dict(meta)
+                            meta.setdefault("run_url", run_url)
+                            try:
+                                payload = {"delta": chunk.delta, "done": True, "metadata": meta}
+                                yield f"data: {json.dumps(payload)}\n\n"
+                                continue
+                            except Exception:
+                                pass
+                    except Exception:
+                        # ignore run log errors
+                        pass
+
+                    # Default: pass-through
                     yield f"data: {chunk.model_dump_json()}\n\n"
             except Exception as e:
                 # Send error as final chunk
@@ -704,6 +1020,22 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Coach streaming error: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/coach/runs")
+async def list_coach_runs(tenant_id: str, limit: int = Query(20, ge=1, le=100)):
+    """List recent local coach runs (no LangSmith required)."""
+    items = [r.model_dump() for r in runlog_list(tenant_id, limit=limit)]
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/v1/tenants/{tenant_id}/coach/runs/{run_id}")
+async def get_coach_run(tenant_id: str, run_id: str):
+    """Fetch a single local coach run log by id."""
+    run = runlog_get(tenant_id, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
 
 
 @app.get("/v1/tenants/{tenant_id}/coach/history", response_model=List[ChatMessage])
@@ -1164,5 +1496,140 @@ async def trigger_connector_sync(tenant_id: str, connector_id: str):
     """
     # TODO: Implement manual sync trigger
     raise HTTPException(status_code=501, detail="Manual sync not yet implemented")
+
+
+@app.post("/v1/tenants/{tenant_id}/data/seed")
+async def seed_tenant_data(tenant_id: str):
+    """
+    Seed tenant with sample data for testing (DEVELOPMENT ONLY)
+    
+    Creates realistic orders, inventory, and customer data in memory.
+    This allows testing the AI coach without connecting real data sources.
+    
+    WARNING: This endpoint should be disabled in production!
+    Data is stored in memory and will be lost on service restart.
+    
+    For production, use the connectors service to sync data from real sources.
+    """
+    try:
+        now = datetime.now()
+        
+        # Generate realistic order data (last 90 days)
+        orders = []
+        for days_ago in range(90):
+            date = now - timedelta(days=days_ago)
+            is_weekend = date.weekday() >= 5
+            daily_orders = 3 if is_weekend else 8
+            
+            for i in range(daily_orders):
+                order_id = f"ORD-{date.strftime('%Y%m%d')}-{i+1}"
+                orders.append({
+                    "id": order_id,
+                    "customer_id": f"cust-{(days_ago * 10 + i) % 200}",
+                    "total_amount": round(120 + (i * 15) + (days_ago % 50), 2),
+                    "status": "completed" if days_ago > 2 else "pending",
+                    "items_count": 1 + (i % 3),
+                    "created_at": date.isoformat(),
+                    "product_category": ["outdoor-gear", "equipment", "accessories", "clothing"][i % 4]
+                })
+        
+        # Generate inventory data
+        inventory = []
+        categories = {
+            "outdoor-gear": ["Tent", "Backpack", "Sleeping Bag", "Camping Stove", "Headlamp"],
+            "equipment": ["Hiking Boots", "Trekking Poles", "Water Filter", "Multi-tool", "Compass"],
+            "accessories": ["Water Bottle", "First Aid Kit", "Rope", "Carabiner", "Whistle"],
+            "clothing": ["Rain Jacket", "Thermal Pants", "Gloves", "Hat", "Socks"]
+        }
+        
+        sku_id = 1
+        for category, products in categories.items():
+            for product in products:
+                base_qty = 15
+                if sku_id % 7 == 0:
+                    quantity = 2
+                    status = "low_stock"
+                elif sku_id % 11 == 0:
+                    quantity = 0
+                    status = "out_of_stock"
+                else:
+                    quantity = base_qty + (sku_id % 20)
+                    status = "in_stock"
+                
+                inventory.append({
+                    "id": f"inv-{sku_id}",
+                    "sku": f"SKU-{sku_id:04d}",
+                    "product_name": product,
+                    "category": category,
+                    "quantity": quantity,
+                    "reorder_point": 5,
+                    "unit_cost": 25 + (sku_id * 3),
+                    "retail_price": 50 + (sku_id * 5),
+                    "status": status,
+                    "supplier": f"Supplier {(sku_id % 5) + 1}"
+                })
+                sku_id += 1
+        
+        # Generate customer data
+        customers = []
+        for i in range(200):
+            if i < 20:
+                total_orders = 15 + (i % 10)
+                lifetime_value = 5000 + (i * 200)
+                segment = "vip"
+            elif i < 80:
+                total_orders = 5 + (i % 5)
+                lifetime_value = 1500 + (i * 50)
+                segment = "regular"
+            else:
+                total_orders = 1 + (i % 3)
+                lifetime_value = 300 + (i * 10)
+                segment = "occasional"
+            
+            customers.append({
+                "id": f"cust-{i}",
+                "name": f"Customer {i}",
+                "email": f"customer{i}@example.com",
+                "total_orders": total_orders,
+                "lifetime_value": round(lifetime_value, 2),
+                "segment": segment,
+                "last_order_date": (now - timedelta(days=i % 30)).isoformat(),
+                "created_at": (now - timedelta(days=180 + i)).isoformat()
+            })
+        
+        # Store in memory (for development/testing)
+        TENANT_CONNECTOR_DATA[tenant_id] = {
+            "orders": orders,
+            "inventory": inventory,
+            "customers": customers,
+            "_meta": {
+                "generated": now.isoformat(),
+                "tenant_id": tenant_id,
+                "data_source": "seeded",
+                "note": "Sample data generated for testing. This data is stored in memory and will be lost on service restart."
+            }
+        }
+        
+        logger.info(
+            f"[seed_tenant_data] Seeded {len(orders)} orders, "
+            f"{len(inventory)} inventory items, {len(customers)} customers for tenant {tenant_id} (in-memory)"
+        )
+        
+        return {
+            "success": True,
+            "tenant_id": tenant_id,
+            "counts": {
+                "orders": len(orders),
+                "inventory": len(inventory),
+                "customers": len(customers)
+            },
+            "storage": "in-memory",
+            "message": "Sample data seeded successfully. You can now test the AI coach with realistic data. Note: Data is stored in memory and will be lost on service restart."
+        }
+    
+    except Exception as e:
+        logger.error(f"[seed_tenant_data] Failed to seed data for tenant {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to seed data: {str(e)}")
+
 
 

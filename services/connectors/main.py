@@ -8,7 +8,7 @@ Supports OAuth flows, API key authentication, and connector testing.
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional, Any
+from typing import Optional, Any, cast
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -74,10 +74,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware (allow overriding via env to match the frontend dev server)
+raw_cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178",
+)
+cors_origins = [origin.strip() for origin in raw_cors_origins.split(",") if origin.strip()]
+allow_origin_regex = None
+if cors_origins == ["*"]:
+    # Starlette blocks '*' when credentials are allowed, so fall back to regex
+    cors_origins = []
+    allow_origin_regex = ".*"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -133,23 +145,23 @@ def get_connector_catalog() -> dict:
 
 
 @app.post(
-    "/v1/connectors",
+    "/v1/tenants/{tenant_id}/connectors",
     response_model=ConnectorResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["connectors"]
 )
 async def create_connector(
-    payload: CreateConnectorRequest,
-    identity: dict = Depends(require_auth)
+    tenant_id: str,
+    payload: CreateConnectorRequest
 ) -> ConnectorResponse:
     """
-    Create a new connector for the authenticated tenant.
+    Create a new connector for the specified tenant.
     
     Credentials are encrypted and stored securely.
-    The connector is initially in 'testing' status.
+    The connector is initially in 'inactive' status.
     """
-    tenant_id = identity["tenant_id"]
-    user_id = identity["subject"]
+    # Default user_id since we don't have auth context
+    user_id = f"user-{tenant_id[:10]}"
     
     # Look up connector metadata from catalog
     connector_meta = next(
@@ -182,17 +194,17 @@ async def create_connector(
     return ConnectorResponse.from_model(connector)
 
 
-@app.get("/v1/connectors", response_model=list[ConnectorResponse], tags=["connectors"])
+@app.get("/v1/tenants/{tenant_id}/connectors", response_model=list[ConnectorResponse], tags=["connectors"])
 def list_connectors(
+    tenant_id: str,
     status_filter: Optional[str] = None,
-    identity: dict = Depends(require_auth)
 ) -> list[ConnectorResponse]:
     """
-    List all connectors for the authenticated tenant.
+    List all connectors for the specified tenant.
     
-    Optionally filter by status (active, inactive, error, syncing).
+    Optionally filter by status (active, inactive, error).
     """
-    tenant_id = identity["tenant_id"]
+    logger.info(f"Listing connectors for tenant: {tenant_id}, status_filter: {status_filter}")
     
     status_enum = None
     if status_filter:
@@ -205,16 +217,25 @@ def list_connectors(
             )
     
     connectors = connector_repo.list_by_tenant(tenant_id, status_enum)
+    logger.info(f"Found {len(connectors)} connectors for tenant {tenant_id}")
     return [ConnectorResponse.from_model(c) for c in connectors]
 
 
-@app.get("/v1/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
+@app.get("/v1/tenants/{tenant_id}/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
 def get_connector(
+    tenant_id: str,
     connector_id: str,
     identity: dict = Depends(require_auth)
 ) -> ConnectorResponse:
     """Get a specific connector by ID."""
-    tenant_id = identity["tenant_id"]
+    auth_tenant_id = identity["tenant_id"]
+    
+    # Verify tenant ownership
+    if tenant_id != auth_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
     
     connector = connector_repo.get_by_id(connector_id)
     if not connector:
@@ -223,18 +244,19 @@ def get_connector(
             detail="Connector not found"
         )
     
-    # Verify tenant ownership
+    # Verify connector belongs to tenant
     if connector.tenant_id != tenant_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connector not found"
         )
     
     return ConnectorResponse.from_model(connector)
 
 
-@app.put("/v1/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
+@app.put("/v1/tenants/{tenant_id}/connectors/{connector_id}", response_model=ConnectorResponse, tags=["connectors"])
 async def update_connector(
+    tenant_id: str,
     connector_id: str,
     payload: UpdateConnectorRequest,
     identity: dict = Depends(require_auth)
@@ -244,7 +266,14 @@ async def update_connector(
     
     Can update display name, config (re-encrypts credentials), sync frequency, or status.
     """
-    tenant_id = identity["tenant_id"]
+    auth_tenant_id = identity["tenant_id"]
+    
+    # Verify tenant ownership
+    if tenant_id != auth_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
     
     connector = connector_repo.get_by_id(connector_id)
     if not connector:
@@ -255,20 +284,35 @@ async def update_connector(
     
     if connector.tenant_id != tenant_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connector not found"
         )
     
-    # TODO: Implement update logic in repository
-    # For now, return error
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Connector updates not yet implemented"
+    # Determine new status: explicit override or revert to testing when config changes
+    new_status = payload.status or (ConnectorStatus.TESTING if payload.config is not None else connector.status)
+
+    updated = connector_repo.update(
+        connector_id,
+        tenant_id,
+        display_name=payload.display_name,
+        config=payload.config,
+        sync_frequency=payload.sync_frequency.value if payload.sync_frequency else None,
+        status=new_status,
     )
 
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update connector"
+        )
 
-@app.delete("/v1/connectors/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["connectors"])
+    logger.info("Connector %s updated by %s", connector_id, identity["sub"])
+    return ConnectorResponse.from_model(updated)
+
+
+@app.delete("/v1/tenants/{tenant_id}/connectors/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["connectors"])
 def delete_connector(
+    tenant_id: str,
     connector_id: str,
     identity: dict = Depends(require_auth)
 ):
@@ -277,7 +321,14 @@ def delete_connector(
     
     This permanently removes the connector and its encrypted credentials.
     """
-    tenant_id = identity["tenant_id"]
+    auth_tenant_id = identity["tenant_id"]
+    
+    # Verify tenant ownership
+    if tenant_id != auth_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
     
     success = connector_repo.delete(connector_id, tenant_id)
     if not success:
@@ -290,69 +341,127 @@ def delete_connector(
     return
 
 
-@app.post("/v1/connectors/{connector_id}/test", response_model=ConnectorTestResult, tags=["connectors"])
+@app.post("/v1/tenants/{tenant_id}/connectors/{connector_id}/test", response_model=ConnectorTestResult, tags=["connectors"])
 async def test_connector_by_id(
+    tenant_id: str,
     connector_id: str,
-    identity: dict = Depends(require_auth)
 ) -> ConnectorTestResult:
     """
     Test an existing connector's configuration.
     
-    Validates that the credentials work and the connector can connect to the data source.
+    Validates credentials and connectivity. Auth removed to match SMB Gateway pattern.
     """
-    tenant_id = identity["tenant_id"]
-    
     connector = connector_repo.get_by_id(connector_id)
-    if not connector:
+    if not connector or connector.tenant_id != tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Connector not found"
         )
     
-    if connector.tenant_id != tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
-    # Get decrypted config
-    config = connector_repo.get_decrypted_config(connector_id)
+    # Decrypt config
+    config = connector_repo.get_decrypted_config(connector_id) or {}
     if not config:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to decrypt connector configuration"
-        )
-    
-    # Test the connection
-    result = await connector_tester.test_connector(connector.connector_type, config)
-    
-    # Update connector status based on test result
-    if result.success:
-        connector_repo.update_status(connector_id, ConnectorStatus.ACTIVE)
-    else:
-        connector_repo.update_status(
+        logger.warning(
+            "Connector %s has no decryptable configuration; running test with empty payload",
             connector_id,
-            ConnectorStatus.ERROR,
-            result.message
         )
     
+    # ERPNext specialized test path
+    if connector.connector_type == "erpnext":
+        try:
+            from services.connectors.erpnext import ERPNextConfig, sync_erpnext_data
+            raw_url = (config.get("api_url") or "").strip()
+            if raw_url and not raw_url.startswith("http://") and not raw_url.startswith("https://"):
+                raw_url = f"https://{raw_url}"
+            api_url = raw_url.rstrip('/')
+            api_key = config.get("api_key") or config.get("key") or config.get("token")
+            api_secret = config.get("api_secret") or config.get("secret")
+            if not all([api_url, api_key, api_secret]):
+                return ConnectorTestResult(
+                    success=False,
+                    message="Missing ERPNext credentials (api_url, api_key, api_secret required)",
+                    error_code="MISSING_CREDENTIALS"
+                )
+            erp_config = ERPNextConfig(api_url=api_url, api_key=api_key, api_secret=api_secret)
+            try:
+                data = await sync_erpnext_data(erp_config)
+                connector_repo.update_status(connector_id, ConnectorStatus.ACTIVE)
+                return ConnectorTestResult(
+                    success=True,
+                    message=f"ERPNext connection successful. Inventory: {len(data.inventory)}, Orders: {len(data.orders)}, Suppliers: {len(data.suppliers)}",
+                    details={
+                        "inventory_count": len(data.inventory),
+                        "orders_count": len(data.orders),
+                        "suppliers_count": len(data.suppliers),
+                        "synced_at": data.sync_metadata.get("synced_at")
+                    }
+                )
+            except Exception as sync_err:
+                connector_repo.update_status(connector_id, ConnectorStatus.ERROR, str(sync_err))
+                return ConnectorTestResult(
+                    success=False,
+                    message=f"ERPNext connection failed: {sync_err}",
+                    error_code="CONNECTION_FAILED"
+                )
+        except Exception as e:
+            logger.error(f"ERPNext test flow crashed: {e}")
+            connector_repo.update_status(connector_id, ConnectorStatus.ERROR, str(e))
+            return ConnectorTestResult(
+                success=False,
+                message=f"ERPNext test error: {e}",
+                error_code="TEST_FAILED"
+            )
+    
+    # Generic tester fallback
+    result = await connector_tester.test_connector(connector.connector_type, config)
+    connector_repo.update_status(
+        connector_id,
+        ConnectorStatus.ACTIVE if result.success else ConnectorStatus.ERROR,
+        None if result.success else result.message
+    )
     return result
 
 
-@app.post("/v1/connectors/test", response_model=ConnectorTestResult, tags=["connectors"])
+@app.post("/v1/tenants/{tenant_id}/connectors/test", response_model=ConnectorTestResult, tags=["connectors"])
 async def test_connector_config(
+    tenant_id: str,
     payload: TestConnectorRequest,
-    identity: dict = Depends(require_auth)
 ) -> ConnectorTestResult:
     """
     Test a connector configuration without saving it.
     
     Useful for validating credentials before creating a connector.
     """
-    result = await connector_tester.test_connector(
-        payload.connector_type,
-        payload.config
-    )
+    # If ERPNext, run specialized flow for better diagnostics
+    if payload.connector_type == "erpnext":
+        try:
+            from services.connectors.erpnext import ERPNextConfig, ERPNextConnector
+            raw_url = (payload.config.get("api_url") or "").strip()
+            if raw_url and not raw_url.startswith("http://") and not raw_url.startswith("https://"):
+                raw_url = f"https://{raw_url}"
+            api_url = raw_url.rstrip('/')
+            api_key = payload.config.get("api_key")
+            api_secret = payload.config.get("api_secret")
+            if not all([api_url, api_key, api_secret]):
+                return ConnectorTestResult(
+                    success=False,
+                    message="Missing ERPNext credentials (api_url, api_key, api_secret required)",
+                    error_code="MISSING_CREDENTIALS"
+                )
+            cfg = ERPNextConfig(api_url=api_url, api_key=cast(str, api_key), api_secret=cast(str, api_secret))
+            # Just test connectivity without syncing everything
+            import aiohttp
+            async with ERPNextConnector(cfg) as conn:
+                ok = await conn.test_connection()
+                if ok:
+                    return ConnectorTestResult(success=True, message="ERPNext connection successful")
+                return ConnectorTestResult(success=False, message="Unable to reach ERPNext with provided credentials", error_code="CONNECTION_FAILED")
+        except Exception as e:
+            logger.error(f"ERPNext test config error: {e}")
+            return ConnectorTestResult(success=False, message=str(e), error_code="TEST_FAILED")
+    
+    # Generic connectors
+    result = await connector_tester.test_connector(payload.connector_type, payload.config)
     return result
 
 

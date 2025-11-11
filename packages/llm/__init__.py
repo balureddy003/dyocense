@@ -55,18 +55,18 @@ def generate_ops_llm(
     return _extract_json(content)
 
 
-def _invoke_llm(prompt: str) -> Optional[str]:
+def _invoke_llm(prompt: str, temperature: Optional[float] = None, max_tokens: Optional[int] = None, model: Optional[str] = None) -> Optional[str]:
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     if provider == "openai":
-        return _invoke_openai(prompt)
+        return _invoke_openai(prompt, temperature=temperature, max_tokens=max_tokens, model=model)
     if provider == "ollama":
-        return _invoke_ollama(prompt)
+        return _invoke_ollama(prompt, temperature=temperature, max_tokens=max_tokens, model=model)
     if provider == "azure":
-        return _invoke_azure_openai(prompt)
+        return _invoke_azure_openai(prompt, temperature=temperature, max_tokens=max_tokens, model=model)
     return None
 
 
-def _invoke_openai(prompt: str) -> Optional[str]:
+def _invoke_openai(prompt: str, temperature: Optional[float] = None, max_tokens: Optional[int] = None, model: Optional[str] = None) -> Optional[str]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
@@ -76,20 +76,30 @@ def _invoke_openai(prompt: str) -> Optional[str]:
     except ImportError:
         return None
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model_name = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    temp = temperature if temperature is not None else 0.7
+    tokens = max_tokens if max_tokens is not None else 2048
+    
     client = OpenAI(api_key=api_key)
     try:
-        completion = client.responses.create(model=model, input=prompt)
-        return (completion.output_text or "").strip()
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temp,
+            max_tokens=tokens,
+        )
+        if not completion.choices:
+            return None
+        return (completion.choices[0].message.content or "").strip()
     except Exception as exc:
         logger.warning("OpenAI invocation failed: %s", exc)
         return None
 
 
-def _invoke_azure_openai(prompt: str) -> Optional[str]:  # pragma: no cover - optional dependency
+def _invoke_azure_openai(prompt: str, temperature: Optional[float] = None, max_tokens: Optional[int] = None, model: Optional[str] = None) -> Optional[str]:  # pragma: no cover - optional dependency
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    deployment = model or os.getenv("AZURE_OPENAI_DEPLOYMENT")
     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
     
     if not (endpoint and api_key and deployment):
@@ -109,11 +119,14 @@ def _invoke_azure_openai(prompt: str) -> Optional[str]:  # pragma: no cover - op
             api_version=api_version,
         )
         
+        temp = temperature if temperature is not None else float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7"))
+        tokens = max_tokens if max_tokens is not None else int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048"))
+        
         response = client.chat.completions.create(
             model=deployment,
             messages=[{"role": "user", "content": prompt}],
-            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7")),
-            max_tokens=int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048")),
+            temperature=temp,
+            max_tokens=tokens,
         )
         
         if not response.choices:
@@ -124,9 +137,9 @@ def _invoke_azure_openai(prompt: str) -> Optional[str]:  # pragma: no cover - op
         return None
 
 
-def _invoke_ollama(prompt: str) -> Optional[str]:
+def _invoke_ollama(prompt: str, temperature: Optional[float] = None, max_tokens: Optional[int] = None, model: Optional[str] = None) -> Optional[str]:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.getenv("OLLAMA_MODEL", "llama3.1")
+    model_name = model or os.getenv("OLLAMA_MODEL", "llama3.1")
     stream_str = os.getenv("OLLAMA_STREAM", "false")
     stream = stream_str.strip().lower() in {"1", "true", "yes", "on"}
     timeout_env = os.getenv("OLLAMA_TIMEOUT")
@@ -138,7 +151,17 @@ def _invoke_ollama(prompt: str) -> Optional[str]:
 
     timeout_cfg = httpx.Timeout(timeout_val, read=timeout_val, connect=30.0)
 
-    payload = {"model": model, "prompt": prompt, "stream": stream}
+    payload = {"model": model_name, "prompt": prompt, "stream": stream}
+    
+    # Add optional parameters if provided
+    options = {}
+    if temperature is not None:
+        options["temperature"] = temperature
+    if max_tokens is not None:
+        options["num_predict"] = max_tokens
+    if options:
+        payload["options"] = options
+    
     curl_cmd = (
         f"curl -X POST '{base_url}/api/generate' "
         "-H 'Content-Type: application/json' "

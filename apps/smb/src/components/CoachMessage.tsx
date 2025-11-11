@@ -1,4 +1,7 @@
-import { Text } from '@mantine/core'
+import { Badge, Card, Divider, Group, Paper, Stack, Table, Text, ThemeIcon, Title } from '@mantine/core'
+import { IconAlertCircle, IconCheck, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface CoachMessageProps {
     content: string
@@ -6,8 +9,8 @@ interface CoachMessageProps {
 }
 
 /**
- * Renders coach messages with enhanced formatting
- * Supports markdown-like syntax for better UX
+ * Renders coach messages with professional report-style formatting
+ * Supports markdown, tables, KPI cards, metrics, and visual elements
  */
 export function CoachMessage({ content, isUser }: CoachMessageProps) {
     if (isUser) {
@@ -24,111 +27,249 @@ export function CoachMessage({ content, isUser }: CoachMessageProps) {
         )
     }
 
-    // Parse and format assistant messages
-    const lines = content.split('\n')
-    const elements: JSX.Element[] = []
-    let key = 0
+    // Check if content contains table data (KPI format)
+    const hasKPITable = content.includes('| KPI |') || content.includes('| Revenue') || content.includes('| Orders')
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]
-
-        // Empty line - add spacing
-        if (!line.trim()) {
-            elements.push(<div key={`space-${key++}`} style={{ height: '8px' }} />)
-            continue
-        }
-
-        // Headers (bold text with **)
-        if (line.match(/^\*\*(.+)\*\*$/)) {
-            const text = line.replace(/^\*\*|\*\*$/g, '')
-            elements.push(
-                <Text key={`header-${key++}`} size="sm" fw={700} mb={4} style={{ color: '#0f172a' }}>
-                    {text}
-                </Text>
-            )
-            continue
-        }
-
-        // Bullet points (•)
-        if (line.match(/^[•·]\s/)) {
-            const text = line.replace(/^[•·]\s/, '')
-            elements.push(
-                <div key={`bullet-${key++}`} style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
-                    <Text size="sm" style={{ color: '#64748b' }}>•</Text>
-                    <Text size="sm" style={{ flex: 1, color: '#334155' }}>{formatInlineText(text)}</Text>
-                </div>
-            )
-            continue
-        }
-
-        // Numbered lists
-        if (line.match(/^\d+\.\s/)) {
-            elements.push(
-                <div key={`numbered-${key++}`} style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
-                    <Text size="sm" fw={600} style={{ color: '#64748b', minWidth: '20px' }}>
-                        {line.match(/^(\d+)\./)?.[1]}.
-                    </Text>
-                    <Text size="sm" style={{ flex: 1, color: '#334155' }}>
-                        {formatInlineText(line.replace(/^\d+\.\s/, ''))}
-                    </Text>
-                </div>
-            )
-            continue
-        }
-
-        // Section dividers (---)
-        if (line.match(/^---+$/)) {
-            elements.push(<div key={`divider-${key++}`} style={{ borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />)
-            continue
-        }
-
-        // Regular text
-        elements.push(
-            <Text key={`text-${key++}`} size="sm" mb={4} style={{ color: '#475569' }}>
-                {formatInlineText(line)}
-            </Text>
-        )
+    if (hasKPITable) {
+        return <KPIReportView content={content} />
     }
 
-    return <div>{elements}</div>
+    // Render as rich markdown with professional styling
+    return (
+        <div style={{ color: '#1e293b' }}>
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                    h1: ({ children }) => (
+                        <Title order={2} size="h3" mb="md" mt="lg" style={{ color: '#0f172a', borderBottom: '2px solid #0ea5e9', paddingBottom: '8px' }}>
+                            {children}
+                        </Title>
+                    ),
+                    h2: ({ children }) => (
+                        <Title order={3} size="h4" mb="sm" mt="md" style={{ color: '#1e293b' }}>
+                            {children}
+                        </Title>
+                    ),
+                    h3: ({ children }) => (
+                        <Text size="md" fw={700} mb="xs" mt="sm" style={{ color: '#334155' }}>
+                            {children}
+                        </Text>
+                    ),
+                    p: ({ children }) => (
+                        <Text size="sm" mb="sm" style={{ color: '#475569', lineHeight: 1.6 }}>
+                            {children}
+                        </Text>
+                    ),
+                    ul: ({ children }) => (
+                        <Stack gap="xs" mb="md" style={{ listStyle: 'none', padding: 0 }}>
+                            {children}
+                        </Stack>
+                    ),
+                    ol: ({ children }) => (
+                        <Stack gap="xs" mb="md" component="ol" style={{ paddingLeft: '24px' }}>
+                            {children}
+                        </Stack>
+                    ),
+                    li: ({ children }) => (
+                        <Group gap="sm" align="flex-start" wrap="nowrap">
+                            <ThemeIcon size="xs" radius="xl" color="blue" variant="light" mt={4}>
+                                <IconCheck size={10} />
+                            </ThemeIcon>
+                            <Text size="sm" style={{ color: '#334155', flex: 1 }}>
+                                {children}
+                            </Text>
+                        </Group>
+                    ),
+                    table: ({ children }) => (
+                        <Card withBorder radius="md" p={0} mb="md" style={{ overflow: 'hidden' }}>
+                            <Table striped highlightOnHover>
+                                {children}
+                            </Table>
+                        </Card>
+                    ),
+                    thead: ({ children }) => (
+                        <thead style={{ backgroundColor: '#f8fafc' }}>
+                            {children}
+                        </thead>
+                    ),
+                    th: ({ children }) => (
+                        <th style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', fontSize: '13px' }}>
+                            {children}
+                        </th>
+                    ),
+                    td: ({ children }) => (
+                        <td style={{ padding: '10px 16px', color: '#475569', fontSize: '13px' }}>
+                            {children}
+                        </td>
+                    ),
+                    blockquote: ({ children }) => (
+                        <Paper p="md" mb="md" style={{ borderLeft: '4px solid #0ea5e9', backgroundColor: '#f0f9ff' }}>
+                            <Text size="sm" style={{ color: '#0c4a6e', fontStyle: 'italic' }}>
+                                {children}
+                            </Text>
+                        </Paper>
+                    ),
+                    hr: () => <Divider my="md" />,
+                    strong: ({ children }) => (
+                        <Text span fw={700} style={{ color: '#0f172a' }}>
+                            {children}
+                        </Text>
+                    ),
+                    em: ({ children }) => (
+                        <Text span fs="italic" style={{ color: '#64748b' }}>
+                            {children}
+                        </Text>
+                    ),
+                    code: ({ children, className }) => {
+                        const isInline = !className
+                        if (isInline) {
+                            return (
+                                <Badge variant="light" size="sm" style={{ fontFamily: 'monospace', fontWeight: 400 }}>
+                                    {children}
+                                </Badge>
+                            )
+                        }
+                        return (
+                            <Paper p="md" mb="md" style={{ backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                <Text size="xs" style={{ fontFamily: 'monospace', color: '#334155', whiteSpace: 'pre-wrap' }}>
+                                    {children}
+                                </Text>
+                            </Paper>
+                        )
+                    },
+                }}
+            >
+                {content}
+            </ReactMarkdown>
+        </div>
+    )
 }
 
 /**
- * Format inline text with bold (**text**) and inline code
+ * Special component for KPI report view with metrics cards
  */
-function formatInlineText(text: string): JSX.Element {
-    const parts: (string | JSX.Element)[] = []
-    let remaining = text
-    let key = 0
+function KPIReportView({ content }: { content: string }) {
+    // Extract KPI data from markdown table
+    const lines = content.split('\n')
+    const tableStart = lines.findIndex(line => line.includes('| KPI |') || line.includes('| Revenue'))
 
-    // Match bold text **...**
-    const boldRegex = /\*\*(.+?)\*\*/g
-    let lastIndex = 0
-    let match: RegExpExecArray | null
+    if (tableStart === -1) {
+        return <Text size="sm">{content}</Text>
+    }
 
-    while ((match = boldRegex.exec(text)) !== null) {
-        // Add text before match
-        if (match.index > lastIndex) {
-            parts.push(text.substring(lastIndex, match.index))
+    // Extract introduction text before table
+    const intro = lines.slice(0, tableStart).join('\n').trim()
+
+    // Parse table rows
+    const kpis: Array<{
+        name: string
+        value: string
+        description: string
+        trend?: 'up' | 'down'
+        status?: 'good' | 'warning' | 'critical'
+    }> = []
+
+    for (let i = tableStart + 2; i < lines.length; i++) {
+        const line = lines[i].trim()
+        if (!line || !line.startsWith('|')) break
+
+        const parts = line.split('|').map(p => p.trim()).filter(p => p)
+        if (parts.length >= 3) {
+            const name = parts[0].replace(/\*\*/g, '')
+            const value = parts[1]
+            const description = parts[2]
+
+            // Determine trend from value
+            let trend: 'up' | 'down' | undefined
+            if (value.includes('$') && parseFloat(value.replace(/[$,]/g, '')) > 0) trend = 'up'
+
+            // Determine status
+            let status: 'good' | 'warning' | 'critical' | undefined
+            if (name.toLowerCase().includes('revenue') && parseFloat(value.replace(/[$,]/g, '')) > 0) status = 'good'
+            if (name.toLowerCase().includes('orders') && value === '0') status = 'critical'
+            if (description.toLowerCase().includes('critical')) status = 'critical'
+            if (description.toLowerCase().includes('indicates market')) status = 'good'
+
+            kpis.push({ name, value, description, trend, status })
         }
-        // Add bold text
-        parts.push(
-            <strong key={`bold-${key++}`} style={{ fontWeight: 600, color: '#1e293b' }}>
-                {match[1]}
-            </strong>
-        )
-        lastIndex = match.index + match[0].length
     }
 
-    // Add remaining text
-    if (lastIndex < text.length) {
-        parts.push(text.substring(lastIndex))
-    }
+    return (
+        <Stack gap="md">
+            {/* Introduction */}
+            {intro && (
+                <Paper p="md" style={{ backgroundColor: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                    <Group gap="sm">
+                        <ThemeIcon size="lg" radius="xl" variant="light" color="blue">
+                            <IconAlertCircle size={20} />
+                        </ThemeIcon>
+                        <Text size="sm" fw={600} style={{ color: '#0c4a6e', flex: 1 }}>
+                            {intro}
+                        </Text>
+                    </Group>
+                </Paper>
+            )}
 
-    // If no formatting found, return original text
-    if (parts.length === 0) {
-        return <>{text}</>
-    }
+            {/* KPI Cards Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '12px' }}>
+                {kpis.map((kpi, idx) => (
+                    <Card key={idx} withBorder radius="md" p="md" style={{
+                        backgroundColor: 'white',
+                        borderColor: kpi.status === 'critical' ? '#fee2e2' : kpi.status === 'warning' ? '#fef3c7' : '#e0f2fe'
+                    }}>
+                        <Stack gap="xs">
+                            {/* KPI Name */}
+                            <Group justify="space-between">
+                                <Text size="xs" fw={600} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.5px' }}>
+                                    {kpi.name}
+                                </Text>
+                                {kpi.trend && (
+                                    <ThemeIcon
+                                        size="sm"
+                                        radius="xl"
+                                        variant="light"
+                                        color={kpi.trend === 'up' ? 'teal' : 'red'}
+                                    >
+                                        {kpi.trend === 'up' ? <IconTrendingUp size={12} /> : <IconTrendingDown size={12} />}
+                                    </ThemeIcon>
+                                )}
+                            </Group>
 
-    return <>{parts}</>
+                            {/* KPI Value */}
+                            <Text size="xl" fw={700} style={{
+                                color: kpi.status === 'critical' ? '#dc2626' : kpi.status === 'good' ? '#059669' : '#0f172a'
+                            }}>
+                                {kpi.value}
+                            </Text>
+
+                            {/* Description */}
+                            <Text size="xs" c="dimmed" style={{ lineHeight: 1.4 }}>
+                                {kpi.description}
+                            </Text>
+
+                            {/* Status Badge */}
+                            {kpi.status && (
+                                <Badge
+                                    size="sm"
+                                    variant="light"
+                                    color={kpi.status === 'critical' ? 'red' : kpi.status === 'warning' ? 'yellow' : 'teal'}
+                                >
+                                    {kpi.status === 'critical' ? 'Needs Attention' : kpi.status === 'warning' ? 'Monitor' : 'Healthy'}
+                                </Badge>
+                            )}
+                        </Stack>
+                    </Card>
+                ))}
+            </div>
+
+            {/* Additional context after KPIs */}
+            {lines.slice(tableStart + kpis.length + 3).filter(l => l.trim()).length > 0 && (
+                <Paper p="md" style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {lines.slice(tableStart + kpis.length + 3).join('\n')}
+                    </ReactMarkdown>
+                </Paper>
+            )}
+        </Stack>
+    )
 }

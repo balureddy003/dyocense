@@ -1,124 +1,37 @@
-"""Goal version ledger with persistence backends."""
+"""Goal version ledger backed by PostgreSQL."""
 
 from __future__ import annotations
 
-import hashlib
-from collections import defaultdict
-from typing import Dict, Iterable, List, Optional
+from typing import Iterable, List, Optional
 
-from packages.kernel_common.persistence import InMemoryCollection, get_collection
+from packages.versioning.repository_postgres import GoalVersionRepositoryPG
 
 from .models import GoalVersion
 
 
 class GoalVersionLedger:
-    def __init__(self, collection=None) -> None:
-        self._collection = collection or get_collection("goal_versions")
-        self._is_fallback = isinstance(self._collection, InMemoryCollection)
-        self._versions: Dict[str, GoalVersion] = {}
-        self._by_tenant: Dict[str, List[str]] = defaultdict(list)
-        self._by_project: Dict[str, List[str]] = defaultdict(list)
-        self._load_existing()
+    """Thin wrapper over the Postgres repository to preserve the legacy API."""
+
+    def __init__(self, repository: GoalVersionRepositoryPG | None = None) -> None:
+        self._repository = repository or GoalVersionRepositoryPG()
 
     def record(self, version: GoalVersion) -> GoalVersion:
-        self._versions[version.version_id] = version
-        tenant_key = self._tenant_key(version.tenant_id)
-        project_key = self._project_key(version.tenant_id, version.project_id)
-        if version.version_id not in self._by_tenant[tenant_key]:
-            self._by_tenant[tenant_key].append(version.version_id)
-        if version.version_id not in self._by_project[project_key]:
-            self._by_project[project_key].append(version.version_id)
-        self._persist(version)
-        return version
+        return self._repository.upsert(version)
 
     def get(self, version_id: str) -> Optional[GoalVersion]:
-        version = self._versions.get(version_id)
-        if version is not None:
-            return version
-        # Try to hydrate from backing store if available (supports shared in-memory collections)
-        try:
-            if hasattr(self._collection, "find_one"):
-                doc = self._collection.find_one({"version_id": version_id})  # type: ignore[attr-defined]
-                if doc:
-                    doc.pop("_id", None)
-                    self._hydrate(doc)
-                    return self._versions.get(version_id)
-        except Exception:
-            pass
-        return None
+        return self._repository.get(version_id)
 
     def list_for_project(self, tenant_id: str, project_id: str) -> List[GoalVersion]:
-        project_key = self._project_key(tenant_id, project_id)
-        return [self._versions[vid] for vid in self._by_project.get(project_key, [])]
+        return self._repository.list_for_project(tenant_id, project_id)
 
     def list_for_tenant(self, tenant_id: str) -> List[GoalVersion]:
-        tenant_key = self._tenant_key(tenant_id)
-        return [self._versions[vid] for vid in self._by_tenant.get(tenant_key, [])]
+        return self._repository.list_for_tenant(tenant_id)
 
     def iter_versions(self) -> Iterable[GoalVersion]:
-        return self._versions.values()
+        return self._repository.iter_all()
 
     def annotate(self, version_id: str, **fields) -> Optional[GoalVersion]:
-        version = self._versions.get(version_id)
-        if not version:
-            return None
-        updated = version.model_copy(update=fields)
-        self._versions[version_id] = updated
-        self._persist(updated)
-        return updated
-
-    def _load_existing(self) -> None:
-        try:
-            if hasattr(self._collection, "find") and not self._is_fallback:
-                for document in self._collection.find({}):  # type: ignore[attr-defined]
-                    document.pop("_id", None)
-                    self._hydrate(document)
-            elif isinstance(self._collection, InMemoryCollection):
-                for document in self._collection.find({}):
-                    self._hydrate(document)
-        except Exception:  # pragma: no cover - loading is best effort
-            pass
-
-    def _hydrate(self, document: dict) -> None:
-        document = dict(document)
-        document.setdefault("goal_hash", hashlib.sha256(document.get("goal", "").encode("utf-8")).hexdigest())
-        if "retrieval" not in document:
-            snippets = document.get("knowledge_snippets", [])
-            document["retrieval"] = {
-                "snippet_ids": snippets,
-                "snippet_count": len(snippets),
-            }
-        if "provenance" not in document:
-            document["provenance"] = {"compiler_source": "unknown", "model": None, "duration_seconds": 0.0}
-        try:
-            version = GoalVersion.model_validate(document)
-        except Exception:  # pragma: no cover - malformed documents ignored
-            return
-        self._versions[version.version_id] = version
-        tenant_key = self._tenant_key(version.tenant_id)
-        project_key = self._project_key(version.tenant_id, version.project_id)
-        if version.version_id not in self._by_tenant[tenant_key]:
-            self._by_tenant[tenant_key].append(version.version_id)
-        if version.version_id not in self._by_project[project_key]:
-            self._by_project[project_key].append(version.version_id)
-
-    def _persist(self, version: GoalVersion) -> None:
-        document = version.model_dump()
-        try:
-            if hasattr(self._collection, "replace_one") and not self._is_fallback:
-                self._collection.replace_one({"version_id": version.version_id}, document, upsert=True)  # type: ignore[attr-defined]
-            elif isinstance(self._collection, InMemoryCollection):
-                self._collection.replace_one({"version_id": version.version_id}, document, upsert=True)
-        except Exception:  # pragma: no cover - persistence best effort
-            pass
-
-    @staticmethod
-    def _tenant_key(tenant_id: str) -> str:
-        return tenant_id
-
-    @staticmethod
-    def _project_key(tenant_id: str, project_id: str) -> str:
-        return f"{tenant_id}:{project_id}"
+        return self._repository.annotate(version_id, fields)
 
 
 GLOBAL_LEDGER = GoalVersionLedger()

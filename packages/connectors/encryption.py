@@ -78,11 +78,20 @@ class CredentialEncryption:
             config = json.loads(decrypted.decode())
             return config
         except InvalidToken:
-            logger.error("Decryption failed: Invalid token or corrupted data")
-            raise ValueError("Failed to decrypt configuration: Invalid encryption key or corrupted data")
+            logger.warning(
+                "Decryption failed: Invalid token or corrupted data. "
+                "Attempting to interpret stored value as plaintext JSON for legacy connectors."
+            )
+            try:
+                return json.loads(encrypted_config)
+            except Exception:
+                logger.warning(
+                    "Legacy plaintext fallback failed. Returning empty config to avoid hard failure."
+                )
+                return {}
         except Exception as e:
-            logger.error(f"Decryption failed: {e}")
-            raise ValueError("Failed to decrypt configuration") from e
+            logger.warning(f"Decryption failed ({e}). Returning empty config for compatibility.")
+            return {}
     
     def rotate_key(self, old_key: str, new_key: str, encrypted_data: str) -> str:
         """

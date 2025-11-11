@@ -66,11 +66,11 @@ class ConversationalCoachAgent:
     
     def _build_graph(self):
         """Build LangGraph conversation graph"""
-        if not LANGGRAPH_AVAILABLE:
+        if not LANGGRAPH_AVAILABLE or StateGraph is None:  # type: ignore[truthy-function]
             return None
         
         # Define the graph
-        workflow = StateGraph(AgentState)
+        workflow = StateGraph(AgentState)  # type: ignore[operator]
         
         # Add nodes
         workflow.add_node("analyze_intent", self._analyze_intent)
@@ -354,6 +354,13 @@ Now respond naturally to the conversation."""
         
         logger.info(f"Streaming response for tenant {tenant_id}")
         
+        # Local run logging (import locally to avoid circular import at module load)
+        try:
+            from .run_logs import create_run as _create_runlog, append_output as _append_output, finalize_run as _finalize_run
+            run_id = _create_runlog(tenant_id, user_message, metadata={"source": "conversational_coach"})
+        except Exception:
+            run_id = None
+
         try:
             # Call LLM
             response_text = _invoke_llm(full_prompt)
@@ -362,20 +369,38 @@ Now respond naturally to the conversation."""
                 # Simulate streaming by chunking the response
                 words = response_text.split()
                 current_chunk = ""
+                tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
                 
                 for i, word in enumerate(words):
                     current_chunk += word + " "
                     
                     # Yield chunks at natural boundaries
                     if len(current_chunk) > 30 or i == len(words) - 1:
-                        yield StreamChunk(
-                            delta=current_chunk,
-                            done=(i == len(words) - 1),
-                            metadata={
-                                "intent": state.get("current_intent"),
-                                "stage": state.get("conversation_stage")
-                            }
-                        )
+                        is_last = (i == len(words) - 1)
+                        metadata = {
+                            "intent": state.get("current_intent"),
+                            "stage": state.get("conversation_stage")
+                        }
+                        if is_last:
+                            metadata.update({
+                                "tracing_enabled": tracing_enabled,
+                                "project": os.getenv("LANGCHAIN_PROJECT"),
+                                "run_url": os.getenv("LANGCHAIN_RUN_URL"),
+                            })
+                        # Append to run log
+                        if run_id:
+                            try:
+                                _append_output(tenant_id, run_id, current_chunk)
+                            except Exception:
+                                pass
+                        if is_last and run_id:
+                            try:
+                                finalized = _finalize_run(tenant_id, run_id, metadata={"intent": state.get("current_intent")})
+                                if finalized:
+                                    metadata.setdefault("run_url", f"/v1/tenants/{tenant_id}/coach/runs/{run_id}")
+                            except Exception:
+                                pass
+                        yield StreamChunk(delta=current_chunk, done=is_last, metadata=metadata)
                         current_chunk = ""
                         await asyncio.sleep(0.05)  # Small delay for streaming effect
             else:
@@ -394,8 +419,20 @@ Now respond naturally to the conversation."""
     
     async def _run_graph(self, state: AgentState) -> AgentState:
         """Run the LangGraph"""
-        result = await self.graph.ainvoke(state)
-        return result
+        if not LANGGRAPH_AVAILABLE or not self.graph:
+            return state
+        try:
+            result = await self.graph.ainvoke(state)  # type: ignore[attr-defined]
+            # Ensure we return a dict matching AgentState expectations; fall back to original state otherwise
+            if isinstance(result, dict):
+                # Merge result onto state to retain required keys
+                merged: AgentState = state.copy()  # type: ignore
+                merged.update(result)  # type: ignore
+                return merged
+            return state
+        except Exception as e:
+            logger.error(f"LangGraph invocation failed, falling back to original state: {e}")
+            return state
     
     def _generate_fallback_response(self, user_message: str, context: Dict[str, Any]) -> str:
         """Generate fallback response"""

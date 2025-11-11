@@ -1,6 +1,13 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
-export type User = { id?: string; name?: string; email?: string } | null
+export type User = {
+    id?: string
+    user_id?: string
+    name?: string
+    full_name?: string
+    email?: string
+} | null
 
 type AuthState = {
     apiToken?: string
@@ -10,22 +17,26 @@ type AuthState = {
     clearAuth: () => void
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-    apiToken: (typeof window !== 'undefined' && localStorage.getItem('apiToken')) ?? undefined,
-    tenantId: (typeof window !== 'undefined' && localStorage.getItem('tenantId')) ?? undefined,
-    user: null,
-    setAuth: ({ apiToken, tenantId, user }) => {
-        if (typeof window !== 'undefined') {
-            if (apiToken) localStorage.setItem('apiToken', apiToken)
-            if (tenantId) localStorage.setItem('tenantId', tenantId)
+export const useAuthStore = create<AuthState>()(
+    persist(
+        (set) => ({
+            apiToken: undefined,
+            tenantId: undefined,
+            user: null,
+            setAuth: ({ apiToken, tenantId, user }) => {
+                set({ apiToken, tenantId, user: user ?? null })
+            },
+            clearAuth: () => {
+                set({ apiToken: undefined, tenantId: undefined, user: null })
+            },
+        }),
+        {
+            name: 'dyocense-auth',
+            partialize: (state) => ({
+                apiToken: state.apiToken,
+                tenantId: state.tenantId,
+                user: state.user,
+            }),
         }
-        set({ apiToken, tenantId, user: user ?? null })
-    },
-    clearAuth: () => {
-        if (typeof window !== 'undefined') {
-            localStorage.removeItem('apiToken')
-            localStorage.removeItem('tenantId')
-        }
-        set({ apiToken: undefined, tenantId: undefined, user: null })
-    },
-}))
+    )
+)

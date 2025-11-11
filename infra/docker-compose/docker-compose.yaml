@@ -54,7 +54,10 @@ services:
       - qdrant-storage:/qdrant/storage
 
   postgres-metadata:
-    image: postgres:15
+    build:
+      context: ../..
+      dockerfile: infra/docker-compose/postgres-pgvector.Dockerfile
+    image: dyocense/postgres-pgvector:local
     environment:
       POSTGRES_USER: metadata
       POSTGRES_PASSWORD: metadataPass123

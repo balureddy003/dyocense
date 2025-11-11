@@ -2,15 +2,128 @@
 Connector service FastAPI routes
 """
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
+import json
+import os
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .grandnode import GrandNodeConfig, sync_grandnode_data
 from .salesforce import SalesforceConfig, sync_salesforce_data
+from .erpnext import ERPNextConfig, sync_erpnext_data
+
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
+
+# PostgreSQL connection string (from environment)
+_pg_conn_str: Optional[str] = os.getenv("POSTGRES_URL")
+
+
+async def get_pg_connection():
+    """Get PostgreSQL connection using psycopg2"""
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    import psycopg2.pool
+    
+    if not _pg_conn_str:
+        raise HTTPException(status_code=500, detail="PostgreSQL connection not configured")
+    
+    return psycopg2.connect(_pg_conn_str, cursor_factory=RealDictCursor)
+
+
+async def save_connector_data(
+    tenant_id: str,
+    connector_id: str,
+    data_type: str,
+    data: List[Dict],
+    metadata: Optional[Dict] = None
+):
+    """
+    Save synced connector data to PostgreSQL
+    Uses UPSERT to update existing data or insert new
+    """
+    import psycopg2
+    from psycopg2.extras import Json
+    
+    conn = await get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            # UPSERT query
+            cur.execute("""
+                INSERT INTO connectors.connector_data 
+                (tenant_id, connector_id, data_type, data, record_count, synced_at, metadata)
+                VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                ON CONFLICT (tenant_id, connector_id, data_type)
+                DO UPDATE SET
+                    data = EXCLUDED.data,
+                    record_count = EXCLUDED.record_count,
+                    synced_at = NOW(),
+                    metadata = EXCLUDED.metadata
+                RETURNING data_id, synced_at
+            """, (
+                tenant_id,
+                connector_id,
+                data_type,
+                Json(data),
+                len(data),
+                Json(metadata or {})
+            ))
+            
+            result = cur.fetchone()
+            conn.commit()
+            
+            return {
+                "data_id": result['data_id'],
+                "synced_at": result['synced_at'],
+                "record_count": len(data)
+            }
+    finally:
+        conn.close()
+
+
+async def get_connector_data(
+    tenant_id: str,
+    data_types: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Get cached connector data for tenant from PostgreSQL
+    Returns dict with data_type as keys
+    """
+    import psycopg2
+    
+    conn = await get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            if data_types:
+                cur.execute("""
+                    SELECT data_type, data, synced_at, record_count
+                    FROM connectors.connector_data
+                    WHERE tenant_id = %s AND data_type = ANY(%s)
+                    ORDER BY synced_at DESC
+                """, (tenant_id, data_types))
+            else:
+                cur.execute("""
+                    SELECT data_type, data, synced_at, record_count
+                    FROM connectors.connector_data
+                    WHERE tenant_id = %s
+                    ORDER BY synced_at DESC
+                """, (tenant_id,))
+            
+            rows = cur.fetchall()
+            
+            # Build result dict
+            result = {}
+            for row in rows:
+                result[row['data_type']] = {
+                    'data': row['data'],
+                    'synced_at': row['synced_at'],
+                    'record_count': row['record_count']
+                }
+            
+            return result
+    finally:
+        conn.close()
 
 
 class ConnectorStatus(BaseModel):
@@ -50,6 +163,17 @@ class SalesforceSetupRequest(BaseModel):
     username: str
     password: str
     security_token: str
+    sync_inventory: bool = True
+    sync_orders: bool = True
+    sync_suppliers: bool = True
+
+
+class ERPNextSetupRequest(BaseModel):
+    """Setup ERPNext connector"""
+    name: str
+    api_url: str
+    api_key: str
+    api_secret: str
     sync_inventory: bool = True
     sync_orders: bool = True
     sync_suppliers: bool = True
@@ -159,9 +283,53 @@ async def setup_salesforce(tenant_id: str, user_id: str, request: SalesforceSetu
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/erpnext/setup")
+async def setup_erpnext(tenant_id: str, user_id: str, request: ERPNextSetupRequest):
+    """Setup ERPNext connector"""
+    try:
+        connector_id = f"erpnext_{datetime.utcnow().timestamp()}"
+        
+        config = ERPNextConfig(
+            api_url=request.api_url,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+            sync_inventory=request.sync_inventory,
+            sync_orders=request.sync_orders,
+            sync_suppliers=request.sync_suppliers,
+        )
+        
+        # Test connection
+        # async with ERPNextConnector(config) as connector:
+        #     if not await connector.test_connection():
+        #         raise HTTPException(status_code=400, detail="Failed to connect to ERPNext API")
+        
+        # Save connector (credentials encrypted in production)
+        _connectors[connector_id] = {
+            'id': connector_id,
+            'tenant_id': tenant_id,
+            'user_id': user_id,
+            'name': request.name,
+            'type': 'erpnext',
+            'status': 'connected',
+            'config': config.dict(exclude={'api_secret'}),  # Don't expose secret
+            'created_at': datetime.utcnow().isoformat(),
+            'last_sync': None,
+            'record_count': 0,
+        }
+        
+        return {
+            "success": True,
+            "connector_id": connector_id,
+            "message": "ERPNext connector setup successfully",
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/sync")
 async def sync_connector(request: SyncConnectorRequest):
-    """Trigger connector sync"""
+    """Trigger connector sync and persist data to PostgreSQL"""
     connector = _connectors.get(request.connector_id)
     
     if not connector:
@@ -171,15 +339,20 @@ async def sync_connector(request: SyncConnectorRequest):
         # Update status to syncing
         connector['status'] = 'syncing'
         
+        tenant_id = connector['tenant_id']
+        connector_id = connector['id']
+        
         # Sync based on connector type
         if connector['type'] == 'grandnode':
             config = GrandNodeConfig(**connector['config'])
             data = await sync_grandnode_data(config)
-            record_count = (
-                len(data.orders) + 
-                len(data.products) + 
-                len(data.customers)
-            )
+            
+            # Save to PostgreSQL
+            await save_connector_data(tenant_id, connector_id, 'orders', data.orders)
+            await save_connector_data(tenant_id, connector_id, 'products', data.products)
+            await save_connector_data(tenant_id, connector_id, 'customers', data.customers)
+            
+            record_count = len(data.orders) + len(data.products) + len(data.customers)
         
         elif connector['type'] == 'salesforce':
             # Reconstruct full config (in production, fetch from secure storage)
@@ -191,11 +364,29 @@ async def sync_connector(request: SyncConnectorRequest):
             
             config = SalesforceConfig(**config_dict)
             data = await sync_salesforce_data(config)
-            record_count = (
-                len(data.inventory) + 
-                len(data.orders) + 
-                len(data.suppliers)
-            )
+            
+            # Save to PostgreSQL
+            await save_connector_data(tenant_id, connector_id, 'inventory', data.inventory)
+            await save_connector_data(tenant_id, connector_id, 'orders', data.orders)
+            await save_connector_data(tenant_id, connector_id, 'suppliers', data.suppliers)
+            
+            record_count = len(data.inventory) + len(data.orders) + len(data.suppliers)
+        
+        elif connector['type'] == 'erpnext':
+            # Reconstruct full config (in production, fetch from secure storage)
+            config_dict = connector['config'].copy()
+            # API secret would be fetched from secure storage in production
+            config_dict['api_secret'] = '***'  # Placeholder - fetch from vault
+            
+            config = ERPNextConfig(**config_dict)
+            data = await sync_erpnext_data(config)
+            
+            # Save to PostgreSQL
+            await save_connector_data(tenant_id, connector_id, 'inventory', data.inventory)
+            await save_connector_data(tenant_id, connector_id, 'orders', data.orders)
+            await save_connector_data(tenant_id, connector_id, 'suppliers', data.suppliers)
+            
+            record_count = len(data.inventory) + len(data.orders) + len(data.suppliers)
         
         else:
             raise HTTPException(status_code=400, detail="Unknown connector type")
@@ -209,6 +400,7 @@ async def sync_connector(request: SyncConnectorRequest):
             "success": True,
             "record_count": record_count,
             "synced_at": connector['last_sync'],
+            "message": f"Successfully synced {record_count} records to PostgreSQL",
         }
     
     except Exception as e:

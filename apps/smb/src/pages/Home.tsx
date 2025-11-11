@@ -1,5 +1,6 @@
-import { Container, Stack, Text, Title } from '@mantine/core'
+import { Button, Container, Stack, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import BusinessHealthScore from '../components/BusinessHealthScore'
 import DailySnapshot from '../components/DailySnapshot'
 import GoalProgress from '../components/GoalProgress'
@@ -14,6 +15,7 @@ export default function Home() {
     const user = useAuthStore((s) => s.user)
     const tenantId = useAuthStore((s) => s.tenantId)
     const apiToken = useAuthStore((s) => s.apiToken)
+    const navigate = useNavigate()
 
     // Fetch real health score from backend
     const { data: healthScoreData, isLoading: isLoadingHealthScore } = useQuery({
@@ -41,6 +43,14 @@ export default function Home() {
         queryFn: () => get(`/v1/tenants/${tenantId}/goals?status=active`, apiToken),
         enabled: !!tenantId && !!apiToken,
         staleTime: 30 * 1000, // 30 seconds
+    })
+
+    // Fetch connectors to check if user has data connected
+    const { data: connectorsData = [] } = useQuery({
+        queryKey: ['connectors', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/connectors`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+        staleTime: 30 * 1000,
     })
 
     // Convert API goals to PlanGoal format
@@ -90,12 +100,25 @@ export default function Home() {
         trend: healthScoreData?.trend ?? 0,
     }
 
-    const mockMetrics = {
-        revenue: { value: '$12,450', trend: healthScoreData?.breakdown?.revenue ? Math.round((healthScoreData.breakdown.revenue - 50) / 5) : 8 },
-        orders: { value: '47', trend: 12 },
-        fillRate: { value: '94%', trend: healthScoreData?.breakdown?.operations ? Math.round((healthScoreData.breakdown.operations - 50) / 5) : -2 },
-        rating: { value: '4.8', trend: healthScoreData?.breakdown?.customer ? Math.round((healthScoreData.breakdown.customer - 50) / 5) : 3 },
-    }
+    // Derive metrics from health score breakdown if available
+    const metrics = healthScoreData?.breakdown ? {
+        revenue: {
+            value: '$—',
+            trend: Math.round((healthScoreData.breakdown.revenue - 50) / 5)
+        },
+        orders: {
+            value: '—',
+            trend: 0
+        },
+        fillRate: {
+            value: '—%',
+            trend: Math.round((healthScoreData.breakdown.operations - 50) / 5)
+        },
+        rating: {
+            value: '—',
+            trend: Math.round((healthScoreData.breakdown.customer - 50) / 5)
+        },
+    } : null
 
     // Convert goals to component format with days remaining
     const goalsForDisplay = goals.map((goal: PlanGoal) => {
@@ -128,22 +151,9 @@ export default function Home() {
     const quarterlyTasks = convertTasks(quarterlyTasksData)
     const yearlyTasks = convertTasks(yearlyTasksData)
 
-    const mockInsights = [
-        {
-            id: '1',
-            message:
-                'Cart abandonment rate is up 18% this week. Consider sending personalized follow-up emails to recover sales.',
-            type: 'alert' as const,
-            timestamp: '2 hours ago',
-        },
-        {
-            id: '2',
-            message:
-                'Your best-selling camping gear (tents, sleeping bags) are running low. Reorder from supplier to avoid stockouts.',
-            type: 'suggestion' as const,
-            timestamp: '5 hours ago',
-        },
-    ]
+    // Check if user has any data connected
+    const hasDataConnected = connectorsData && connectorsData.length > 0
+    const hasCompletedOnboarding = typeof window !== 'undefined' && localStorage.getItem('hasCompletedOnboarding') === 'true'
 
     return (
         <Container size="xl" className="py-6">
@@ -157,46 +167,90 @@ export default function Home() {
                         Welcome back, {user?.name || 'Business Owner'} 👋
                     </Title>
                     <Text size="sm" c="gray.6" mt={4}>
-                        CycloneRake.com • Outdoor Equipment E-commerce
+                        Your AI Fitness Coach for Business Growth
                     </Text>
                 </div>
 
-                {/* Business Health Score - Apple Fitness Ring Style */}
-                <BusinessHealthScore
-                    score={healthScore.score}
-                    trend={healthScore.trend}
-                    breakdown={healthScoreData?.breakdown}
-                />
-
-                {/* Daily Snapshot - 4 Metric Cards */}
-                <DailySnapshot metrics={mockMetrics} />
-
-                {/* Two Column Layout on Desktop */}
-                <div className="grid gap-6 lg:grid-cols-2">
-                    {/* Left Column */}
-                    <Stack gap="xl">
-                        {/* Active Goals */}
-                        <GoalProgress goals={goalsForDisplay} />
-
-                        {/* Multi-Horizon Planner */}
-                        <MultiHorizonPlanner
-                            dailyTasks={dailyTasks}
-                            weeklyTasks={weeklyTasks}
-                            quarterlyTasks={quarterlyTasks}
-                            yearlyTasks={yearlyTasks}
-                            defaultHorizon="weekly"
+                {/* Empty State - No Data Connected */}
+                {!hasDataConnected && hasCompletedOnboarding && !isLoadingHealthScore ? (
+                    <div className="rounded-3xl border-2 border-dashed border-brand-200 bg-gradient-to-br from-brand-50/30 to-violet-50/30 p-12 text-center">
+                        <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-brand-100">
+                            <span className="text-4xl">🏋️</span>
+                        </div>
+                        <Title order={2} mb="md" c="gray.9">
+                            Ready to get your business in shape?
+                        </Title>
+                        <Text size="lg" c="gray.6" mb="xl" maw={600} mx="auto">
+                            <strong>Dyocense is your AI Fitness Coach for business.</strong> Just like a fitness tracker monitors your health rings,
+                            we track your Revenue, Operations, and Customer health in real-time.
+                        </Text>
+                        <Text size="md" c="gray.7" mb="xl" maw={560} mx="auto">
+                            <strong>First step:</strong> Connect your data sources (ERP, POS, or CSV files) so we can calculate your Business Health Score
+                            and create your personalized action plan.
+                        </Text>
+                        <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+                            <Button
+                                size="lg"
+                                leftSection={<span>🔗</span>}
+                                onClick={() => navigate('/connectors')}
+                                variant="gradient"
+                                gradient={{ from: 'brand', to: 'violet', deg: 90 }}
+                            >
+                                Connect your first data source
+                            </Button>
+                            <Button
+                                size="lg"
+                                variant="light"
+                                leftSection={<span>💡</span>}
+                                onClick={() => navigate('/coach')}
+                            >
+                                Talk to your AI Coach
+                            </Button>
+                        </div>
+                        <Text size="sm" c="gray.5" mt="xl">
+                            💡 <strong>Pro tip:</strong> Start with a CSV export of your sales data to see instant insights
+                        </Text>
+                    </div>
+                ) : (
+                    <>
+                        {/* Business Health Score - Apple Fitness Ring Style */}
+                        <BusinessHealthScore
+                            score={healthScore.score}
+                            trend={healthScore.trend}
+                            breakdown={healthScoreData?.breakdown}
                         />
-                    </Stack>
 
-                    {/* Right Column */}
-                    <Stack gap="xl">
-                        {/* Streak Counter */}
-                        <StreakCounter variant="detailed" />
+                        {/* Daily Snapshot - Only show if we have metrics */}
+                        {metrics && <DailySnapshot metrics={metrics} />}
 
-                        {/* Smart AI Insights - Context-Aware */}
-                        <SmartInsights />
-                    </Stack>
-                </div>
+                        {/* Two Column Layout on Desktop */}
+                        <div className="grid gap-6 lg:grid-cols-2">
+                            {/* Left Column */}
+                            <Stack gap="xl">
+                                {/* Active Goals */}
+                                <GoalProgress goals={goalsForDisplay} />
+
+                                {/* Multi-Horizon Planner */}
+                                <MultiHorizonPlanner
+                                    dailyTasks={dailyTasks}
+                                    weeklyTasks={weeklyTasks}
+                                    quarterlyTasks={quarterlyTasks}
+                                    yearlyTasks={yearlyTasks}
+                                    defaultHorizon="weekly"
+                                />
+                            </Stack>
+
+                            {/* Right Column */}
+                            <Stack gap="xl">
+                                {/* Streak Counter */}
+                                <StreakCounter variant="detailed" />
+
+                                {/* Smart AI Insights - Context-Aware */}
+                                <SmartInsights />
+                            </Stack>
+                        </div>
+                    </>
+                )}
             </Stack>
         </Container>
     )

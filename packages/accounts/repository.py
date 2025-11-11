@@ -7,12 +7,14 @@ import os
 import re
 import secrets
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple, Any
 
 import jwt
+from psycopg2.extras import Json, RealDictCursor
 
-from packages.kernel_common.persistence import get_collection
+from packages.kernel_common.persistence_v2 import get_backend, PostgresBackend
 
 from .models import (
     AccountUser,
@@ -26,6 +28,14 @@ from .models import (
     TenantUsage,
     UsageEvent,
 )
+
+
+_backend = get_backend()
+if not isinstance(_backend, PostgresBackend):
+    raise RuntimeError(
+        "Accounts repository requires Postgres backend. "
+        "Set PERSISTENCE_BACKEND=postgres and configure POSTGRES_* env vars."
+    )
 
 
 class SubscriptionLimitError(RuntimeError):
@@ -122,16 +132,6 @@ PLAN_CATALOG: List[SubscriptionPlan] = [
         ],
     ),
 ]
-
-
-TENANT_COLLECTION = get_collection("tenants")
-PROJECT_COLLECTION = get_collection("projects")
-USERS_COLLECTION = get_collection("tenant_users")
-TOKENS_COLLECTION = get_collection("user_tokens")
-INVITES_COLLECTION = get_collection("invitations")
-EVENTS_COLLECTION = get_collection("usage_events")
-VERIFICATION_TOKENS_COLLECTION = get_collection("verification_tokens")
-
 JWT_SECRET = os.getenv("ACCOUNTS_JWT_SECRET", "dyocense-dev-secret")
 JWT_ISSUER = "dyocense-accounts"
 JWT_TTL_MINUTES = int(os.getenv("ACCOUNTS_JWT_TTL", "60"))
@@ -176,48 +176,126 @@ def _verify_password(password: str, salt: str, hashed: str) -> bool:
     return hmac.compare_digest(new_hash, hashed)
 
 
-def _tenant_from_doc(document: dict) -> Tenant:
-    usage_doc = document.get("usage") or {}
-    usage = TenantUsage(
-        projects=usage_doc.get("projects", 0),
-        playbooks=usage_doc.get("playbooks", 0),
-        members=usage_doc.get("members", 1),
-        cycle_started_at=datetime.fromisoformat(usage_doc.get("cycle_started_at"))
-        if usage_doc.get("cycle_started_at")
-        else _now(),
-    )
-    return Tenant(
-        tenant_id=document["tenant_id"],
-        name=document["name"],
-        owner_email=document["owner_email"],
-        plan_tier=PlanTier(document["plan_tier"]),
-        status=document.get("status", "active"),
-        api_token=document["api_token"],
-        created_at=datetime.fromisoformat(document["created_at"]),
-        updated_at=datetime.fromisoformat(document["updated_at"]),
-        metadata=document.get("metadata", {}),
-        usage=usage,
+def _plan_from_db(value: str) -> PlanTier:
+    """Map stored plan tier strings to PlanTier enum."""
+    if not value:
+        return PlanTier.FREE
+    try:
+        return PlanTier(value)
+    except ValueError:
+        legacy_map = {
+            "smb_starter": PlanTier.FREE,
+            "smb_growth": PlanTier.SILVER,
+            "enterprise": PlanTier.PLATINUM,
+        }
+        return legacy_map.get(value, PlanTier.FREE)
+
+
+def _plan_to_db(tier: PlanTier) -> str:
+    return tier.value
+
+
+def _coerce_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        # Normalize to naive UTC for internal comparisons
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            from datetime import timezone as _dt_timezone
+            return value.astimezone(_dt_timezone.utc).replace(tzinfo=None)
+        return value
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            if dt.tzinfo is not None and dt.utcoffset() is not None:
+                from datetime import timezone as _dt_timezone
+                dt = dt.astimezone(_dt_timezone.utc).replace(tzinfo=None)
+            return dt
+        except ValueError:
+            pass
+    return _now()
+
+
+def _usage_from_record(record: Optional[dict]) -> TenantUsage:
+    record = record or {}
+    cycle_value = record.get("cycle_started_at")
+    return TenantUsage(
+        projects=record.get("projects") or record.get("projects_count", 0),
+        playbooks=record.get("playbooks", 0),
+        members=record.get("members") or record.get("users_count", 1),
+        cycle_started_at=_coerce_datetime(cycle_value),
     )
 
 
-def _tenant_to_doc(tenant: Tenant) -> dict:
+def _usage_to_record(usage: TenantUsage) -> dict:
     return {
-        "tenant_id": tenant.tenant_id,
-        "name": tenant.name,
-        "owner_email": tenant.owner_email,
-        "plan_tier": tenant.plan_tier.value,
-        "status": tenant.status,
-        "api_token": tenant.api_token,
-        "created_at": tenant.created_at.isoformat(),
-        "updated_at": tenant.updated_at.isoformat(),
-        "metadata": tenant.metadata,
-        "usage": {
-            "projects": tenant.usage.projects,
-            "playbooks": tenant.usage.playbooks,
-            "members": tenant.usage.members,
-            "cycle_started_at": tenant.usage.cycle_started_at.isoformat(),
-        },
+        "projects": usage.projects,
+        "playbooks": usage.playbooks,
+        "members": usage.members,
+        "cycle_started_at": usage.cycle_started_at.isoformat(),
     }
+
+
+def _save_tenant_usage(tenant: Tenant) -> None:
+    """Persist tenant usage counters."""
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE tenants.tenants
+               SET usage = %s,
+                   updated_at = %s
+             WHERE tenant_id = %s
+            """,
+            [Json(_usage_to_record(tenant.usage)), tenant.updated_at, tenant.tenant_id],
+        )
+
+
+@contextmanager
+def _read_cursor(dict_cursor: bool = True):
+    with _backend.get_connection() as conn:
+        cursor_kwargs = {"cursor_factory": RealDictCursor} if dict_cursor else {}
+        with conn.cursor(**cursor_kwargs) as cur:
+            yield cur
+
+
+@contextmanager
+def _write_cursor(dict_cursor: bool = True):
+    with _backend.get_connection() as conn:
+        cursor_kwargs = {"cursor_factory": RealDictCursor} if dict_cursor else {}
+        try:
+            with conn.cursor(**cursor_kwargs) as cur:
+                yield cur
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def _fetch_one(sql: str, params: Optional[Iterable[Any]] = None) -> Optional[dict]:
+    with _read_cursor() as cur:
+        cur.execute(sql, params or [])
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _fetch_all(sql: str, params: Optional[Iterable[Any]] = None) -> list[dict]:
+    with _read_cursor() as cur:
+        cur.execute(sql, params or [])
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def _tenant_from_doc(record: dict) -> Tenant:
+    return Tenant(
+        tenant_id=record["tenant_id"],
+        name=record["name"],
+        owner_email=record["owner_email"],
+        plan_tier=_plan_from_db(record.get("plan_tier")),
+        status=record.get("status", "active"),
+        api_token=record["api_token"],
+        created_at=_coerce_datetime(record.get("created_at")),
+        updated_at=_coerce_datetime(record.get("updated_at")),
+        metadata=record.get("metadata") or {},
+        usage=_usage_from_record(record.get("usage")),
+    )
 
 
 def _project_from_doc(document: dict) -> Project:
@@ -226,20 +304,9 @@ def _project_from_doc(document: dict) -> Project:
         project_id=document["project_id"],
         name=document["name"],
         description=document.get("description"),
-        created_at=datetime.fromisoformat(document["created_at"]),
-        updated_at=datetime.fromisoformat(document["updated_at"]),
+        created_at=_coerce_datetime(document.get("created_at")),
+        updated_at=_coerce_datetime(document.get("updated_at")),
     )
-
-
-def _project_to_doc(project: Project) -> dict:
-    return {
-        "tenant_id": project.tenant_id,
-        "project_id": project.project_id,
-        "name": project.name,
-        "description": project.description,
-        "created_at": project.created_at.isoformat(),
-        "updated_at": project.updated_at.isoformat(),
-    }
 
 
 def register_tenant(name: str, owner_email: str, plan_tier: PlanTier, metadata: Optional[dict] = None) -> Tenant:
@@ -247,53 +314,72 @@ def register_tenant(name: str, owner_email: str, plan_tier: PlanTier, metadata: 
     tenant_id = f"{_slugify_name(name)}-{uuid.uuid4().hex[:6]}"
     api_token = f"key-{secrets.token_urlsafe(16)}"
     now = _now()
-    tenant = Tenant(
-        tenant_id=tenant_id,
-        name=name,
-        owner_email=owner_email,
-        plan_tier=plan_tier,
-        status="active",
-        api_token=api_token,
-        created_at=now,
-        updated_at=now,
-        metadata=metadata,
-        usage=TenantUsage(),
-    )
-    TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
-    return tenant
+    usage = TenantUsage()
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.tenants (
+                tenant_id, name, owner_email, plan_tier, api_token,
+                status, created_at, updated_at, metadata, usage
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING *
+            """,
+            [
+                tenant_id,
+                name,
+                owner_email.lower(),
+                _plan_to_db(plan_tier),
+                api_token,
+                "active",
+                now,
+                now,
+                Json(metadata),
+                Json(_usage_to_record(usage)),
+            ],
+        )
+        row = cur.fetchone()
+    if not row:
+        raise RuntimeError("Failed to insert tenant record")
+    return _tenant_from_doc(dict(row))
 
 
 def get_tenant(tenant_id: str) -> Optional[Tenant]:
-    document = TENANT_COLLECTION.find_one({"tenant_id": tenant_id})
-    if not document:
+    row = _fetch_one("SELECT * FROM tenants.tenants WHERE tenant_id = %s", [tenant_id])
+    if not row:
         return None
-    return _tenant_from_doc(document)
+    return _tenant_from_doc(row)
 
 
 def get_tenant_by_token(api_token: str) -> Optional[Tenant]:
-    document = TENANT_COLLECTION.find_one({"api_token": api_token})
-    if not document:
+    row = _fetch_one("SELECT * FROM tenants.tenants WHERE api_token = %s", [api_token])
+    if not row:
         return None
-    return _tenant_from_doc(document)
+    return _tenant_from_doc(row)
 
 
 def update_tenant_plan(tenant_id: str, plan_tier: PlanTier) -> Tenant:
-    tenant = get_tenant(tenant_id)
-    if tenant is None:
+    now = _now()
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE tenants.tenants
+               SET plan_tier = %s,
+                   updated_at = %s
+             WHERE tenant_id = %s
+            RETURNING *
+            """,
+            [_plan_to_db(plan_tier), now, tenant_id],
+        )
+        row = cur.fetchone()
+    if not row:
         raise ValueError(f"Tenant {tenant_id} not found")
-    tenant.plan_tier = plan_tier
-    tenant.updated_at = _now()
-    TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
-    return tenant
+    return _tenant_from_doc(dict(row))
 
 
 def _count_projects(tenant_id: str) -> int:
-    return sum(1 for _ in _iterate(PROJECT_COLLECTION.find({"tenant_id": tenant_id})))
-
-
-def _iterate(cursor: Iterable[dict]) -> Iterable[dict]:
-    for item in cursor:
-        yield item
+    row = _fetch_one("SELECT COUNT(*) AS total FROM tenants.projects WHERE tenant_id = %s", [tenant_id])
+    return int(row["total"]) if row else 0
 
 
 def ensure_usage_limits(tenant: Tenant) -> None:
@@ -324,15 +410,41 @@ def create_project(tenant_id: str, name: str, description: Optional[str] = None)
         created_at=_now(),
         updated_at=_now(),
     )
-    PROJECT_COLLECTION.insert_one(_project_to_doc(project))
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.projects (
+                project_id, tenant_id, name, description,
+                created_at, updated_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                project.project_id,
+                project.tenant_id,
+                project.name,
+                project.description,
+                project.created_at,
+                project.updated_at,
+            ],
+        )
     tenant.usage.projects = current_project_count + 1
     tenant.updated_at = _now()
-    TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
+    _save_tenant_usage(tenant)
     return project
 
 
 def list_projects(tenant_id: str) -> List[Project]:
-    return [_project_from_doc(doc) for doc in PROJECT_COLLECTION.find({"tenant_id": tenant_id})]
+    rows = _fetch_all(
+        """
+        SELECT project_id, tenant_id, name, description, created_at, updated_at
+          FROM tenants.projects
+         WHERE tenant_id = %s
+         ORDER BY created_at DESC
+        """,
+        [tenant_id],
+    )
+    return [_project_from_doc(row) for row in rows]
 
 
 def record_playbook_usage(tenant_id: str, increment: int = 1) -> Tenant:
@@ -344,7 +456,7 @@ def record_playbook_usage(tenant_id: str, increment: int = 1) -> Tenant:
         raise SubscriptionLimitError("Playbook storage limit reached for current plan.")
     tenant.usage.playbooks += increment
     tenant.updated_at = _now()
-    TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
+    _save_tenant_usage(tenant)
     return tenant
 
 
@@ -358,34 +470,13 @@ def _user_from_doc(document: dict) -> AccountUser:
         email=document["email"],
         full_name=document["full_name"],
         password_hash=document["password_hash"],
-        created_at=datetime.fromisoformat(document["created_at"]),
-        updated_at=datetime.fromisoformat(document["updated_at"]),
+        created_at=_coerce_datetime(document.get("created_at")),
+        updated_at=_coerce_datetime(document.get("updated_at")),
         roles=document.get("roles", ["member"]),
-            oauth_provider=document.get("oauth_provider"),
-            oauth_provider_id=document.get("oauth_provider_id"),
-            picture_url=document.get("picture_url"),
+        oauth_provider=document.get("oauth_provider"),
+        oauth_provider_id=document.get("oauth_provider_id"),
+        picture_url=document.get("picture_url"),
     )
-
-
-def _user_to_doc(user: AccountUser) -> dict:
-    doc = {
-        "user_id": user.user_id,
-        "tenant_id": user.tenant_id,
-        "email": user.email,
-        "full_name": user.full_name,
-        "password_hash": user.password_hash,
-        "roles": user.roles,
-        "created_at": user.created_at.isoformat(),
-        "updated_at": user.updated_at.isoformat(),
-    }
-    # Add OAuth fields if present
-    if user.oauth_provider:
-        doc["oauth_provider"] = user.oauth_provider
-    if user.oauth_provider_id:
-        doc["oauth_provider_id"] = user.oauth_provider_id
-    if user.picture_url:
-        doc["picture_url"] = user.picture_url
-    return doc
 
 
 def register_user(tenant_id: str, email: str, full_name: str, password: str) -> AccountUser:
@@ -393,7 +484,10 @@ def register_user(tenant_id: str, email: str, full_name: str, password: str) -> 
     if tenant is None:
         raise ValueError("Tenant not found")
 
-    existing = USERS_COLLECTION.find_one({"tenant_id": tenant_id, "email": email.lower()})
+    existing = _fetch_one(
+        "SELECT user_id FROM tenants.users WHERE tenant_id = %s AND email = %s",
+        [tenant_id, email.lower()],
+    )
     if existing:
         raise AuthenticationError("User already exists for this tenant.")
 
@@ -408,22 +502,50 @@ def register_user(tenant_id: str, email: str, full_name: str, password: str) -> 
         updated_at=_now(),
         roles=["member"],
     )
-    USERS_COLLECTION.insert_one(_user_to_doc(user))
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.users (
+                user_id, tenant_id, email, full_name, password_hash,
+                roles, status, created_at, updated_at, metadata
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                user.user_id,
+                user.tenant_id,
+                user.email,
+                user.full_name,
+                user.password_hash,
+                user.roles,
+                "active",
+                user.created_at,
+                user.updated_at,
+                Json({}),
+            ],
+        )
     tenant.usage.members += 1
     tenant.updated_at = _now()
-    TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant), upsert=True)
+    _save_tenant_usage(tenant)
     return user
 
 
 def get_user_by_email(tenant_id: str, email: str) -> Optional[AccountUser]:
-    document = USERS_COLLECTION.find_one({"tenant_id": tenant_id, "email": email.lower()})
+    document = _fetch_one(
+        """
+        SELECT *
+          FROM tenants.users
+         WHERE tenant_id = %s AND email = %s
+        """,
+        [tenant_id, email.lower()],
+    )
     if not document:
         return None
     return _user_from_doc(document)
 
 
 def get_user(user_id: str) -> Optional[AccountUser]:
-    document = USERS_COLLECTION.find_one({"user_id": user_id})
+    document = _fetch_one("SELECT * FROM tenants.users WHERE user_id = %s", [user_id])
     if not document:
         return None
     return _user_from_doc(document)
@@ -448,14 +570,8 @@ def count_users_for_tenant(tenant_id: str) -> int:
     Used to allow a safe fallback for first-user registration when no temporary
     password was issued during onboarding.
     """
-    try:
-        return USERS_COLLECTION.count_documents({"tenant_id": tenant_id})
-    except Exception:
-        # In-memory fallback or collection not available; attempt len on list-like
-        try:
-            return len(list(USERS_COLLECTION.find({"tenant_id": tenant_id})))
-        except Exception:
-            return 0
+    row = _fetch_one("SELECT COUNT(*) AS total FROM tenants.users WHERE tenant_id = %s", [tenant_id])
+    return int(row["total"]) if row else 0
 
 
 def find_tenants_for_email(email: str) -> list[str]:
@@ -463,16 +579,11 @@ def find_tenants_for_email(email: str) -> list[str]:
     Find all tenant IDs where a user with the given email exists.
     Returns a list of tenant IDs.
     """
-    try:
-        # Find all users with this email across all tenants
-        users = USERS_COLLECTION.find({"email": email.lower()})
-        tenant_ids = []
-        for user_doc in users:
-            if "tenant_id" in user_doc:
-                tenant_ids.append(user_doc["tenant_id"])
-        return tenant_ids
-    except Exception:
-        return []
+    rows = _fetch_all(
+        "SELECT DISTINCT tenant_id FROM tenants.users WHERE email = %s",
+        [email.lower()],
+    )
+    return [row["tenant_id"] for row in rows]
 
 
 def update_user_password(user_id: str, password: str) -> AccountUser:
@@ -482,7 +593,16 @@ def update_user_password(user_id: str, password: str) -> AccountUser:
     salt, password_hash = _generate_password_hash(password)
     user.password_hash = f"{salt}:{password_hash}"
     user.updated_at = _now()
-    USERS_COLLECTION.replace_one({"user_id": user.user_id}, _user_to_doc(user), upsert=True)
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE tenants.users
+               SET password_hash = %s,
+                   updated_at = %s
+             WHERE user_id = %s
+            """,
+            [user.password_hash, user.updated_at, user.user_id],
+        )
     return user
 
 
@@ -509,10 +629,16 @@ def _token_to_doc(token: ApiTokenRecord) -> dict:
 
 
 def list_api_tokens(tenant_id: str, user_id: str) -> List[ApiTokenRecord]:
-    return [
-        _token_from_doc(doc)
-        for doc in TOKENS_COLLECTION.find({"tenant_id": tenant_id, "user_id": user_id})
-    ]
+    rows = _fetch_all(
+        """
+        SELECT token_id, tenant_id, user_id, name, secret_hash, created_at
+          FROM tenants.api_tokens
+         WHERE tenant_id = %s AND user_id = %s
+         ORDER BY created_at DESC
+        """,
+        [tenant_id, user_id],
+    )
+    return [_token_from_doc(row) for row in rows]
 
 
 def create_api_token(tenant_id: str, user_id: str, name: str) -> Tuple[str, ApiTokenRecord]:
@@ -525,18 +651,44 @@ def create_api_token(tenant_id: str, user_id: str, name: str) -> Tuple[str, ApiT
         secret_hash=_hash_secret(token_secret),
         created_at=_now(),
     )
-    TOKENS_COLLECTION.insert_one(_token_to_doc(record))
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.api_tokens (
+                token_id, tenant_id, user_id, name, secret_hash, created_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                record.token_id,
+                record.tenant_id,
+                record.user_id,
+                record.name,
+                record.secret_hash,
+                record.created_at,
+            ],
+        )
     return token_secret, record
 
 
 def delete_api_token(token_id: str, tenant_id: str, user_id: str) -> bool:
-    result = TOKENS_COLLECTION.delete_one({"token_id": token_id, "tenant_id": tenant_id, "user_id": user_id})
-    return result.deleted_count > 0
+    with _write_cursor(dict_cursor=False) as cur:
+        cur.execute(
+            """
+            DELETE FROM tenants.api_tokens
+             WHERE token_id = %s AND tenant_id = %s AND user_id = %s
+            """,
+            [token_id, tenant_id, user_id],
+        )
+        return cur.rowcount > 0
 
 
 def get_api_token(secret: str) -> Optional[ApiTokenRecord]:
     hashed = _hash_secret(secret)
-    document = TOKENS_COLLECTION.find_one({"secret_hash": hashed})
+    document = _fetch_one(
+        "SELECT * FROM tenants.api_tokens WHERE secret_hash = %s",
+        [hashed],
+    )
     if not document:
         return None
     return _token_from_doc(document)
@@ -603,12 +755,33 @@ def create_invitation(tenant_id: str, inviter_user_id: str, invitee_email: str, 
         created_at=_now(),
         expires_at=_now() + timedelta(days=expires_days),
     )
-    INVITES_COLLECTION.insert_one(_invitation_to_doc(invite))
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.invitations (
+                invite_id, tenant_id, inviter_user_id, invitee_email,
+                status, created_at, expires_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                invite.invite_id,
+                invite.tenant_id,
+                invite.inviter_user_id,
+                invite.invitee_email,
+                invite.status,
+                invite.created_at,
+                invite.expires_at,
+            ],
+        )
     return invite
 
 
 def get_invitation(invite_id: str) -> Optional[Invitation]:
-    document = INVITES_COLLECTION.find_one({"invite_id": invite_id})
+    document = _fetch_one(
+        "SELECT * FROM tenants.invitations WHERE invite_id = %s",
+        [invite_id],
+    )
     if not document:
         return None
     return _invitation_from_doc(document)
@@ -616,10 +789,14 @@ def get_invitation(invite_id: str) -> Optional[Invitation]:
 
 def list_invitations(tenant_id: str, status: Optional[str] = None) -> List[Invitation]:
     """List invitations for a tenant, optionally filtered by status."""
-    query = {"tenant_id": tenant_id}
+    sql = "SELECT * FROM tenants.invitations WHERE tenant_id = %s"
+    params: list[Any] = [tenant_id]
     if status:
-        query["status"] = status
-    return [_invitation_from_doc(doc) for doc in INVITES_COLLECTION.find(query)]
+        sql += " AND status = %s"
+        params.append(status)
+    sql += " ORDER BY created_at DESC"
+    rows = _fetch_all(sql, params)
+    return [_invitation_from_doc(row) for row in rows]
 
 
 def accept_invitation(invite_id: str) -> Invitation:
@@ -631,10 +808,18 @@ def accept_invitation(invite_id: str) -> Invitation:
         raise ValueError(f"Invitation already {invite.status}")
     if _now() > invite.expires_at:
         invite.status = "expired"
-        INVITES_COLLECTION.replace_one({"invite_id": invite.invite_id}, _invitation_to_doc(invite))
+        with _write_cursor() as cur:
+            cur.execute(
+                "UPDATE tenants.invitations SET status=%s WHERE invite_id=%s",
+                [invite.status, invite.invite_id],
+            )
         raise ValueError("Invitation expired")
     invite.status = "accepted"
-    INVITES_COLLECTION.replace_one({"invite_id": invite.invite_id}, _invitation_to_doc(invite))
+    with _write_cursor() as cur:
+        cur.execute(
+            "UPDATE tenants.invitations SET status=%s WHERE invite_id=%s",
+            [invite.status, invite.invite_id],
+        )
     return invite
 
 
@@ -648,7 +833,11 @@ def revoke_invitation(invite_id: str, tenant_id: str) -> Invitation:
     if invite.status != "pending":
         raise ValueError(f"Cannot revoke invitation with status: {invite.status}")
     invite.status = "revoked"
-    INVITES_COLLECTION.replace_one({"invite_id": invite.invite_id}, _invitation_to_doc(invite))
+    with _write_cursor() as cur:
+        cur.execute(
+            "UPDATE tenants.invitations SET status=%s WHERE invite_id=%s",
+            [invite.status, invite.invite_id],
+        )
     return invite
 
 
@@ -657,12 +846,21 @@ def revoke_invitation(invite_id: str, tenant_id: str) -> Invitation:
 
 def list_all_tenants(limit: int = 100, skip: int = 0) -> List[Tenant]:
     """Admin only: list all tenants."""
-    return [_tenant_from_doc(doc) for doc in TENANT_COLLECTION.find().skip(skip).limit(limit)]
+    rows = _fetch_all(
+        """
+        SELECT * FROM tenants.tenants
+        ORDER BY created_at DESC
+        OFFSET %s LIMIT %s
+        """,
+        [skip, limit],
+    )
+    return [_tenant_from_doc(row) for row in rows]
 
 
 def count_tenants() -> int:
     """Admin only: count all tenants."""
-    return sum(1 for _ in _iterate(TENANT_COLLECTION.find()))
+    row = _fetch_one("SELECT COUNT(*) AS total FROM tenants.tenants")
+    return int(row["total"]) if row else 0
 
 
 def record_usage_event(tenant_id: str, event_type: str, payload: Optional[dict] = None, user_id: Optional[str] = None) -> UsageEvent:
@@ -675,33 +873,46 @@ def record_usage_event(tenant_id: str, event_type: str, payload: Optional[dict] 
         payload=payload or {},
         timestamp=_now(),
     )
-    EVENTS_COLLECTION.insert_one({
-        "event_id": event.event_id,
-        "tenant_id": event.tenant_id,
-        "user_id": event.user_id,
-        "event_type": event.event_type,
-        "payload": event.payload,
-        "timestamp": event.timestamp.isoformat(),
-    })
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.usage_events (
+                event_id, tenant_id, user_id, event_type, payload, timestamp
+            )
+            VALUES (%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                event.event_id,
+                event.tenant_id,
+                event.user_id,
+                event.event_type,
+                Json(event.payload),
+                event.timestamp,
+            ],
+        )
     return event
 
 
 def get_usage_summary(tenant_id: Optional[str] = None, days: int = 30) -> dict:
     """Admin analytics: usage summary."""
     cutoff = _now() - timedelta(days=days)
-    query = {"timestamp": {"$gte": cutoff.isoformat()}}
+    sql = """
+        SELECT event_type, COUNT(*) AS total
+          FROM tenants.usage_events
+         WHERE timestamp >= %s
+    """
+    params: list[Any] = [cutoff]
     if tenant_id:
-        query["tenant_id"] = tenant_id
-
-    events = list(EVENTS_COLLECTION.find(query))
-    by_type: dict = {}
-    for event in events:
-        et = event.get("event_type", "unknown")
-        by_type[et] = by_type.get(et, 0) + 1
+        sql += " AND tenant_id = %s"
+        params.append(tenant_id)
+    sql += " GROUP BY event_type"
+    rows = _fetch_all(sql, params)
+    by_type = {row["event_type"]: int(row["total"]) for row in rows}
+    total_events = sum(by_type.values())
 
     return {
         "period_days": days,
-        "total_events": len(events),
+        "total_events": total_events,
         "by_type": by_type,
         "tenant_id": tenant_id,
     }
@@ -719,12 +930,16 @@ def find_tenant_by_name_or_email(name: str = None, owner_email: str = None) -> O
     # Only match if BOTH the organization name AND owner email match
     # This allows the same person to create multiple organizations
     # but prevents duplicate organization registrations by the same person
-    query = {
-        "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
-        "owner_email": owner_email.lower()
-    }
-    
-    document = TENANT_COLLECTION.find_one(query)
+    document = _fetch_one(
+        """
+        SELECT *
+          FROM tenants.tenants
+         WHERE owner_email = %s
+           AND name ILIKE %s
+        LIMIT 1
+        """,
+        [owner_email.lower(), name],
+    )
     if not document:
         return None
     return _tenant_from_doc(document)
@@ -743,8 +958,32 @@ def enforce_trial_for_tenant(tenant_id: str, trial_days: int = 14) -> Tenant:
     if _now() > trial_ends:
         tenant.plan_tier = PlanTier.FREE
         tenant.updated_at = _now()
-        TENANT_COLLECTION.replace_one({"tenant_id": tenant.tenant_id}, _tenant_to_doc(tenant))
+        with _write_cursor() as cur:
+            cur.execute(
+                """
+                UPDATE tenants.tenants
+                   SET plan_tier = %s,
+                       updated_at = %s
+                 WHERE tenant_id = %s
+                """,
+                [_plan_to_db(tenant.plan_tier), tenant.updated_at, tenant.tenant_id],
+            )
     return tenant
+
+
+def find_expired_trials(plan_tier: PlanTier, cutoff: datetime) -> list[Tenant]:
+    """Return tenants on a plan_tier whose created_at is older than cutoff and status=trial."""
+    rows = _fetch_all(
+        """
+        SELECT *
+          FROM tenants.tenants
+         WHERE plan_tier = %s
+           AND status = 'trial'
+           AND created_at < %s
+        """,
+        [_plan_to_db(plan_tier), cutoff],
+    )
+    return [_tenant_from_doc(row) for row in rows]
 
 
 # =====================================================================
@@ -765,19 +1004,28 @@ def create_verification_token(
     token = secrets.token_urlsafe(32)
     token_id = f"token-{uuid.uuid4().hex[:10]}"
     
-    verification = {
-        "token_id": token_id,
-        "token": token,
-        "email": email.lower(),
-        "full_name": full_name,
-        "business_name": business_name,
-        "metadata": metadata or {},
-        "expires_at": (_now() + timedelta(hours=ttl_hours)).isoformat(),
-        "created_at": _now().isoformat(),
-        "used": False
-    }
-    
-    VERIFICATION_TOKENS_COLLECTION.insert_one(verification)
+    expires_at = _now() + timedelta(hours=ttl_hours)
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants.verification_tokens (
+                token_id, token, email, full_name, business_name,
+                metadata, expires_at, created_at, used
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            [
+                token_id,
+                token,
+                email.lower(),
+                full_name,
+                business_name,
+                Json(metadata or {}),
+                expires_at,
+                _now(),
+                False,
+            ],
+        )
     return token
 
 
@@ -786,25 +1034,45 @@ def verify_and_consume_token(token: str) -> Optional[dict]:
     
     Returns token data if valid, None if invalid/expired/used.
     """
-    doc = VERIFICATION_TOKENS_COLLECTION.find_one({"token": token, "used": False})
-    if not doc:
-        return None
-    
-    expires_at = datetime.fromisoformat(doc["expires_at"])
-    if _now() > expires_at:
-        # Token expired
-        return None
-    
-    # Mark as used
-    VERIFICATION_TOKENS_COLLECTION.replace_one(
-        {"token": token},
-        {**doc, "used": True, "used_at": _now().isoformat()},
-        upsert=False
-    )
-    
+    with _write_cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+              FROM tenants.verification_tokens
+             WHERE token = %s AND used = FALSE
+             FOR UPDATE
+            """,
+            [token],
+        )
+        doc = cur.fetchone()
+        if not doc:
+            return None
+        expires_at = _coerce_datetime(doc.get("expires_at"))
+        # Normalize both datetimes to naive UTC for safe comparison
+        now_ts = _now()
+        from datetime import timezone as _dt_timezone
+        if expires_at.tzinfo is not None and expires_at.utcoffset() is not None:
+            expires_at_cmp = expires_at.astimezone(_dt_timezone.utc).replace(tzinfo=None)
+        else:
+            expires_at_cmp = expires_at
+        if now_ts.tzinfo is not None and now_ts.utcoffset() is not None:
+            now_cmp = now_ts.astimezone(_dt_timezone.utc).replace(tzinfo=None)
+        else:
+            now_cmp = now_ts
+        if now_cmp > expires_at_cmp:
+            return None
+        cur.execute(
+            """
+            UPDATE tenants.verification_tokens
+               SET used = TRUE,
+                   used_at = %s
+             WHERE token = %s
+            """,
+            [_now(), token],
+        )
     return {
         "email": doc["email"],
         "full_name": doc["full_name"],
         "business_name": doc["business_name"],
-        "metadata": doc.get("metadata", {})
+        "metadata": doc.get("metadata", {}),
     }

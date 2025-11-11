@@ -11,6 +11,12 @@ export function useConnectorsQuery(apiToken?: string, tenantId?: string, options
     return useQuery<TenantConnector[]>({
         queryKey: ['connectors', tenantId, status],
         enabled: Boolean(apiToken && tenantId && enabled),
-        queryFn: () => listConnectors(apiToken, status),
+        queryFn: async () => {
+            console.log('[useConnectorsQuery] Fetching connectors...', { apiToken: apiToken?.substring(0, 20) + '...', tenantId, status })
+            const result = await listConnectors(apiToken, status, tenantId)
+            console.log('[useConnectorsQuery] Got connectors:', result)
+            return result
+        },
     })
 }
+

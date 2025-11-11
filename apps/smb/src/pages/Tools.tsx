@@ -61,7 +61,7 @@ export default function Tools() {
                                 </div>
                                 <div className="flex w-full flex-col gap-3 md:w-auto">
                                     <Button component={Link} to={tenantId ? tool.route : `/signup?tool=${tool.key}`} radius="xl">
-                                        {tenantId ? tool.cta : 'Start with sample data'}
+                                        {tenantId ? tool.cta : 'Get Started'}
                                     </Button>
                                 </div>
                             </div>

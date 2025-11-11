@@ -15,6 +15,13 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from packages.llm import _invoke_llm
+from .coach_personas import CoachPersona, PersonaConfig
+from .evidence_system import (
+    get_evidence_tracker,
+    create_evidence_enhanced_response,
+    generate_data_lineage,
+    Evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,14 @@ class ChatRequest(BaseModel):
     """Request for chat completion"""
     message: str = Field(..., min_length=1)
     conversation_history: List[ChatMessage] = Field(default_factory=list)
+    persona: Optional[str] = Field(default="business_analyst", description="Coach persona to use")
+    data_sources: Optional[List[str]] = Field(default=None, description="Specific data sources to analyze")
+    include_evidence: bool = Field(default=True, description="Include data source citations")
+    include_forecast: bool = Field(default=False, description="Include demand forecasting")
+    # Phase 2: Model settings (power users)
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="LLM temperature (0.0-2.0)")
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=8192, description="Max tokens to generate")
+    model: Optional[str] = Field(default=None, description="Specific model to use (provider-dependent)")
 
 
 class ChatResponse(BaseModel):
@@ -37,6 +52,9 @@ class ChatResponse(BaseModel):
     message: str
     timestamp: datetime
     context_used: Dict[str, Any] = Field(default_factory=dict)
+    persona_used: str = Field(default="business_analyst")
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    data_sources_analyzed: List[str] = Field(default_factory=list)
 
 
 class CoachService:
@@ -91,7 +109,7 @@ class CoachService:
                     ],
                     "confidence": "simple estimate"
                 }
-            return None
+            return {}
     
     def _generate_inventory_recommendations(self, inventory_data: List[Dict], sales_velocity: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -154,44 +172,95 @@ class CoachService:
         business_context: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
         """
-        Generate AI coach response with PROPRIETARY forecasting and optimization
+        Generate AI coach response with PROPRIETARY forecasting, optimization, and EVIDENCE
         
         Args:
             tenant_id: Tenant identifier
-            request: Chat request with user message and history
+            request: Chat request with user message, persona selection, and data sources
             business_context: Current business data (goals, health score, tasks, etc.)
         """
-        # Build context for LLM (now includes forecasts and optimization)
-        context = self._build_context(tenant_id, business_context or {})
+        # Initialize evidence tracker
+        evidence_tracker = get_evidence_tracker()
+        conversation_id = f"{tenant_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        evidence_list: List[Evidence] = []
         
-        # Detect if user is asking for forecasting or optimization
+        # Get persona configuration
+        persona = request.persona or "business_analyst"
+        persona_config = PersonaConfig.get_persona(CoachPersona(persona))
+        
+        # Filter data sources if specified
+        business_ctx = business_context or {}
+        filtered_context = business_ctx
+        data_sources_used = []
+        
+        if request.data_sources:
+            # User selected specific data sources to analyze
+            filtered_context = self._filter_by_data_sources(business_ctx, request.data_sources)
+            data_sources_used = request.data_sources
+        else:
+            # Use all available data sources
+            data_sources_used = self._identify_data_sources(business_ctx)
+        
+        # Build context for LLM with persona and evidence tracking
+        context = self._build_context_with_evidence(
+            tenant_id, 
+            filtered_context, 
+            evidence_tracker, 
+            conversation_id,
+            persona
+        )
+        
+        # Detect if user is asking for forecasting
         user_message_lower = request.message.lower()
         
-        # Run forecasting if mentioned
-        if any(word in user_message_lower for word in ["forecast", "predict", "future", "next month", "trend"]):
+        if request.include_forecast or any(word in user_message_lower for word in ["forecast", "predict", "future", "next month", "trend"]):
             if context.get("metrics", {}).get("revenue_30d", 0) > 0:
-                # Extract historical revenue data (this would come from actual data in production)
-                # For now, simulate from context
-                context["forecast_insight"] = self._run_demand_forecast([100, 120, 115, 130, 125, 140], horizon=3)
+                forecast_result = self._run_demand_forecast([100, 120, 115, 130, 125, 140], horizon=3)
+                if forecast_result:
+                    context["forecast_insight"] = forecast_result
+                    # Add evidence
+                    evidence_tracker.add_evidence(
+                        conversation_id,
+                        f"Revenue forecast for next 3 periods: {forecast_result['forecasts'][0]['point']:.2f}, {forecast_result['forecasts'][1]['point']:.2f}, {forecast_result['forecasts'][2]['point']:.2f}",
+                        f"Holt-Winters Forecasting Model ({forecast_result['model']})",
+                        query="Historical revenue data (last 6 periods)",
+                        confidence="high"
+                    )
         
         # Run optimization if inventory issues mentioned
         if any(word in user_message_lower for word in ["inventory", "stock", "reorder", "optimize"]):
             if "alerts" in context:
-                # Generate optimization recommendations
                 context["optimization_insight"] = {
                     "available": True,
                     "method": "OR-Tools powered optimization engine",
-                    "note": "We can run full inventory optimization if you provide supplier lead times"
+                    "note": "Inventory optimization recommendations available"
                 }
         
-        # Build system prompt
-        system_prompt = self._build_system_prompt(context)
+        # Build persona-specific system prompt
+        system_prompt = self._build_persona_prompt(context, persona_config, request.include_evidence)
         
         # Build conversation history
         messages = self._build_messages(system_prompt, request.conversation_history, request.message)
         
-        # Invoke LLM
-        response_text = await self._invoke_llm(messages, context)
+        # Invoke LLM with optional model parameters from request
+        response_text = await self._invoke_llm(
+            messages, 
+            context,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            model=request.model
+        )
+        
+        # Collect evidence generated during response
+        evidence_list = evidence_tracker.get_evidence(conversation_id)
+        
+        # Enhance response with evidence citations if requested
+        if request.include_evidence:
+            response_text = create_evidence_enhanced_response(
+                response_text,
+                evidence_list,
+                include_sources_section=True
+            )
         
         # Store conversation
         if tenant_id not in self.conversations:
@@ -208,7 +277,249 @@ class CoachService:
             message=response_text,
             timestamp=datetime.now(),
             context_used=context,
+            persona_used=persona,
+            evidence=[{
+                "claim": e.claim,
+                "source": e.data_source,
+                "confidence": e.confidence,
+                "timestamp": e.timestamp.isoformat()
+            } for e in evidence_list],
+            data_sources_analyzed=data_sources_used,
         )
+    
+    def _filter_by_data_sources(self, business_context: Dict[str, Any], selected_sources: List[str]) -> Dict[str, Any]:
+        """Filter business context to only include selected data sources"""
+        filtered = {}
+        
+        for source in selected_sources:
+            if source == "orders" and "metrics" in business_context:
+                # Include order-related metrics
+                filtered["order_metrics"] = {
+                    "revenue_30d": business_context["metrics"].get("revenue_30d", 0),
+                    "orders_30d": business_context["metrics"].get("orders_30d", 0),
+                    "avg_order_value": business_context["metrics"].get("avg_order_value", 0),
+                }
+            elif source == "inventory" and "alerts" in business_context:
+                filtered["inventory_alerts"] = business_context["alerts"]
+                filtered["inventory_metrics"] = {
+                    "low_stock": business_context["metrics"].get("low_stock_count", 0),
+                    "out_of_stock": business_context["metrics"].get("out_of_stock_count", 0),
+                    "inventory_value": business_context["metrics"].get("inventory_value", 0),
+                }
+            elif source == "customers" and "metrics" in business_context:
+                filtered["customer_metrics"] = {
+                    "total": business_context["metrics"].get("total_customers", 0),
+                    "vip": business_context["metrics"].get("vip_customers", 0),
+                    "repeat_rate": business_context["metrics"].get("repeat_rate", 0),
+                }
+        
+        # Always include goals and health score
+        if "health_score" in business_context:
+            filtered["health_score"] = business_context["health_score"]
+        if "goals" in business_context:
+            filtered["goals"] = business_context["goals"]
+        
+        return filtered
+    
+    def _identify_data_sources(self, business_context: Dict[str, Any]) -> List[str]:
+        """Identify which data sources are present in the context"""
+        sources = []
+        
+        if business_context.get("metrics", {}).get("orders_30d", 0) > 0:
+            sources.append("orders")
+        if business_context.get("metrics", {}).get("total_customers", 0) > 0:
+            sources.append("customers")
+        if business_context.get("alerts", {}).get("low_stock") or business_context.get("alerts", {}).get("out_of_stock"):
+            sources.append("inventory")
+        
+        return sources
+    
+    def _build_context_with_evidence(
+        self,
+        tenant_id: str,
+        business_context: Dict[str, Any],
+        evidence_tracker,
+        conversation_id: str,
+        persona: str
+    ) -> Dict[str, Any]:
+        """Build context and track evidence for each metric"""
+        context = {
+            "tenant_id": tenant_id,
+            "business_name": business_context.get("business_name", "your business"),
+            "industry": business_context.get("industry", "retail"),
+            "is_sample_data": business_context.get("is_sample_data", False),
+            "persona": persona,
+        }
+        
+        # Add metrics with evidence tracking
+        if "metrics" in business_context:
+            m = business_context["metrics"]
+            context["metrics"] = m
+            
+            # Track evidence for each metric
+            if m.get("revenue_30d", 0) > 0:
+                evidence_tracker.add_evidence(
+                    conversation_id,
+                    f"Revenue (last 30 days): ${m['revenue_30d']:,.2f}",
+                    "E-commerce connector (orders table)",
+                    query="SELECT SUM(total_amount) FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)",
+                    confidence="high"
+                )
+            
+            if m.get("repeat_rate", 0) > 0:
+                evidence_tracker.add_evidence(
+                    conversation_id,
+                    f"Repeat customer rate: {m['repeat_rate']:.1f}%",
+                    "CRM connector (customers table)",
+                    query="SELECT COUNT(*) WHERE total_orders > 1 / COUNT(*) * 100 FROM customers",
+                    confidence="high"
+                )
+        
+        # Add alerts with evidence
+        if "alerts" in business_context:
+            alerts = business_context["alerts"]
+            context["alerts"] = alerts
+            
+            if alerts.get("out_of_stock"):
+                evidence_tracker.add_evidence(
+                    conversation_id,
+                    f"Out of stock items: {', '.join(alerts['out_of_stock'][:3])}",
+                    "Inventory connector (inventory table)",
+                    query="SELECT product_name FROM inventory WHERE quantity = 0",
+                    confidence="high"
+                )
+        
+        # Add health score with evidence
+        if "health_score" in business_context:
+            hs = business_context["health_score"]
+            context["health_score"] = hs
+            
+            evidence_tracker.add_evidence(
+                conversation_id,
+                f"Business health score: {hs['score']}/100",
+                "Calculated metric (multi-source aggregation)",
+                query="Aggregated from revenue, operations, and customer health components",
+                confidence="high"
+            )
+        
+        # Add goals and tasks
+        if "active_goals" in business_context:
+            context["active_goals"] = business_context["active_goals"]
+        if "pending_tasks" in business_context:
+            context["pending_tasks"] = business_context["pending_tasks"]
+        
+        return context
+    
+    def _build_persona_prompt(self, context: Dict[str, Any], persona_config: Dict[str, Any], include_evidence: bool) -> str:
+        """Build system prompt based on selected persona"""
+        business_name = context.get("business_name", "your business")
+        persona_name = persona_config["name"]
+        persona_emoji = persona_config["emoji"]
+        communication_style = persona_config["communication_style"]
+        
+        prompt = f"""{persona_emoji} You are a {persona_name} for {business_name}.
+
+{communication_style}
+
+CRITICAL - Professional Report Formatting:
+Your responses must be formatted as professional business reports using Markdown:
+
+1. Use clear section headers with ## and ###
+2. Present KPIs and metrics in properly formatted tables
+3. Use bullet points (- or •) for lists and action items
+4. Highlight key numbers and insights with **bold**
+5. Structure responses with visual hierarchy
+6. Include blockquotes (>) for important callouts
+7. Use horizontal rules (---) to separate major sections
+
+Example KPI Table Format:
+| KPI | Value | Description |
+|-----|-------|-------------|
+| **Revenue (30d)** | $10,000 | Total revenue generated in the last 30 days. [Source: E-commerce Connector - Orders Table] |
+| **Orders (30d)** | 150 | Total number of orders placed. [Source: E-commerce Connector - Orders Table] |
+
+Example Structure:
+## Executive Summary
+Brief overview with key findings
+
+### Key Performance Indicators
+[Table with metrics]
+
+### Analysis
+- Insight 1 with **bold numbers**
+- Insight 2 with data sources
+- Insight 3 with recommendations
+
+### Recommended Actions
+1. Prioritized action with rationale
+2. Next steps with timeline
+3. Expected outcomes
+
+---
+
+**Bottom Line**: Clear summary with next steps
+
+"""
+        
+        if include_evidence:
+            prompt += """
+Evidence-Based Responses:
+- ALWAYS cite the specific data source for every fact you state
+- Use inline citations: [Source: Orders Table] or [Source: CRM Analytics]
+- When showing numbers, include WHERE they come from
+- Format: "Revenue is $X [Source: E-commerce Connector - Orders Table]"
+- Be transparent about data quality and sample sizes
+- If uncertain, state confidence level (high/medium/low)
+
+"""
+        
+        # Add current business metrics
+        prompt += self._build_metrics_section(context)
+        
+        # Add persona-specific guidelines
+        prompt += f"""
+{persona_name} Guidelines:
+{chr(10).join(f"• {item}" for item in persona_config.get("expertise", []))}
+
+Response Format:
+{persona_config.get("question_focus", [""])[0]}
+
+"""
+        
+        return prompt
+    
+    def _build_metrics_section(self, context: Dict[str, Any]) -> str:
+        """Build metrics context section for prompt"""
+        section = "\nCurrent Business Metrics:\n"
+        
+        if "metrics" in context:
+            m = context["metrics"]
+            section += f"""
+Revenue (30d): ${m.get('revenue_30d', 0):,.2f}
+Orders (30d): {m.get('orders_30d', 0)}
+Average Order Value: ${m.get('avg_order_value', 0):.2f}
+Total Customers: {m.get('total_customers', 0)}
+VIP Customers: {m.get('vip_customers', 0)}
+Repeat Customer Rate: {m.get('repeat_rate', 0):.1f}%
+"""
+        
+        if "health_score" in context:
+            hs = context["health_score"]
+            section += f"""
+Business Health Score: {hs['score']}/100
+- Revenue Health: {hs.get('revenue_health', 0)}/100
+- Operations Health: {hs.get('operations_health', 0)}/100
+- Customer Health: {hs.get('customer_health', 0)}/100
+"""
+        
+        if "alerts" in context:
+            alerts = context["alerts"]
+            if alerts.get("out_of_stock"):
+                section += f"\nOut of Stock: {', '.join(alerts['out_of_stock'][:5])}\n"
+            if alerts.get("low_stock"):
+                section += f"Low Stock: {', '.join(alerts['low_stock'][:5])}\n"
+        
+        return section
     
     def get_conversation_history(self, tenant_id: str, limit: int = 50) -> List[ChatMessage]:
         """Get conversation history for a tenant"""
@@ -456,7 +767,7 @@ IMPORTANT:
         
         return messages
     
-    async def _invoke_llm(self, messages: List[Dict[str, str]], context: Dict[str, Any]) -> str:
+    async def _invoke_llm(self, messages: List[Dict[str, str]], context: Dict[str, Any], temperature: Optional[float] = None, max_tokens: Optional[int] = None, model: Optional[str] = None) -> str:
         """
         Invoke LLM to generate response using the actual LLM package
         """
@@ -476,7 +787,7 @@ IMPORTANT:
         
         # Invoke the LLM from packages/llm
         try:
-            response = _invoke_llm(full_prompt)
+            response = _invoke_llm(full_prompt, temperature=temperature, max_tokens=max_tokens, model=model)
             
             if response:
                 logger.info(f"LLM response received: {len(response)} characters")

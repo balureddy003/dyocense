@@ -23,7 +23,17 @@ export async function post<T = any>(path: string, body: any = {}, token?: string
         headers: buildHeaders(token),
         body: JSON.stringify(body),
     })
-    if (!res.ok) throw new Error(`POST ${path} failed with ${res.status}`)
+    if (!res.ok) {
+        const error: any = new Error(`POST ${path} failed with ${res.status}`)
+        error.status = res.status
+        error.statusText = res.statusText
+        try {
+            error.body = await res.json()
+        } catch {
+            // Ignore if response body is not JSON
+        }
+        throw error
+    }
     return readBody(res)
 }
 
@@ -116,15 +126,26 @@ export type TenantConnector = {
     connector_name: string
     display_name: string
     category: string
+    icon?: string
     data_types: string[]
     status: ConnectorStatus
     sync_frequency: string
     last_sync?: string
+    created_at?: string
+    updated_at?: string
+    created_by?: string
     metadata?: {
         total_records?: number
         last_sync_duration?: number
         error_message?: string
     }
+}
+
+export type ConnectorTestResponse = {
+    success: boolean
+    message: string
+    details?: Record<string, unknown>
+    error_code?: string
 }
 
 export async function fetchCatalog(token?: string): Promise<CatalogItem[]> {
@@ -165,29 +186,34 @@ export type ConnectorCatalogItem = {
 
 const connectorsPath = (path: string) => `${CONNECTORS_API_BASE}${path}`
 
-export async function listConnectors(token?: string, statusFilter?: ConnectorStatus): Promise<TenantConnector[]> {
+export async function listConnectors(token?: string, statusFilter?: ConnectorStatus, tenantId?: string): Promise<TenantConnector[]> {
+    if (!tenantId) return []
     const query = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : ''
-    const data = await tryGet<TenantConnector[]>(connectorsPath(`/v1/connectors${query}`), token)
+    const data = await tryGet<TenantConnector[]>(`/v1/tenants/${tenantId}/connectors${query}`, token)
     return data ?? []
 }
 
 export async function fetchConnectorCatalog(token?: string): Promise<ConnectorCatalogItem[]> {
-    const data = await tryGet<{ connectors?: ConnectorCatalogItem[] }>(connectorsPath('/v1/catalog'), token)
+    const data = await tryGet<{ connectors?: ConnectorCatalogItem[] }>('/v1/marketplace/connectors', token)
     return data?.connectors ?? []
 }
 
-export async function createConnector(payload: { connector_type: string; display_name: string; config: Record<string, unknown>; sync_frequency?: string }, token?: string) {
-    return post(connectorsPath('/v1/connectors'), payload, token)
+export async function createConnector(payload: { connector_type: string; display_name: string; config: Record<string, unknown>; sync_frequency?: string }, token?: string, tenantId?: string) {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return post(`/v1/tenants/${tenantId}/connectors`, payload, token)
 }
 
-export async function deleteConnector(connectorId: string, token?: string) {
-    return del(connectorsPath(`/v1/connectors/${connectorId}`), token)
+export async function deleteConnector(connectorId: string, token?: string, tenantId?: string) {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return del(`/v1/tenants/${tenantId}/connectors/${connectorId}`, token)
 }
 
-export async function testConnector(connectorId: string, token?: string) {
-    return post(connectorsPath(`/v1/connectors/${connectorId}/test`), {}, token)
+export async function testConnector(connectorId: string, token?: string, tenantId?: string): Promise<ConnectorTestResponse> {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return post(`/v1/tenants/${tenantId}/connectors/${connectorId}/test`, {}, token)
 }
 
-export async function testConnectorConfig(payload: { connector_type: string; config: Record<string, unknown> }, token?: string) {
-    return post(connectorsPath('/v1/connectors/test'), payload, token)
+export async function testConnectorConfig(payload: { connector_type: string; config: Record<string, unknown> }, token?: string, tenantId?: string) {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return post(`/v1/tenants/${tenantId}/connectors/test`, payload, token)
 }

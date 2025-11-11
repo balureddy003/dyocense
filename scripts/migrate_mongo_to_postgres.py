@@ -154,7 +154,7 @@ class MongoToPostgresMigration:
                 tenant.get("tenant_id"),
                 tenant.get("name"),
                 tenant.get("owner_email"),
-                tenant.get("plan_tier", "smb_starter"),
+                tenant.get("plan_tier", "free"),
                 tenant.get("api_token"),
                 tenant.get("status", "active"),
                 tenant.get("created_at", datetime.utcnow()),

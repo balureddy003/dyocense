@@ -31,6 +31,22 @@ class PlanTier(str, Enum):
     ENTERPRISE = "enterprise"
 
 
+def _resolve_plan_tier(value: str) -> PlanTier:
+    """Map legacy/new plan tier strings to PlanTier enum."""
+    if not value:
+        return PlanTier.SMB_STARTER
+    try:
+        return PlanTier(value)
+    except ValueError:
+        mapping = {
+            "free": PlanTier.SMB_STARTER,
+            "silver": PlanTier.SMB_GROWTH,
+            "gold": PlanTier.ENTERPRISE,
+            "platinum": PlanTier.ENTERPRISE,
+        }
+        return mapping.get(value, PlanTier.SMB_STARTER)
+
+
 @dataclass
 class ResourceLimits:
     """Resource limits for a plan tier."""
@@ -308,7 +324,7 @@ def validate_tenant_limits(tenant: Dict[str, any], action: str) -> tuple[bool, O
     Returns:
         (is_allowed, error_message)
     """
-    plan_tier = PlanTier(tenant.get("plan_tier", "smb_starter"))
+    plan_tier = _resolve_plan_tier(tenant.get("plan_tier", "smb_starter"))
     limits = get_plan_limits(plan_tier)
     usage = tenant.get("usage", {})
     

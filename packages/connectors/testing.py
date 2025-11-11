@@ -42,6 +42,12 @@ class ConnectorTester:
                 return await self._test_rest_api(config)
             elif connector_type == "postgres":
                 return await self._test_postgres(config)
+            elif connector_type in {"csv_upload", "csv", "manual_upload"}:
+                return ConnectorTestResult(
+                    success=True,
+                    message="CSV uploads are manual sources. No live connection required.",
+                    details={"requires_manual_upload": True}
+                )
             else:
                 return ConnectorTestResult(
                     success=False,

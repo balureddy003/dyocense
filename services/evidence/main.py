@@ -9,13 +9,14 @@ from pydantic import BaseModel, Field
 from packages.kernel_common.deps import require_auth
 from packages.kernel_common.graph import get_graph_store
 from packages.kernel_common.logging import configure_logging
-from packages.kernel_common.persistence import InMemoryCollection, get_collection
+from packages.evidence import EvidenceRepositoryPG
 from packages.trust import GLOBAL_FACT_REGISTRY, ComplianceFact
+from packages.trust.repository_postgres import ComplianceFactRepositoryPG
 
 logger = configure_logging("evidence-service")
-collection = get_collection("evidence")
-fallback_collection = InMemoryCollection()
 graph_store = get_graph_store()
+evidence_repository = EvidenceRepositoryPG()
+fact_repository = ComplianceFactRepositoryPG()
 
 app = FastAPI(
     title="Dyocense Evidence Service",
@@ -52,23 +53,15 @@ class EvidenceResponse(BaseModel):
 
 def persist_evidence_record(record: dict) -> EvidenceResponse:
     stored_at = datetime.now(tz=timezone.utc).isoformat()
-    record = {**record, "stored_at": stored_at}
-    facts_payload = record.pop("facts", None)
+    payload = {**record, "stored_at": stored_at}
+    facts_payload = payload.pop("facts", None)
+    saved = evidence_repository.create(payload)
     try:
-        collection.insert_one(record)
-    except Exception as exc:  # pragma: no cover - depends on external Mongo DB
-        logger.warning("Mongo insert failed (%s); storing in-memory fallback.", exc)
-    finally:
-        sanitized = {k: v for k, v in record.items() if k != "_id"}
-        if facts_payload:
-            sanitized["facts"] = facts_payload
-        fallback_collection.insert_one(sanitized)
-        try:
-            graph_store.ingest_evidence(sanitized)
-        except Exception as exc:  # pragma: no cover - external graph store
-            logger.warning("Graph ingest failed for run %s (%s)", record["run_id"], exc)
-        if facts_payload:
-            _record_facts(record["run_id"], record["tenant_id"], facts_payload)
+        graph_store.ingest_evidence(saved)
+    except Exception as exc:  # pragma: no cover - external graph store
+        logger.warning("Graph ingest failed for run %s (%s)", record["run_id"], exc)
+    if facts_payload:
+        _record_facts(record["run_id"], record["tenant_id"], facts_payload)
     return EvidenceResponse(run_id=record["run_id"], stored_at=stored_at)
 
 
@@ -87,17 +80,9 @@ def log_evidence(body: EvidenceRecord, identity: dict = Depends(require_auth)) -
 
 @app.get("/v1/evidence/{run_id}")
 def get_evidence(run_id: str) -> dict:
-    try:
-        document = collection.find_one({"run_id": run_id})
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Mongo find_one failed (%s); checking fallback store.", exc)
-        document = None
-
-    if not document:
-        document = fallback_collection.find_one({"run_id": run_id})
+    document = evidence_repository.get(run_id)
     if not document:
         raise HTTPException(status_code=404, detail="Run not found")
-    document.pop("_id", None)
     return document
 
 
@@ -106,23 +91,8 @@ def list_evidence(
     limit: int = Query(default=20, ge=1, le=100),
     identity: dict = Depends(require_auth),
 ) -> dict:
-    query = {"tenant_id": identity["tenant_id"]}
-    documents = []
-    if hasattr(collection, "find"):
-        try:
-            cursor = collection.find(query)  # type: ignore[attr-defined]
-            cursor = cursor.sort("stored_at", -1).limit(limit)  # type: ignore[attr-defined]
-            for doc in cursor:
-                doc.pop("_id", None)
-                documents.append(doc)
-        except Exception as exc:  # fallback to in-memory path if driver not available
-            logger.warning("Evidence find failed: %s", exc)
-            documents = []
-
-    if not documents:
-        documents = fallback_collection.find_many(query, limit)
-
-    return {"items": documents, "count": len(documents)}
+    items = evidence_repository.list_by_tenant(identity["tenant_id"], limit=limit)
+    return {"items": items, "count": len(items)}
 
 
 @app.get("/v1/evidence/{run_id}/facts")

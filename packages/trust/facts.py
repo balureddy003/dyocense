@@ -1,4 +1,8 @@
-"""Compliance fact registry with persistence support."""
+"""Compliance fact registry with persistence support.
+
+Avoid circular imports by lazily importing the Postgres repository inside
+the registry initializer instead of at module import time.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +10,9 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
-
-from packages.kernel_common.persistence import InMemoryCollection, get_collection
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:  # only for type hints, avoids runtime circular import
+    from packages.trust.repository_postgres import ComplianceFactRepositoryPG
 
 
 class ComplianceFact(BaseModel):
@@ -26,54 +31,21 @@ class ComplianceFact(BaseModel):
 
 
 class FactRegistry:
-    def __init__(self, collection=None) -> None:
-        self._collection = collection or get_collection("compliance_facts")
-        self._is_fallback = isinstance(self._collection, InMemoryCollection)
-        self._facts: Dict[str, ComplianceFact] = {}
-        self._by_run: Dict[str, List[str]] = {}
-        self._load_existing()
+    def __init__(self, repository: 'ComplianceFactRepositoryPG | None' = None) -> None:
+        # Lazy import to avoid circular dependency with repository_postgres
+        if repository is None:
+            from packages.trust.repository_postgres import ComplianceFactRepositoryPG
+            repository = ComplianceFactRepositoryPG()
+        self._repository = repository
 
     def record(self, fact: ComplianceFact) -> ComplianceFact:
-        self._facts[fact.fact_id] = fact
-        self._by_run.setdefault(fact.run_id, []).append(fact.fact_id)
-        self._persist(fact)
-        return fact
+        return self._repository.record(fact)
 
     def list_for_run(self, run_id: str) -> List[ComplianceFact]:
-        return [self._facts[fid] for fid in self._by_run.get(run_id, [])]
+        return self._repository.list_for_run(run_id)
 
     def get(self, fact_id: str) -> Optional[ComplianceFact]:
-        return self._facts.get(fact_id)
-
-    def _load_existing(self) -> None:
-        try:
-            if hasattr(self._collection, "find") and not self._is_fallback:
-                for document in self._collection.find({}):  # type: ignore[attr-defined]
-                    document.pop("_id", None)
-                    self._hydrate(document)
-            elif isinstance(self._collection, InMemoryCollection):
-                for document in self._collection.find({}):
-                    self._hydrate(document)
-        except Exception:  # pragma: no cover
-            pass
-
-    def _persist(self, fact: ComplianceFact) -> None:
-        document = fact.model_dump()
-        try:
-            if hasattr(self._collection, "replace_one") and not self._is_fallback:
-                self._collection.replace_one({"fact_id": fact.fact_id}, document, upsert=True)  # type: ignore[attr-defined]
-            elif isinstance(self._collection, InMemoryCollection):
-                self._collection.replace_one({"fact_id": fact.fact_id}, document, upsert=True)
-        except Exception:  # pragma: no cover
-            pass
-
-    def _hydrate(self, document: dict) -> None:
-        try:
-            fact = ComplianceFact.model_validate(document)
-        except Exception:  # pragma: no cover
-            return
-        self._facts[fact.fact_id] = fact
-        self._by_run.setdefault(fact.run_id, []).append(fact.fact_id)
+        return self._repository.get(fact_id)
 
 
 GLOBAL_FACT_REGISTRY = FactRegistry()

@@ -1,17 +1,23 @@
-import { Alert, Badge, Button, Card, Divider, Group, Loader, Progress, SimpleGrid, Stack, Text, Title } from '@mantine/core'
+import { ActionIcon, Alert, Badge, Button, Card, Group, Loader, Progress, Stack, Text, Title } from '@mantine/core'
+import { IconArrowRight, IconCheck, IconCircle, IconRefresh, IconSparkles, IconTarget } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import AgentActionCard from '../components/AgentActionCard'
-import ChatShell from '../components/ChatShell'
-import { get, tryPost } from '../lib/api'
+import { get, post } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 import { useTemplateStore } from '../stores/template'
+
+type Task = {
+    label: string
+    owner?: string
+    status?: string
+    priority?: 'high' | 'medium' | 'low'
+}
 
 type Plan = {
     id: string
     title: string
-    tasks: { label: string; owner?: string; status?: string }[]
+    tasks: Task[]
 }
 
 export default function Planner() {
@@ -20,6 +26,16 @@ export default function Planner() {
     const { selectedTemplate } = useTemplateStore()
     const navigate = useNavigate()
     const queryClient = useQueryClient()
+
+    // Check if coming from coach page
+    const [showWelcomeBanner, setShowWelcomeBanner] = React.useState(() => {
+        const fromCoach = sessionStorage.getItem('fromCoachPage')
+        if (fromCoach === 'true') {
+            sessionStorage.removeItem('fromCoachPage')
+            return true
+        }
+        return false
+    })
 
     const { data: planData, isLoading, isError } = useQuery({
         queryKey: ['plan', tenantId],
@@ -35,294 +51,296 @@ export default function Planner() {
     const plan = planData
 
     const taskStats = React.useMemo(() => {
-        if (!plan?.tasks?.length) return { total: 0, assigned: 0, inMotion: 0 }
+        if (!plan?.tasks?.length) return { total: 0, completed: 0, inProgress: 0, pending: 0 }
         const total = plan.tasks.length
-        const assigned = plan.tasks.filter((task) => Boolean(task.owner)).length
-        const inMotion = plan.tasks.filter((task) => (task.status ?? '').toLowerCase() !== 'planned').length
-        return { total, assigned, inMotion }
+        const completed = plan.tasks.filter((t) => (t.status ?? '').toLowerCase().includes('done') || (t.status ?? '').toLowerCase().includes('complete')).length
+        const inProgress = plan.tasks.filter((t) => (t.status ?? '').toLowerCase().includes('progress') || (t.status ?? '').toLowerCase().includes('doing')).length
+        const pending = total - completed - inProgress
+        return { total, completed, inProgress, pending }
     }, [plan])
 
-    const statusColor = (status?: string) => {
-        const normalized = (status ?? 'planned').toLowerCase()
-        if (normalized.includes('done') || normalized.includes('complete')) return 'green'
-        if (normalized.includes('risk') || normalized.includes('block')) return 'red'
-        if (normalized.includes('progress') || normalized.includes('doing')) return 'yellow'
-        return 'gray'
-    }
+    const completionRate = plan?.tasks?.length ? Math.round((taskStats.completed / plan.tasks.length) * 100) : 0
 
     const regenerateMutation = useMutation({
         mutationFn: async () => {
-            return await tryPost<Plan | null>(
+            let latestGoalId: string | undefined
+            try {
+                latestGoalId = sessionStorage.getItem('latestGoalId') || undefined
+            } catch { }
+
+            return await post<Plan>(
                 `/v1/tenants/${encodeURIComponent(tenantId!)}/plans`,
-                { archetype_id: selectedTemplate.archetypeId, regenerate: true },
+                {
+                    archetype_id: selectedTemplate?.archetypeId,
+                    regenerate: true,
+                    goal_id: latestGoalId,
+                },
                 apiToken,
             )
         },
         onSuccess: (plan) => {
-            if (!plan) return
             queryClient.setQueryData(['plan', tenantId], plan)
         },
     })
 
     if (!tenantId) {
         return (
-            <div className="mx-auto max-w-3xl rounded-3xl border border-white/10 bg-night-800/80 px-6 py-10 text-center shadow-card">
-                <h1 className="text-3xl font-semibold text-white">Planner</h1>
-                <p className="mt-2 text-slate-300">Complete signup and verification to unlock the Planner.</p>
+            <div style={{ padding: '40px', textAlign: 'center' }}>
+                <Title order={2}>Action Plan</Title>
+                <Text c="dimmed" mt="md">
+                    Sign in to view your action plan
+                </Text>
             </div>
         )
     }
 
-    const planHintText = plan
-        ? `Current plan "${plan.title}" with ${plan.tasks?.length ?? 0} tasks.`
-        : `Template: ${selectedTemplate.name} focuses on ${selectedTemplate.goals[0]?.title}.`
-    const planPrompts = plan
-        ? [
-            `Rewrite the "${plan.tasks[0]?.label ?? 'first'}" task with more detail`,
-            ...selectedTemplate.prompts.planner,
-        ]
-        : selectedTemplate.prompts.planner
-
-    const focusTasks = plan?.tasks.slice(0, 2) ?? []
-    const backlogTasks = plan?.tasks.slice(2) ?? []
-    const suggestionPrompts = selectedTemplate.prompts.planner.slice(0, 3)
-    const flowGuide = [
-        { label: 'Plan', description: 'Use the copilot to clarify goals, owners, and blockers.' },
-        { label: 'Agents', description: 'Delegate execution steps (messages, schedules, promos).' },
-        { label: 'Executor', description: 'Track runs, log evidence, export digests.' },
-    ]
-
     return (
-        <div className="mx-auto w-full max-w-6xl rounded-3xl border border-white/10 bg-night-800/80 px-4 py-8 shadow-card md:px-8">
-            <div className="grid gap-6 md:grid-cols-[1.1fr_0.9fr]">
-                <div className="space-y-6">
-                    <Stack gap="xs">
-                        <Text size="xs" fw={600} tt="uppercase" ls={4} c="blue.3">
-                            Planner
-                        </Text>
-                        <Title order={2} c="white">
-                            Tenant: {tenantId}
-                        </Title>
-                        <Text c="gray.4">Plans stay in sync with automations and the execution console.</Text>
-                    </Stack>
-                    {isError && <Alert color="red">Unable to fetch plan. Showing template guidance instead.</Alert>}
-                    {plan ? (
-                        <Stack gap="lg">
-                            <Card radius="xl" withBorder className="bg-white/5">
-                                <Group justify="space-between" align="flex-start">
-                                    <div>
-                                        <Title order={3}>{plan.title}</Title>
-                                        <Text size="sm" c="gray.4">
-                                            ID: {plan.id}
-                                        </Text>
-                                    </div>
-                                    <Group>
-                                        <Button
-                                            onClick={() => regenerateMutation.mutate()}
-                                            loading={regenerateMutation.isPending}
-                                            radius="xl"
-                                            variant="light"
-                                        >
-                                            Regenerate with AI
-                                        </Button>
-                                        <Button radius="xl" variant="outline" onClick={() => navigate('/executor')}>
-                                            Share status
-                                        </Button>
-                                    </Group>
-                                </Group>
-                                <Text size="sm" c="gray.4" mt="sm">
-                                    This plan follows the <strong>{selectedTemplate.name}</strong> template. Finish the actions below, then hand off to Agents and the Executor.
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px' }}>
+            {/* Header */}
+            <Group justify="space-between" mb="xl">
+                <div>
+                    <Group gap="xs" mb={4}>
+                        <IconTarget size={28} color="#4c6ef5" />
+                        <Title order={2}>Action Plan</Title>
+                    </Group>
+                    <Text size="sm" c="dimmed">
+                        Your weekly roadmap to achieve your goals
+                    </Text>
+                </div>
+                <Group>
+                    <Button
+                        variant="light"
+                        leftSection={<IconSparkles size={16} />}
+                        onClick={() => navigate('/coach')}
+                    >
+                        AI Coach
+                    </Button>
+                    <Button
+                        variant="outline"
+                        leftSection={<IconRefresh size={16} />}
+                        onClick={() => regenerateMutation.mutate()}
+                        loading={regenerateMutation.isPending}
+                    >
+                        Regenerate
+                    </Button>
+                </Group>
+            </Group>
+
+            {/* Welcome Banner */}
+            {showWelcomeBanner && !plan && (
+                <Alert
+                    variant="light"
+                    color="blue"
+                    title="Ready to create your action plan!"
+                    withCloseButton
+                    onClose={() => setShowWelcomeBanner(false)}
+                    icon={<IconSparkles size={20} />}
+                    mb="lg"
+                >
+                    <Text size="sm" mb="sm">
+                        Your coach helped refine your goal. Now let's turn it into a weekly action plan.
+                    </Text>
+                    <Button
+                        size="sm"
+                        variant="light"
+                        onClick={() => {
+                            regenerateMutation.mutate()
+                            setShowWelcomeBanner(false)
+                        }}
+                        loading={regenerateMutation.isPending}
+                    >
+                        Generate Action Plan
+                    </Button>
+                </Alert>
+            )}
+
+            {/* Fitness Tracker Style Stats */}
+            {plan && (
+                <>
+                    <Card withBorder radius="lg" p="xl" mb="lg" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+                        <Group justify="space-between" align="flex-start" mb="xl">
+                            <div>
+                                <Text size="sm" c="white" opacity={0.9} mb={4}>
+                                    WEEKLY PLAN
                                 </Text>
-                                <SimpleGrid cols={{ base: 1, sm: 3 }} mt="lg">
-                                    <div>
-                                        <Text size="xs" c="gray.5">
-                                            Total tasks
-                                        </Text>
-                                        <Title order={3}>{taskStats.total}</Title>
-                                    </div>
-                                    <div>
-                                        <Text size="xs" c="gray.5">
-                                            Assigned
-                                        </Text>
-                                        <Title order={3}>{taskStats.assigned}</Title>
-                                    </div>
-                                    <div>
-                                        <Text size="xs" c="gray.5">
-                                            In motion
-                                        </Text>
-                                        <Title order={3}>{taskStats.inMotion}</Title>
-                                    </div>
-                                </SimpleGrid>
-                                <Stack gap={4} mt="lg">
-                                    <Group justify="space-between">
-                                        <Text size="xs" c="gray.5">
-                                            Plan progress
-                                        </Text>
-                                        <Text size="xs" c="gray.4">
-                                            {taskStats.total ? Math.round((taskStats.inMotion / taskStats.total) * 100) : 0}%
-                                        </Text>
-                                    </Group>
-                                    <Progress value={taskStats.total ? (taskStats.inMotion / taskStats.total) * 100 : 0} />
-                                </Stack>
-                            </Card>
+                                <Title order={3} c="white">
+                                    {plan.title}
+                                </Title>
+                            </div>
+                            <Badge size="lg" color="white" variant="filled" style={{ color: '#667eea' }}>
+                                {completionRate}% Complete
+                            </Badge>
+                        </Group>
 
-                            <Card radius="xl" withBorder className="bg-night-900/40">
-                                <Group justify="space-between" align="center" mb="sm">
-                                    <Title order={4}>Today&apos;s focus</Title>
-                                    <Button size="xs" variant="subtle" onClick={() => navigate('/agents')}>
-                                        Hand off to agents
-                                    </Button>
-                                </Group>
-                                {isLoading ? (
-                                    <Loader />
-                                ) : (
-                                    <Stack gap="sm">
-                                        {focusTasks.map((task, idx) => (
-                                            <Card key={`${task.label}-${idx}`} radius="lg" withBorder className="bg-night-900/40">
-                                                <Group justify="space-between" align="flex-start">
-                                                    <Group gap="xs">
-                                                        <Badge color="blue" variant="light">
-                                                            {String(idx + 1).padStart(2, '0')}
-                                                        </Badge>
-                                                        <div>
-                                                            <Text fw={500}>{task.label}</Text>
-                                                            <Text size="xs" c="gray.5">
-                                                                Owner: {task.owner ?? 'Unassigned'}
-                                                            </Text>
-                                                        </div>
-                                                    </Group>
-                                                    <Badge color={statusColor(task.status)} variant="outline">
-                                                        {task.status ?? 'Planned'}
-                                                    </Badge>
-                                                </Group>
-                                            </Card>
-                                        ))}
-                                        {!focusTasks.length && (
-                                            <Text size="sm" c="gray.4">
-                                                No prioritized tasks yet—use the chat to generate clarifying steps.
-                                            </Text>
-                                        )}
-                                    </Stack>
-                                )}
-                            </Card>
-
-                            {backlogTasks.length > 0 && (
-                                <Card radius="xl" withBorder className="bg-night-900/30">
-                                    <Title order={4}>Backlog</Title>
-                                    <Text size="sm" c="gray.5" mb="sm">
-                                        These steps sit behind the focus list. Reorder via Planner chat or assign owners before moving to Agents.
-                                    </Text>
-                                    <Stack gap="sm">
-                                        {backlogTasks.map((task, idx) => (
-                                            <Card key={`${task.label}-${idx}`} radius="md" withBorder className="bg-night-900/50">
-                                                <Group justify="space-between" align="flex-start">
-                                                    <div>
-                                                        <Text fw={500}>{task.label}</Text>
-                                                        <Text size="xs" c="gray.5">
-                                                            Owner: {task.owner ?? 'Unassigned'}
-                                                        </Text>
-                                                    </div>
-                                                    <Badge color={statusColor(task.status)} variant="light">
-                                                        {task.status ?? 'Planned'}
-                                                    </Badge>
-                                                </Group>
-                                            </Card>
-                                        ))}
-                                    </Stack>
-                                </Card>
-                            )}
-                        </Stack>
-                    ) : (
-                        <Card radius="xl" withBorder className="bg-night-900/40">
-                            {isLoading ? (
-                                <Loader />
-                            ) : (
-                                <Stack gap="sm">
-                                    <Text c="gray.4">No plan found for this tenant. Run onboarding to create a starter plan.</Text>
-                                    <Button radius="xl" onClick={() => navigate('/home')}>
-                                        Open onboarding
-                                    </Button>
-                                </Stack>
-                            )}
-                        </Card>
-                    )}
-
-                    <Card radius="xl" withBorder className="bg-night-900/30">
-                        <p className="text-sm font-semibold uppercase tracking-[0.4em] text-slate-400">Copilot jumpstart</p>
-                        <div className="mt-3 space-y-3">
-                            {suggestionPrompts.map((prompt) => (
-                                <AgentActionCard
-                                    key={prompt}
-                                    label={prompt}
-                                    description="Send this to the Planner chat to convert it into steps, owners, and risks."
-                                    badge="Prompt"
-                                    cta="Ask copilot"
-                                    onSelect={() => {
-                                        const chatEl = document.getElementById('planner-chat')
-                                        if (chatEl) chatEl.scrollIntoView({ behavior: 'smooth' })
-                                    }}
+                        {/* Ring Progress */}
+                        <div style={{ position: 'relative', height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 24 }}>
+                            <svg width="200" height="200" style={{ transform: 'rotate(-90deg)' }}>
+                                {/* Background ring */}
+                                <circle
+                                    cx="100"
+                                    cy="100"
+                                    r="85"
+                                    fill="none"
+                                    stroke="rgba(255,255,255,0.2)"
+                                    strokeWidth="20"
                                 />
-                            ))}
-                            <AgentActionCard
-                                label="Summarize plan"
-                                description="Generate an explainable digest and log it as evidence."
-                                badge="Digest"
-                                cta="View"
-                                onSelect={() => navigate('/executor')}
-                            />
+                                {/* Progress ring */}
+                                <circle
+                                    cx="100"
+                                    cy="100"
+                                    r="85"
+                                    fill="none"
+                                    stroke="white"
+                                    strokeWidth="20"
+                                    strokeLinecap="round"
+                                    strokeDasharray={`${(completionRate / 100) * 534} 534`}
+                                    style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                                />
+                            </svg>
+                            <div style={{ position: 'absolute', textAlign: 'center' }}>
+                                <Text size="48px" fw={700} c="white" style={{ lineHeight: 1 }}>
+                                    {taskStats.completed}
+                                </Text>
+                                <Text size="sm" c="white" opacity={0.9}>
+                                    of {taskStats.total} tasks
+                                </Text>
+                            </div>
                         </div>
+
+                        {/* Mini Stats */}
+                        <Group justify="center" gap="xl">
+                            <div style={{ textAlign: 'center' }}>
+                                <Text size="xl" fw={700} c="white">
+                                    {taskStats.inProgress}
+                                </Text>
+                                <Text size="xs" c="white" opacity={0.8}>
+                                    In Progress
+                                </Text>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <Text size="xl" fw={700} c="white">
+                                    {taskStats.pending}
+                                </Text>
+                                <Text size="xs" c="white" opacity={0.8}>
+                                    To Do
+                                </Text>
+                            </div>
+                        </Group>
                     </Card>
-                    <Card radius="xl" withBorder className="bg-night-900/20">
-                        <Text size="xs" fw={600} tt="uppercase" c="gray.4" style={{ letterSpacing: '0.4em' }}>
-                            Flow guide
+
+                    {/* Tasks List - Simplified */}
+                    <Stack gap="md">
+                        <Group justify="space-between">
+                            <Title order={4}>Your Tasks</Title>
+                            <Text size="sm" c="dimmed">
+                                {taskStats.total} total
+                            </Text>
+                        </Group>
+
+                        {isLoading ? (
+                            <Card withBorder p="xl">
+                                <Loader />
+                            </Card>
+                        ) : (
+                            plan.tasks?.map((task, idx) => {
+                                const isDone = (task.status ?? '').toLowerCase().includes('done') || (task.status ?? '').toLowerCase().includes('complete')
+                                const isProgress = (task.status ?? '').toLowerCase().includes('progress') || (task.status ?? '').toLowerCase().includes('doing')
+
+                                return (
+                                    <Card
+                                        key={`${task.label}-${idx}`}
+                                        withBorder
+                                        radius="md"
+                                        p="md"
+                                        style={{
+                                            background: isDone ? '#f0fff4' : 'white',
+                                            borderLeft: isDone ? '4px solid #51cf66' : isProgress ? '4px solid #ffd43b' : '4px solid #e9ecef',
+                                        }}
+                                    >
+                                        <Group justify="space-between" wrap="nowrap">
+                                            <Group gap="md" style={{ flex: 1 }}>
+                                                <ActionIcon
+                                                    size="lg"
+                                                    radius="xl"
+                                                    variant={isDone ? 'filled' : 'light'}
+                                                    color={isDone ? 'green' : isProgress ? 'yellow' : 'gray'}
+                                                >
+                                                    {isDone ? <IconCheck size={18} /> : <IconCircle size={18} />}
+                                                </ActionIcon>
+                                                <div style={{ flex: 1 }}>
+                                                    <Text fw={500} style={{ textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.7 : 1 }}>
+                                                        {task.label}
+                                                    </Text>
+                                                    {task.owner && (
+                                                        <Text size="xs" c="dimmed">
+                                                            {task.owner}
+                                                        </Text>
+                                                    )}
+                                                </div>
+                                            </Group>
+                                            <Badge
+                                                color={isDone ? 'green' : isProgress ? 'yellow' : 'gray'}
+                                                variant="light"
+                                            >
+                                                {task.status ?? 'Pending'}
+                                            </Badge>
+                                        </Group>
+                                    </Card>
+                                )
+                            })
+                        )}
+                    </Stack>
+
+                    {/* Quick Actions */}
+                    <Card withBorder radius="lg" p="lg" mt="xl" style={{ background: '#f8f9fa' }}>
+                        <Text size="sm" fw={600} c="dimmed" mb="md">
+                            QUICK ACTIONS
                         </Text>
-                        <Stack gap="sm" mt="md">
-                            {flowGuide.map((step, idx) => (
-                                <div key={step.label}>
-                                    {idx > 0 && <Divider my="xs" color="white" opacity={0.1} />}
-                                    <Group align="flex-start" gap="sm">
-                                        <Badge radius="xl" variant="light">
-                                            {String(idx + 1)}
-                                        </Badge>
-                                        <div>
-                                            <Text fw={600}>{step.label}</Text>
-                                            <Text size="sm" c="gray.4">
-                                                {step.description}
-                                            </Text>
-                                        </div>
-                                    </Group>
-                                </div>
-                            ))}
-                        </Stack>
+                        <Group>
+                            <Button
+                                variant="light"
+                                leftSection={<IconSparkles size={16} />}
+                                onClick={() => navigate('/coach')}
+                            >
+                                Refine with AI Coach
+                            </Button>
+                            <Button
+                                variant="outline"
+                                onClick={() => navigate('/goals')}
+                            >
+                                View Goals
+                            </Button>
+                        </Group>
                     </Card>
-                    <Card radius="xl" withBorder className="bg-night-900/20">
-                        <Text size="xs" fw={600} tt="uppercase" c="gray.4" style={{ letterSpacing: '0.4em' }}>
-                            Template sessions
-                        </Text>
-                        <Stack gap="sm" mt="md">
-                            {selectedTemplate.sessions.map((session) => (
-                                <AgentActionCard
-                                    key={session.id}
-                                    label={`${session.title} · ${session.duration}`}
-                                    description={session.description}
-                                    badge={selectedTemplate.industry}
-                                    cta={session.cta}
-                                    onSelect={() => navigate('/agents')}
-                                />
-                            ))}
-                        </Stack>
-                    </Card>
-                </div>
-                <div id="planner-chat">
-                    <ChatShell
-                        title="AI Coach"
-                        description="Ask for refinements, risk analysis, or follow-ups. Responses include one-click cards."
-                        prompts={planPrompts}
-                        templateId={selectedTemplate.archetypeId}
-                        planHint={planHintText}
-                    />
-                </div>
-            </div>
+                </>
+            )}
+
+            {/* No Plan State */}
+            {!plan && !isLoading && (
+                <Card withBorder radius="lg" p="xl" style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 64, marginBottom: 16 }}>📋</div>
+                    <Title order={3} mb="sm">
+                        No action plan yet
+                    </Title>
+                    <Text c="dimmed" mb="xl" maw={500} mx="auto">
+                        Create an action plan to break your goals into weekly tasks and track your progress.
+                    </Text>
+                    <Button
+                        size="lg"
+                        onClick={() => regenerateMutation.mutate()}
+                        loading={regenerateMutation.isPending}
+                        leftSection={<IconSparkles size={20} />}
+                    >
+                        Generate Action Plan
+                    </Button>
+                </Card>
+            )}
+
+            {isError && (
+                <Alert color="red" title="Unable to load plan" mb="lg">
+                    Please try refreshing the page or contact support.
+                </Alert>
+            )}
         </div>
     )
 }
