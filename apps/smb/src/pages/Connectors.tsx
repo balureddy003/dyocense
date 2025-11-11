@@ -1,4 +1,5 @@
 import {
+    Alert,
     Badge,
     Button,
     Card,
@@ -9,6 +10,7 @@ import {
     Modal,
     Select,
     Stack,
+    Switch,
     Text,
     Textarea,
     TextInput,
@@ -21,7 +23,7 @@ import React from 'react'
 import { useForm } from 'react-hook-form'
 import { Link } from 'react-router-dom'
 import { useConnectorsQuery } from '../hooks/useConnectors'
-import { createConnector, deleteConnector, testConnector, type ConnectorTestResponse, type TenantConnector } from '../lib/api'
+import { createConnector, deleteConnector, testConnector, updateConnector, type ConnectorTestResponse, type TenantConnector } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 type ConnectorField = {
@@ -54,6 +56,7 @@ type ConnectorFormValues = {
     api_secret?: string
     api_url?: string
     uploaded_file?: File
+    enable_mcp?: boolean
 }
 
 const presets: ConnectorPreset[] = [
@@ -153,21 +156,21 @@ export default function Connectors() {
     const queryClient = useQueryClient()
     const [modalOpen, setModalOpen] = React.useState(false)
     const [presetId, setPresetId] = React.useState(presets[0].id)
-    const connectorsQuery = useConnectorsQuery(apiToken, tenantId)
-    const selectedPreset = presets.find((preset) => preset.id === presetId) ?? presets[0]
-
+    const [editingConnector, setEditingConnector] = React.useState<TenantConnector | null>(null)
     const form = useForm<ConnectorFormValues>({
         defaultValues: {
             displayName: '',
             syncFrequency: 'manual',
+            enable_mcp: false,
         },
     })
 
     const resetForm = React.useCallback(
-        (preset: ConnectorPreset) => {
+        (preset: ConnectorPreset, connector?: TenantConnector | null) => {
             const defaults: ConnectorFormValues = {
-                displayName: '',
-                syncFrequency: 'manual',
+                displayName: connector?.display_name ?? '',
+                syncFrequency: (connector?.sync_frequency as ConnectorFormValues['syncFrequency']) ?? 'manual',
+                enable_mcp: Boolean(connector?.metadata?.mcp_enabled),
             }
             preset.fields.forEach((field) => {
                 defaults[field.name] = '' as never
@@ -175,6 +178,28 @@ export default function Connectors() {
             form.reset(defaults)
         },
         [form],
+    )
+
+    const connectorsQuery = useConnectorsQuery(apiToken, tenantId)
+    const selectedPreset = presets.find((preset) => preset.id === presetId) ?? presets[0]
+
+    const openCreateModal = React.useCallback(() => {
+        const preset = presets[0]
+        setEditingConnector(null)
+        setPresetId(preset.id)
+        resetForm(preset)
+        setModalOpen(true)
+    }, [resetForm])
+
+    const openEditModal = React.useCallback(
+        (connector: TenantConnector) => {
+            const preset = presets.find((p) => p.id === connector.connector_type) ?? presets[0]
+            setEditingConnector(connector)
+            setPresetId(preset.id)
+            resetForm(preset, connector)
+            setModalOpen(true)
+        },
+        [resetForm],
     )
 
     const createMutation = useMutation({
@@ -192,6 +217,7 @@ export default function Connectors() {
                     display_name: values.displayName || selectedPreset.label,
                     config,
                     sync_frequency: values.syncFrequency,
+                    enable_mcp: Boolean(values.enable_mcp),
                 },
                 apiToken,
                 tenantId,
@@ -200,6 +226,7 @@ export default function Connectors() {
         onSuccess: () => {
             showNotification({ title: 'Connector created', message: 'We will start syncing shortly.', color: 'green' })
             setModalOpen(false)
+            setEditingConnector(null)
             queryClient.invalidateQueries({ queryKey: ['connectors', tenantId] })
         },
         onError: () => {
@@ -223,6 +250,43 @@ export default function Connectors() {
         },
         onError: () => {
             showNotification({ title: 'Unable to remove connector', message: 'Try again later.', color: 'red' })
+        },
+    })
+
+    const updateMutation = useMutation({
+        mutationFn: async ({ connector, values, preset }: { connector: TenantConnector; values: ConnectorFormValues; preset: ConnectorPreset }) => {
+            if (!apiToken) throw new Error('Missing token')
+            if (!tenantId) throw new Error('Missing tenant')
+            const config: Record<string, unknown> = {}
+            preset.fields.forEach((field) => {
+                const value = values[field.name]
+                if (value) config[field.name] = value
+            })
+            return await updateConnector(
+                connector.connector_id,
+                {
+                    display_name: values.displayName || connector.display_name,
+                    config: Object.keys(config).length > 0 ? config : undefined,
+                    sync_frequency: values.syncFrequency,
+                    enable_mcp: values.enable_mcp,
+                },
+                apiToken,
+                tenantId,
+            )
+        },
+        onSuccess: (_resp, { connector }) => {
+            showNotification({
+                title: 'Connector updated',
+                message: `${connector.display_name ?? connector.connector_name} will be revalidated.`,
+                color: 'green',
+            })
+            setModalOpen(false)
+            setEditingConnector(null)
+            queryClient.invalidateQueries({ queryKey: ['connectors', tenantId] })
+        },
+        onError: (error) => {
+            const detail = (error as any)?.body?.detail || (error as Error).message
+            showNotification({ title: 'Update failed', message: detail, color: 'red' })
         },
     })
 
@@ -265,9 +329,16 @@ export default function Connectors() {
         }
     })
 
-    const onSubmit = form.handleSubmit((values) => createMutation.mutate(values))
+    const onSubmit = form.handleSubmit((values) => {
+        if (editingConnector) {
+            updateMutation.mutate({ connector: editingConnector, values, preset: selectedPreset })
+        } else {
+            createMutation.mutate(values)
+        }
+    })
 
     const connectors = connectorsQuery.data ?? []
+    const isSaving = editingConnector ? updateMutation.isPending : createMutation.isPending
 
     return (
         <div className="page-shell">
@@ -290,6 +361,29 @@ export default function Connectors() {
                                 Start with CSV uploads or Google Drive for quick setup. Your connected data enables auto-tracking of goals,
                                 real-time health metrics, and AI-powered recommendations.
                             </Text>
+                            <Card mt="lg" radius="lg" shadow="xs" className="border border-dashed border-purple-200">
+                                <Group justify="space-between">
+                                    <Text fw={600}>ERPNext + MCP docs</Text>
+                                    <Button
+                                        variant="outline"
+                                        radius="xl"
+                                        size="xs"
+                                        component="a"
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        href="https://github.com/dyocense/dyocense/blob/main/docs/ERPNEXT_CONNECTOR_GUIDE.md"
+                                    >
+                                        View guide
+                                    </Button>
+                                </Group>
+                                <Text size="sm" color="dimmed" mt="xs">
+                                    Follow the ERPNext Connector Guide to configure API keys, enable plaintext credentials, and
+                                    start the MCP server from the connectors backend (`CONNECTOR_ENABLE_ERP_MCP=1` + ERP_URL/ERP_KEY/ERP_SECRET).
+                                </Text>
+                                <Text size="xs" color="dimmed">
+                                    Agents can then call tools such as “create document” or “check stock availability” once the MCP service is running.
+                                </Text>
+                            </Card>
                             <Group mt="md" gap="sm">
                                 {connectors.length > 0 ? (
                                     <Badge size="lg" color="green" variant="light" leftSection="✓">
@@ -307,10 +401,7 @@ export default function Connectors() {
                         </div>
                         <Button
                             size="lg"
-                            onClick={() => {
-                                resetForm(selectedPreset)
-                                setModalOpen(true)
-                            }}
+                            onClick={openCreateModal}
                         >
                             Add connector
                         </Button>
@@ -379,17 +470,35 @@ export default function Connectors() {
                                                     radius="xl"
                                                     size="xs"
                                                     variant="light"
-                                                    loading={testMutation.isPending && testMutation.variables === connector}
+                                                    loading={
+                                                        testMutation.isPending &&
+                                                        testMutation.variables?.connector_id === connector.connector_id
+                                                    }
                                                     onClick={() => testMutation.mutate(connector)}
                                                 >
                                                     Test connection
+                                                </Button>
+                                                {connector.metadata?.mcp_enabled && (
+                                                    <Badge size="xs" color="blue" variant="light">MCP enabled</Badge>
+                                                )}
+                                                <Button
+                                                    radius="xl"
+                                                    size="xs"
+                                                    variant="light"
+                                                    color="blue"
+                                                    onClick={() => openEditModal(connector)}
+                                                >
+                                                    Edit
                                                 </Button>
                                                 <Button
                                                     radius="xl"
                                                     size="xs"
                                                     variant="outline"
                                                     color="red"
-                                                    loading={deleteMutation.isPending && deleteMutation.variables === connector}
+                                                    loading={
+                                                        deleteMutation.isPending &&
+                                                        deleteMutation.variables?.connector_id === connector.connector_id
+                                                    }
                                                     onClick={() => deleteMutation.mutate(connector)}
                                                 >
                                                     Remove
@@ -409,12 +518,7 @@ export default function Connectors() {
                                         </Text>
                                         <Button
                                             variant="light"
-                                            onClick={() => {
-                                                const preset = presets[0]
-                                                setPresetId(preset.id)
-                                                resetForm(preset)
-                                                setModalOpen(true)
-                                            }}
+                                            onClick={openCreateModal}
                                         >
                                             ADD CONNECTOR
                                         </Button>
@@ -433,6 +537,7 @@ export default function Connectors() {
                             <Stack gap="sm">
                                 {presets.map((preset) => (
                                     <Card key={preset.id} withBorder p="md" radius="md" className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => {
+                                        setEditingConnector(null)
                                         setPresetId(preset.id)
                                         resetForm(preset)
                                         setModalOpen(true)
@@ -464,7 +569,9 @@ export default function Connectors() {
                 onClose={() => setModalOpen(false)}
                 title={
                     <Group gap="xs">
-                        <Text fw={600} size="lg">Add connector</Text>
+                        <Text fw={600} size="lg">
+                            {editingConnector ? 'Edit connector' : 'Add connector'}
+                        </Text>
                     </Group>
                 }
                 size="xl"
@@ -486,14 +593,16 @@ export default function Connectors() {
                                             radius="md"
                                             withBorder
                                             style={{
-                                                cursor: 'pointer',
+                                                cursor: editingConnector ? 'not-allowed' : 'pointer',
                                                 borderColor: presetId === preset.id ? 'var(--mantine-color-blue-6)' : undefined,
                                                 borderWidth: presetId === preset.id ? 2 : 1,
                                                 backgroundColor: presetId === preset.id ? 'var(--mantine-color-blue-0)' : undefined,
+                                                opacity: editingConnector ? 0.6 : 1,
                                             }}
                                             onClick={() => {
+                                                if (editingConnector) return
                                                 setPresetId(preset.id)
-                                                resetForm(preset)
+                                                resetForm(preset, editingConnector)
                                             }}
                                         >
                                             <Group gap="sm" align="flex-start" wrap="nowrap">
@@ -515,6 +624,11 @@ export default function Connectors() {
                                     </Grid.Col>
                                 ))}
                             </Grid>
+                            {editingConnector && (
+                                <Text size="xs" c="dimmed" mt="xs">
+                                    Connector type cannot be changed after creation. Re-enter credentials below to update settings.
+                                </Text>
+                            )}
                         </div>
 
                         {/* Display Name */}
@@ -538,6 +652,13 @@ export default function Connectors() {
                             value={form.watch('syncFrequency')}
                             onChange={(value) => form.setValue('syncFrequency', (value as ConnectorFormValues['syncFrequency']) ?? 'manual')}
                         />
+
+                        {editingConnector && (
+                            <Alert color="yellow" title="Re-enter credentials" radius="md">
+                                For security, saved credentials are hidden. Please re-enter any keys or URLs you want to update for{' '}
+                                {editingConnector.display_name ?? editingConnector.connector_name}.
+                            </Alert>
+                        )}
 
                         {/* Dynamic Fields */}
                         {selectedPreset.fields.map((field) =>
@@ -599,13 +720,21 @@ export default function Connectors() {
                             ),
                         )}
 
+                        {/* MCP Toggle */}
+                        <Switch
+                            label="Enable MCP tools for this connector"
+                            description="Start a background MCP server so AI agents can call ERP and CSV tools in-context."
+                            checked={Boolean(form.watch('enable_mcp'))}
+                            onChange={(e) => form.setValue('enable_mcp', e.currentTarget.checked)}
+                        />
+
                         {/* Action Buttons */}
                         <Group justify="space-between" mt="lg">
                             <Button type="button" variant="subtle" onClick={() => setModalOpen(false)}>
                                 Cancel
                             </Button>
-                            <Button type="submit" loading={createMutation.isPending}>
-                                {createMutation.isPending ? 'Connecting…' : 'Connect'}
+                            <Button type="submit" loading={isSaving}>
+                                {editingConnector ? (isSaving ? 'Saving…' : 'Save changes') : isSaving ? 'Connecting…' : 'Connect'}
                             </Button>
                         </Group>
                     </Stack>

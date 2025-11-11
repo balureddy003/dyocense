@@ -125,18 +125,30 @@ class MultiAgentCoach:
         self,
         agent_type: str,
         user_message: str,
-        business_context: Dict[str, Any]
+        business_context: Dict[str, Any],
+        tenant_id: str = None
     ) -> Dict[str, Any]:
-        """Invoke a specialized agent for the query"""
+        """Invoke a specialized agent for analysis or recommendations"""
         
-        if not MULTI_AGENT_AVAILABLE or not self.orchestrator:
+        if not MULTI_AGENT_AVAILABLE:
             return {"error": "Multi-agent system not available"}
         
-        # Extract actual business data for analysis
+        # Get data for this business
         data_sources = business_context.get("data_sources", {})
         health_score = business_context.get("health_score", {})
         goals = business_context.get("goals", [])
         tasks = business_context.get("tasks", [])
+        metrics = business_context.get("metrics", {})
+        
+        # Check for available connectors for this tenant
+        available_connectors = []
+        if tenant_id:
+            try:
+                from packages.agents.mcp_tools import get_tenant_connectors
+                available_connectors = get_tenant_connectors(tenant_id)
+                logger.info(f"Tenant {tenant_id} has connectors: {available_connectors}")
+            except Exception as e:
+                logger.warning(f"Could not get tenant connectors: {e}")
         
         # Prepare state for orchestrator with actual business data
         state: MultiAgentState = {
@@ -174,6 +186,9 @@ KEY BUSINESS METRICS:
 - Low Stock Items: {metrics.get('low_stock_items', 0)}
 - Out of Stock Items: {metrics.get('out_of_stock_items', 0)}
 - Total Inventory Value: ${metrics.get('total_inventory_value', 0):,.2f}
+
+CONNECTED DATA SOURCES:
+{f"- {', '.join(available_connectors)}" if available_connectors else "- None (using sample data)"}
 
 CURRENT BUSINESS HEALTH:
 - Overall Score: {health_score.get('score', 0)}/100
@@ -483,7 +498,8 @@ Respond naturally to help them understand and act on the analysis."""
             agent_results = await self._invoke_specialized_agent(
                 specialized_agent,
                 user_message,
-                business_context
+                business_context,
+                tenant_id
             )
             
             state["active_agent"] = specialized_agent

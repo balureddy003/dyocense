@@ -29,6 +29,13 @@ except ImportError:
     ToolNode = None
     BaseMessage = None
 
+try:
+    from .mcp_tools import get_available_mcp_tools, execute_mcp_tool, get_tenant_connectors
+    MCP_TOOLS_AVAILABLE = True
+except ImportError:
+    MCP_TOOLS_AVAILABLE = False
+    logger.warning("MCP tools not available")
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +45,8 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     user_goal: str
     current_agent: str
+    tenant_id: Optional[str]  # Added for tenant-specific connector access
+    available_connectors: Optional[List[str]]  # ERPNext, CSV, etc.
     goal_analysis: Optional[Dict[str, Any]]
     data_analysis: Optional[Dict[str, Any]]
     model_results: Optional[Dict[str, Any]]
@@ -571,14 +580,23 @@ class OrchestratorAgent:
         self.graph = workflow.compile()
         return self.graph
     
-    async def process_goal(self, user_goal: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def process_goal(self, user_goal: str, context: Dict[str, Any] = None, tenant_id: str = None) -> Dict[str, Any]:
         """Process a user goal through the multi-agent system."""
+        context = context or {}
+        
+        # Get available connectors for tenant
+        available_connectors = []
+        if MCP_TOOLS_AVAILABLE and tenant_id:
+            available_connectors = get_tenant_connectors(tenant_id)
+        
         initial_state: AgentState = {
             "messages": [HumanMessage(content=user_goal)],
             "user_goal": user_goal,
             "current_agent": "orchestrator",
+            "tenant_id": tenant_id,
+            "available_connectors": available_connectors,
             "goal_analysis": None,
-            "data_analysis": context.get("data_analysis") if context else None,
+            "data_analysis": context.get("data_analysis"),
             "model_results": None,
             "recommendations": None,
             "next_agent": "goal_analyzer",
@@ -589,7 +607,7 @@ class OrchestratorAgent:
         
         if not LANGGRAPH_AVAILABLE or not self.graph:
             logger.info("Using fallback mode without LangGraph")
-            return await self._fallback_process(user_goal, context or {})
+            return await self._fallback_process(user_goal, context)
         
         # Run the graph
         final_state = await self.graph.ainvoke(initial_state)

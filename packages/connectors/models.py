@@ -30,6 +30,10 @@ class ConnectorMetadata(BaseModel):
     last_sync_duration: Optional[float] = None  # seconds
     error_message: Optional[str] = None
     last_error_at: Optional[datetime] = None
+    mcp_enabled: bool = False  # whether MCP tooling is enabled for this connector
+    mcp_process_id: Optional[int] = None  # PID of spawned MCP server if any
+    mcp_started_at: Optional[datetime] = None
+    mcp_last_heartbeat: Optional[datetime] = None
 
 
 class TenantConnector(BaseModel):

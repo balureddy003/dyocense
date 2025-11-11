@@ -24,7 +24,14 @@ class CredentialEncryption:
         Args:
             encryption_key: Base64-encoded Fernet key. If None, reads from CONNECTOR_ENCRYPTION_KEY env var.
         """
+        self.plaintext_mode = os.getenv("CONNECTOR_PLAINTEXT", "0").lower() in {"1", "true", "yes"}
+
         key = encryption_key or os.getenv("CONNECTOR_ENCRYPTION_KEY")
+
+        if self.plaintext_mode:
+            logger.warning("CONNECTOR_PLAINTEXT enabled: connector credentials will be stored unencrypted. DO NOT USE IN PRODUCTION.")
+            self.cipher = None
+            return
         
         if not key:
             # Generate a new key for development (NOT for production)
@@ -54,6 +61,8 @@ class CredentialEncryption:
         """
         try:
             config_json = json.dumps(config)
+            if self.plaintext_mode or not self.cipher:
+                return config_json
             encrypted = self.cipher.encrypt(config_json.encode())
             return encrypted.decode()
         except Exception as e:
@@ -74,6 +83,11 @@ class CredentialEncryption:
             ValueError: If decryption fails (invalid key or corrupted data)
         """
         try:
+            if self.plaintext_mode or not self.cipher:
+                if isinstance(encrypted_config, (bytes, bytearray)):
+                    return json.loads(encrypted_config.decode())
+                return json.loads(encrypted_config)
+
             decrypted = self.cipher.decrypt(encrypted_config.encode())
             config = json.loads(decrypted.decode())
             return config

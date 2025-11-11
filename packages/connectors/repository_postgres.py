@@ -178,7 +178,12 @@ class ConnectorRepositoryPG:
         # If using RealDictCursor we'll have dict access; otherwise index positions vary.
         if isinstance(row, dict):
             encrypted_bytes = row.get("config_encrypted") or b""
-            encrypted_config = encrypted_bytes.decode() if isinstance(encrypted_bytes, (bytes, bytearray)) else str(encrypted_bytes)
+            if isinstance(encrypted_bytes, memoryview):
+                encrypted_bytes = encrypted_bytes.tobytes()
+            if isinstance(encrypted_bytes, (bytes, bytearray)):
+                encrypted_config = encrypted_bytes.decode()
+            else:
+                encrypted_config = str(encrypted_bytes)
             metadata_raw = metadata_dict if isinstance(metadata_dict, dict) else {}
             meta = ConnectorMetadata(**metadata_raw) if isinstance(metadata_raw, dict) else ConnectorMetadata()
             return TenantConnector(
@@ -265,7 +270,25 @@ class ConnectorRepositoryPG:
         with self._backend.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(update_sql, [status.value, meta.model_dump_json(), connector_id])
-                return cur.rowcount > 0
+                updated = cur.rowcount > 0
+            if updated:
+                conn.commit()
+            return updated
+
+    def update_metadata_flag(self, connector_id: str, **flags) -> bool:
+        """Update JSONB metadata flags (e.g., mcp_enabled)."""
+        connector = self.get_by_id(connector_id)
+        if not connector:
+            return False
+        # Merge flags into existing metadata
+        meta = connector.metadata.model_dump()
+        meta.update(flags)
+        sql = "UPDATE connectors.connectors SET metadata=%s, updated_at=NOW() WHERE connector_id=%s"
+        with self._backend.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [ConnectorMetadata(**meta).model_dump_json(), connector_id])
+            conn.commit()
+        return True
 
     def update_sync_info(self, connector_id: str, total_records: int, duration: float) -> bool:
         connector = self.get_by_id(connector_id)
@@ -282,7 +305,10 @@ class ConnectorRepositoryPG:
         with self._backend.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(update_sql, [ConnectorStatus.ACTIVE.value, meta.model_dump_json(), connector_id])
-                return cur.rowcount > 0
+                updated = cur.rowcount > 0
+            if updated:
+                conn.commit()
+            return updated
 
     # ------------------------------------------------------------------
     # Delete
@@ -293,6 +319,7 @@ class ConnectorRepositoryPG:
             with conn.cursor() as cur:
                 cur.execute(sql, [connector_id, tenant_id])
                 deleted = cur.rowcount > 0
+            conn.commit()
         if deleted:
             logger.info(f"Deleted connector {connector_id} (tenant={tenant_id}) from Postgres")
         return deleted

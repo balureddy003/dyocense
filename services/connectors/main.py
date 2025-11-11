@@ -7,10 +7,13 @@ Supports OAuth flows, API key authentication, and connector testing.
 
 import logging
 import os
+import subprocess
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, Any, cast
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -30,6 +33,124 @@ from packages.connectors.testing import ConnectorTester
 from packages.connectors.catalog import CONNECTOR_CATALOG
 
 logger = logging.getLogger(__name__)
+
+ERP_MCP_SCRIPT = Path(__file__).with_name("erpnext_mcp.py")
+CSV_MCP_SCRIPT = Path(__file__).with_name("csv_mcp.py")
+CSV_DATA_DIR = os.getenv("CSV_DATA_DIR", "/data/csv")
+
+# Track per-connector MCP processes
+erp_mcp_processes: dict[str, subprocess.Popen] = {}
+csv_mcp_processes: dict[str, subprocess.Popen] = {}
+
+
+def _erp_mcp_is_running(connector_id: str) -> bool:
+    proc = erp_mcp_processes.get(connector_id)
+    return proc is not None and (proc.poll() is None)
+
+
+def _start_erp_mcp_for(tenant_id: str, connector_id: str) -> None:
+    if not ERP_MCP_SCRIPT.exists():
+        logger.warning("ERPNext MCP script not found at %s", ERP_MCP_SCRIPT)
+        return
+    if _erp_mcp_is_running(connector_id):
+        return
+    cmd = [sys.executable, str(ERP_MCP_SCRIPT), "--tenant", tenant_id, "--connector", connector_id]
+    env = os.environ.copy()
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
+        erp_mcp_processes[connector_id] = proc
+        logger.info("Started ERPNext MCP for %s (pid=%s)", connector_id, proc.pid)
+    except Exception as exc:
+        logger.error("Failed to launch ERPNext MCP for %s: %s", connector_id, exc)
+
+
+def _stop_erp_mcp_for(connector_id: str) -> None:
+    proc = erp_mcp_processes.get(connector_id)
+    if not proc:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+        erp_mcp_processes.pop(connector_id, None)
+        logger.info("ERPNext MCP for %s terminated", connector_id)
+    except Exception as exc:
+        logger.warning("Failed to stop ERPNext MCP for %s: %s", connector_id, exc)
+
+
+def _csv_mcp_is_running(connector_id: str) -> bool:
+    proc = csv_mcp_processes.get(connector_id)
+    return proc is not None and (proc.poll() is None)
+
+def _start_csv_mcp_for(tenant_id: str, connector_id: str, data_dir: str | None = None) -> None:
+    if not CSV_MCP_SCRIPT.exists():
+        logger.warning("CSV MCP script not found at %s", CSV_MCP_SCRIPT)
+        return
+    if _csv_mcp_is_running(connector_id):
+        return
+    cmd = [sys.executable, str(CSV_MCP_SCRIPT), "--tenant", tenant_id, "--connector", connector_id]
+    env = os.environ.copy()
+    if data_dir:
+        env["CSV_DATA_DIR"] = data_dir
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
+        csv_mcp_processes[connector_id] = proc
+        logger.info("Started CSV MCP for %s (pid=%s)", connector_id, proc.pid)
+    except Exception as exc:
+        logger.error("Failed to launch CSV MCP for %s: %s", connector_id, exc)
+
+
+def _stop_csv_mcp_for(connector_id: str) -> None:
+    proc = csv_mcp_processes.get(connector_id)
+    if not proc:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+        csv_mcp_processes.pop(connector_id, None)
+        logger.info("CSV MCP for %s terminated", connector_id)
+    except Exception as exc:
+        logger.warning("Failed to stop CSV MCP for %s: %s", connector_id, exc)
+
+
+# Back-compat server lifecycle helpers used by lifespan()
+def _start_erp_mcp_server() -> None:
+    """Server-level ERP MCP startup.
+
+    No-op by design: MCP now starts per-connector when enable_mcp is set during
+    create/update. We keep this function to maintain backward compatibility with
+    existing lifespan() calls without failing at import time.
+    """
+    logger.info("ERP MCP server startup deferred; managed per-connector enable_mcp")
+
+
+def _stop_erp_mcp_server() -> None:
+    """Terminate all running ERP MCP processes (if any)."""
+    for connector_id in list(erp_mcp_processes.keys()):
+        try:
+            _stop_erp_mcp_for(connector_id)
+        except Exception as e:
+            logger.warning("Error stopping ERP MCP for %s: %s", connector_id, e)
+
+
+def _start_csv_mcp_server() -> None:
+    """Server-level CSV MCP startup is a no-op; handled per-connector."""
+    logger.info("CSV MCP server startup deferred; managed per-connector enable_mcp")
+
+
+def _stop_csv_mcp_server() -> None:
+    """Terminate all running CSV MCP processes (if any)."""
+    for connector_id in list(csv_mcp_processes.keys()):
+        try:
+            _stop_csv_mcp_for(connector_id)
+        except Exception as e:
+            logger.warning("Error stopping CSV MCP for %s: %s", connector_id, e)
+
+
+def _is_truthy(value: str | None, default: bool = False) -> bool:
+    """Helper to interpret environment variables as booleans."""
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 # Initialize repository based on configured backend
 BACKEND = os.getenv("PERSISTENCE_BACKEND", "postgres").lower()
@@ -53,12 +174,42 @@ else:
     logger.info("Connectors repository: Postgres")
 connector_tester = ConnectorTester()
 
+DEV_AUTH_BYPASS = _is_truthy(os.getenv("CONNECTOR_DEV_DISABLE_AUTH"))
+DEV_AUTH_TENANT = os.getenv("CONNECTOR_DEV_TENANT_ID")
+DEV_AUTH_SUBJECT = os.getenv("CONNECTOR_DEV_SUBJECT", "dev-bypass")
+
+
+async def connector_identity(authorization: str = Header(default="")) -> dict:
+    """
+    Development-friendly auth shim.
+
+    When CONNECTOR_DEV_DISABLE_AUTH is enabled we only require a tenant identifier
+    from the environment and allow requests without a bearer token. In all other
+    scenarios we fall back to the shared require_auth dependency.
+    """
+    if not DEV_AUTH_BYPASS:
+        return await require_auth(authorization)
+
+    if authorization:
+        try:
+            return await require_auth(authorization)
+        except HTTPException as exc:
+            logger.warning("Bearer token rejected (%s); falling back to dev bypass", exc.detail)
+
+    tenant_id = DEV_AUTH_TENANT or os.getenv("DEFAULT_TENANT_ID") or "dev-tenant"
+    logger.debug("CONNECTOR_DEV_DISABLE_AUTH active. Using tenant_id=%s", tenant_id)
+    return {"tenant_id": tenant_id, "sub": DEV_AUTH_SUBJECT}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting Connectors service...")
+    _start_erp_mcp_server()
+    _start_csv_mcp_server()
     yield
+    _stop_erp_mcp_server()
+    _stop_csv_mcp_server()
     logger.info("Shutting down Connectors service...")
     if mongo_client is not None:
         try:
@@ -102,6 +253,7 @@ class CreateConnectorRequest(BaseModel):
     display_name: str = Field(..., description="User-friendly name for this connection")
     config: dict = Field(..., description="Connector configuration and credentials")
     sync_frequency: SyncFrequency = Field(default=SyncFrequency.MANUAL)
+    enable_mcp: bool = Field(default=False, description="Enable MCP server for this connector")
 
 
 class UpdateConnectorRequest(BaseModel):
@@ -110,6 +262,7 @@ class UpdateConnectorRequest(BaseModel):
     config: Optional[dict] = None
     sync_frequency: Optional[SyncFrequency] = None
     status: Optional[ConnectorStatus] = None
+    enable_mcp: Optional[bool] = Field(default=None, description="Toggle MCP server for this connector")
 
 
 class TestConnectorRequest(BaseModel):
@@ -188,6 +341,18 @@ async def create_connector(
         created_by=user_id,
         sync_frequency=payload.sync_frequency.value,
     )
+    # Optionally enable MCP right after creation
+    if payload.enable_mcp:
+        try:
+            # Mark metadata and start MCP depending on connector type
+            if connector.connector_type == "erpnext":
+                _start_erp_mcp_for(tenant_id, connector.connector_id)
+            elif connector.connector_type in {"csv_upload", "google-drive"}:
+                _start_csv_mcp_for(tenant_id, connector.connector_id)
+            # Update metadata
+            connector_repo.update_metadata_flag(connector.connector_id, mcp_enabled=True)
+        except Exception as e:
+            logger.warning("Failed to start MCP for %s: %s", connector.connector_id, e)
     
     logger.info(f"Created connector {connector.connector_id} for tenant {tenant_id}")
     
@@ -259,7 +424,7 @@ async def update_connector(
     tenant_id: str,
     connector_id: str,
     payload: UpdateConnectorRequest,
-    identity: dict = Depends(require_auth)
+    identity: dict = Depends(connector_identity)
 ) -> ConnectorResponse:
     """
     Update a connector's configuration.
@@ -269,7 +434,7 @@ async def update_connector(
     auth_tenant_id = identity["tenant_id"]
     
     # Verify tenant ownership
-    if tenant_id != auth_tenant_id:
+    if not DEV_AUTH_BYPASS and tenant_id != auth_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
@@ -288,8 +453,11 @@ async def update_connector(
             detail="Connector not found"
         )
     
-    # Determine new status: explicit override or revert to testing when config changes
-    new_status = payload.status or (ConnectorStatus.TESTING if payload.config is not None else connector.status)
+    # Determine new status: explicit override or fall back to inactive when credentials change
+    requested_status = payload.status or (ConnectorStatus.TESTING if payload.config is not None else connector.status)
+    if requested_status == ConnectorStatus.TESTING:
+        # Database constraint only allows active/inactive/error/deleted; treat "testing" as "inactive"
+        requested_status = ConnectorStatus.INACTIVE
 
     updated = connector_repo.update(
         connector_id,
@@ -297,7 +465,7 @@ async def update_connector(
         display_name=payload.display_name,
         config=payload.config,
         sync_frequency=payload.sync_frequency.value if payload.sync_frequency else None,
-        status=new_status,
+        status=requested_status,
     )
 
     if not updated:
@@ -306,7 +474,27 @@ async def update_connector(
             detail="Failed to update connector"
         )
 
-    logger.info("Connector %s updated by %s", connector_id, identity["sub"])
+    # Handle MCP enable/disable toggle
+    if payload.enable_mcp is not None:
+        try:
+            if payload.enable_mcp:
+                if updated.connector_type == "erpnext":
+                    _start_erp_mcp_for(tenant_id, connector_id)
+                elif updated.connector_type in {"csv_upload", "google-drive"}:
+                    _start_csv_mcp_for(tenant_id, connector_id)
+                connector_repo.update_metadata_flag(connector_id, mcp_enabled=True)
+            else:
+                # Stop processes if running
+                if updated.connector_type == "erpnext":
+                    _stop_erp_mcp_for(connector_id)
+                elif updated.connector_type in {"csv_upload", "google-drive"}:
+                    _stop_csv_mcp_for(connector_id)
+                connector_repo.update_metadata_flag(connector_id, mcp_enabled=False, mcp_process_id=None)
+        except Exception as e:
+            logger.warning("Failed MCP toggle for %s: %s", connector_id, e)
+
+    actor = identity.get("sub") if isinstance(identity, dict) else "system"
+    logger.info("Connector %s updated by %s", connector_id, actor)
     return ConnectorResponse.from_model(updated)
 
 
@@ -314,7 +502,7 @@ async def update_connector(
 def delete_connector(
     tenant_id: str,
     connector_id: str,
-    identity: dict = Depends(require_auth)
+    identity: dict = Depends(connector_identity)
 ):
     """
     Delete a connector.
@@ -324,7 +512,7 @@ def delete_connector(
     auth_tenant_id = identity["tenant_id"]
     
     # Verify tenant ownership
-    if tenant_id != auth_tenant_id:
+    if not DEV_AUTH_BYPASS and tenant_id != auth_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
@@ -382,7 +570,7 @@ async def test_connector_by_id(
                     message="Missing ERPNext credentials (api_url, api_key, api_secret required)",
                     error_code="MISSING_CREDENTIALS"
                 )
-            erp_config = ERPNextConfig(api_url=api_url, api_key=api_key, api_secret=api_secret)
+            erp_config = ERPNextConfig(api_url=api_url, api_key=cast(str, api_key), api_secret=cast(str, api_secret))
             try:
                 data = await sync_erpnext_data(erp_config)
                 connector_repo.update_status(connector_id, ConnectorStatus.ACTIVE)

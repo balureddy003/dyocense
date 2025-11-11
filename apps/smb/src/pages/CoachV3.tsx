@@ -1,4 +1,4 @@
-import { Alert, Badge, Box, Button, Card, Collapse, Group, Progress, ScrollArea, Stack, Text, Textarea, TextInput, Title } from '@mantine/core'
+import { Alert, Badge, Box, Button, Card, Chip, Collapse, Group, Progress, ScrollArea, Stack, Text, Textarea, TextInput, Title, Tooltip } from '@mantine/core'
 import {
     IconArrowRight,
     IconChecklist,
@@ -14,7 +14,9 @@ import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import CoachSettings from '../components/CoachSettings'
 import { ModelSettingsPopover } from '../components/ModelSettingsPopover'
+import { useConnectorsQuery } from '../hooks/useConnectors'
 import { get, post } from '../lib/api'
+import { getTenantToolsAndPrompts } from '../lib/toolSuggestions'
 import { useAuthStore } from '../stores/auth'
 import { useTemplateStore } from '../stores/template'
 
@@ -293,6 +295,12 @@ export default function CoachV3() {
     const [isLoading, setIsLoading] = useState(false)
     const [input, setInput] = useState('')
     const [showContextPanel, setShowContextPanel] = useState(false)
+    // Connector-aware suggestions
+    const connectorsQuery = useConnectorsQuery(apiToken, tenantId, { enabled: Boolean(apiToken && tenantId) })
+    const { tools: suggestedTools, prompts: suggestedPrompts } = getTenantToolsAndPrompts(connectorsQuery.data)
+    const handleInsertPrompt = (text: string) => {
+        setInput((prev) => (prev && !prev.endsWith(' ') ? prev + ' ' + text : prev + text))
+    }
 
     const scrollAreaRef = useRef<HTMLDivElement>(null)
     const messages = agentConversations[selectedPersona] || []
@@ -771,6 +779,57 @@ export default function CoachV3() {
                         </div>
                     </div>
                 )}
+
+                {/* Connector-aware Tools & Suggested Prompts */}
+                <div style={{ borderBottom: '1px solid #e5e7eb', background: '#ffffff' }}>
+                    <div style={{ maxWidth: 900, margin: '0 auto', padding: '16px 24px' }}>
+                        <Group align="flex-start" grow>
+                            <Card withBorder radius="md" p="md">
+                                <Group justify="space-between" mb="xs">
+                                    <Group gap="xs">
+                                        <Text fw={600} size="sm">Available tools</Text>
+                                        {connectorsQuery.isFetching && <Badge size="xs" variant="light">Refreshing…</Badge>}
+                                    </Group>
+                                    <Badge size="xs" color={suggestedTools.length ? 'green' : 'gray'} variant="light">
+                                        {suggestedTools.length} tool{suggestedTools.length === 1 ? '' : 's'}
+                                    </Badge>
+                                </Group>
+                                {suggestedTools.length ? (
+                                    <Group gap="xs" wrap="wrap">
+                                        {suggestedTools.map((t) => (
+                                            <Chip key={t.id} radius="xl" variant="light">
+                                                <Tooltip label={t.description || ''}>{t.label}</Tooltip>
+                                            </Chip>
+                                        ))}
+                                    </Group>
+                                ) : (
+                                    <Text size="xs" c="dimmed">Connect ERPNext or upload a CSV to unlock data-aware actions.</Text>
+                                )}
+                            </Card>
+                            <Card withBorder radius="md" p="md">
+                                <Group justify="space-between" mb="xs">
+                                    <Text fw={600} size="sm">Suggested prompts</Text>
+                                    <Badge size="xs" color={suggestedPrompts.length ? 'blue' : 'gray'} variant="light">
+                                        {suggestedPrompts.length} suggestion{suggestedPrompts.length === 1 ? '' : 's'}
+                                    </Badge>
+                                </Group>
+                                <Stack gap="xs">
+                                    {suggestedPrompts.length ? suggestedPrompts.map((p) => (
+                                        <Group key={p.id} justify="space-between" align="flex-start" gap="xs">
+                                            <div style={{ flex: 1 }}>
+                                                <Text fw={500} size="xs">{p.title}</Text>
+                                                <Text size="xs" c="dimmed" lineClamp={3}>{p.text}</Text>
+                                            </div>
+                                            <Button size="xs" variant="light" onClick={() => handleInsertPrompt(p.text)}>Use</Button>
+                                        </Group>
+                                    )) : (
+                                        <Text size="xs" c="dimmed">Connect a data source to get contextual one-click prompts.</Text>
+                                    )}
+                                </Stack>
+                            </Card>
+                        </Group>
+                    </div>
+                </div>
 
                 {/* Coach Settings Modal */}
                 <CoachSettings

@@ -138,6 +138,7 @@ export type TenantConnector = {
         total_records?: number
         last_sync_duration?: number
         error_message?: string
+        mcp_enabled?: boolean
     }
 }
 
@@ -146,6 +147,14 @@ export type ConnectorTestResponse = {
     message: string
     details?: Record<string, unknown>
     error_code?: string
+}
+
+export type UpdateConnectorPayload = {
+    display_name?: string
+    config?: Record<string, unknown>
+    sync_frequency?: string
+    status?: ConnectorStatus
+    enable_mcp?: boolean
 }
 
 export async function fetchCatalog(token?: string): Promise<CatalogItem[]> {
@@ -198,7 +207,7 @@ export async function fetchConnectorCatalog(token?: string): Promise<ConnectorCa
     return data?.connectors ?? []
 }
 
-export async function createConnector(payload: { connector_type: string; display_name: string; config: Record<string, unknown>; sync_frequency?: string }, token?: string, tenantId?: string) {
+export async function createConnector(payload: { connector_type: string; display_name: string; config: Record<string, unknown>; sync_frequency?: string; enable_mcp?: boolean }, token?: string, tenantId?: string) {
     if (!tenantId) throw new Error('Tenant ID required')
     return post(`/v1/tenants/${tenantId}/connectors`, payload, token)
 }
@@ -216,4 +225,9 @@ export async function testConnector(connectorId: string, token?: string, tenantI
 export async function testConnectorConfig(payload: { connector_type: string; config: Record<string, unknown> }, token?: string, tenantId?: string) {
     if (!tenantId) throw new Error('Tenant ID required')
     return post(`/v1/tenants/${tenantId}/connectors/test`, payload, token)
+}
+
+export async function updateConnector(connectorId: string, payload: UpdateConnectorPayload, token?: string, tenantId?: string) {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return put(`/v1/tenants/${tenantId}/connectors/${connectorId}`, payload, token)
 }
