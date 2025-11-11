@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+import importlib
+import logging
 import os
 
 # Load environment variables from .env early so persistence/backends honor settings
@@ -13,51 +15,62 @@ except Exception:
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from services.compiler.main import app as compiler_app
-from services.forecast.main import app as forecast_app
-from services.policy.main import app as policy_app
-from services.optimiser.main import app as optimiser_app
-from services.diagnostician.main import app as diagnostician_app
-from services.explainer.main import app as explainer_app
-from services.evidence.main import app as evidence_app
-from services.marketplace.main import app as marketplace_app
-from services.orchestrator.main import app as orchestrator_app
-from services.plan.main import app as planner_app
-from services.smb_gateway.main import app as smb_gateway_app
-from services.accounts.main import app as accounts_app
-from services.chat.main import app as chat_app
-from services.analyze.main import app as analyze_app
-from services.connectors.main import app as connectors_app
 from packages.kernel_common import persistence
 from packages.kernel_common.auth import get_auth_health
 from packages.kernel_common.keystone import health_check as get_keystone_health
 
+logger = logging.getLogger("kernel")
+
+
+def _load_service(module_path: str) -> FastAPI | None:
+    try:
+        module = importlib.import_module(module_path)
+        return getattr(module, "app")
+    except Exception as exc:  # pragma: no cover - best effort import
+        logger.warning("Skipping %s because it failed to import: %s", module_path, exc)
+        return None
+
+
+accounts_app = _load_service("services.accounts.main")
+chat_app = _load_service("services.chat.main")
+compiler_app = _load_service("services.compiler.main")
+forecast_app = _load_service("services.forecast.main")
+policy_app = _load_service("services.policy.main")
+optimiser_app = _load_service("services.optimiser.main")
+diagnostician_app = _load_service("services.diagnostician.main")
+explainer_app = _load_service("services.explainer.main")
+evidence_app = _load_service("services.evidence.main")
+marketplace_app = _load_service("services.marketplace.main")
+orchestrator_app = _load_service("services.orchestrator.main")
+planner_app = _load_service("services.plan.main")
+analyze_app = _load_service("services.analyze.main")
+smb_gateway_app = _load_service("services.smb_gateway.main")
+
 SUB_APPS = [
-    accounts_app,
-    chat_app,
-    compiler_app,
-    forecast_app,
-    policy_app,
-    optimiser_app,
-    diagnostician_app,
-    explainer_app,
-    evidence_app,
-    marketplace_app,
-    orchestrator_app,
-    planner_app,
-    analyze_app,
-    smb_gateway_app,
-    connectors_app,
+    app
+    for app in [
+        accounts_app,
+        chat_app,
+        compiler_app,
+        forecast_app,
+        policy_app,
+        optimiser_app,
+        diagnostician_app,
+        explainer_app,
+        evidence_app,
+        marketplace_app,
+        orchestrator_app,
+        planner_app,
+        analyze_app,
+        smb_gateway_app,
+    ]
+    if app is not None
 ]
 
-# Optionally include connectors service (requires MongoDB) only if enabled
-try:
-    if os.getenv("ENABLE_CONNECTORS_SERVICE", "false").lower() in ("1", "true", "yes", "on"):
-        from services.connectors.main import app as connectors_app  # defer import to avoid Mongo requirement
+if os.getenv("ENABLE_CONNECTORS_SERVICE", "false").lower() in ("1", "true", "yes", "on"):
+    connectors_app = _load_service("services.connectors.main")
+    if connectors_app:
         SUB_APPS.insert(2, connectors_app)
-except Exception as e:
-    import logging
-    logging.getLogger("kernel").warning(f"Connectors service disabled or failed to load: {e}")
 
 app = FastAPI(
     title="Dyocense Kernel API",
@@ -90,12 +103,13 @@ for sub_app in SUB_APPS:
         logging.getLogger("kernel").warning(f"Skipping router for sub-app due to error: {e}")
 
 # Back-compat: also expose Accounts under /api/accounts for UIs expecting this prefix
-try:
-    # accounts_app is imported above
-    app.mount("/api/accounts", accounts_app)
-except Exception as e:  # pragma: no cover
-    import logging
-    logging.getLogger("kernel").warning(f"Failed to mount accounts under /api/accounts: {e}")
+if accounts_app is not None:
+    try:
+        app.mount("/api/accounts", accounts_app)
+    except Exception as e:  # pragma: no cover
+        logger.warning("Failed to mount accounts under /api/accounts: %s", e)
+else:
+    logger.warning("Accounts service unavailable; skipping /api/accounts mount.")
 
 
 @app.get("/healthz", tags=["system"])
