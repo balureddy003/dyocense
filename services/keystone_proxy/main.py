@@ -2,9 +2,9 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 import httpx
 import os
-import logging
 
-logging.basicConfig(level=logging.INFO)
+from packages.kernel_common.logging import configure_logging
+logger = configure_logging("keystone-proxy")
 app = FastAPI(title="Keystone Proxy API")
 
 # Config via env
@@ -15,7 +15,7 @@ def require_api_key(x_api_key: str | None = Header(None)):
     """Dependency that enforces a proxy API key when PROXY_API_KEY is set in env."""
     if PROXY_API_KEY:
         if not x_api_key or x_api_key != PROXY_API_KEY:
-            logging.warning("Unauthorized request, missing or invalid x-api-key header")
+            logger.warning("Unauthorized request, missing or invalid x-api-key header")
             raise HTTPException(status_code=401, detail="Unauthorized")
     return True
 
@@ -31,15 +31,15 @@ async def run_graphql(query: str, variables: dict | None = None):
         try:
             resp = await client.post(KEYSTONE_GRAPHQL, json={"query": query, "variables": variables}, timeout=10.0)
         except httpx.RequestError as e:
-            logging.exception("GraphQL request failed")
+            logger.exception("GraphQL request failed")
             raise HTTPException(status_code=502, detail="Unable to reach Keystone GraphQL")
 
         if resp.status_code != 200:
-            logging.error("Keystone returned status %s: %s", resp.status_code, resp.text)
+            logger.error("Keystone returned status %s: %s", resp.status_code, resp.text)
             raise HTTPException(status_code=502, detail="Keystone GraphQL error")
         body = resp.json()
         if body.get("errors"):
-            logging.error("GraphQL errors: %s", body.get("errors"))
+            logger.error("GraphQL errors: %s", body.get("errors"))
             raise HTTPException(status_code=400, detail=body.get("errors"))
         return body.get("data")
 

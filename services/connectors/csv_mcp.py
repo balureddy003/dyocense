@@ -9,35 +9,92 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
-from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-# Initialize FastMCP server
-mcp = FastMCP(
-    name="csv-server",
-    version="1.0.0",
-    description="Provides access to CSV data files with query and analysis capabilities",
-)
+# Optional MCP import; use minimal constructor signature for widest compatibility
+try:
+    from mcp.server.fastmcp import FastMCP
+    mcp = FastMCP("csv-server")  # Most versions accept just the name as positional
+    MCP_AVAILABLE = True
+except Exception as exc:  # Broad catch to handle ImportError or TypeError
+    logger.warning("CSV MCP server disabled (%s)", exc)
+    mcp = None
+    MCP_AVAILABLE = False
 
 # Get CSV directory from environment
-CSV_DATA_DIR = os.getenv("CSV_DATA_DIR", "/data/csv")
+# Use a writable directory for CSV data
+# In production, set CSV_DATA_DIR env var to a persistent volume
+_default_csv_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "csv")
+CSV_DATA_DIR = os.getenv("CSV_DATA_DIR", _default_csv_dir)
+
+# Tenant and connector context (set via CLI args)
+TENANT_ID: Optional[str] = None
+CONNECTOR_ID: Optional[str] = None
+
+
+def _parse_filename_metadata(filename: str) -> dict[str, str]:
+    """
+    Parse connector metadata from CSV filename.
+    
+    Expected format: {connector_id}_{data_type}.csv
+    Example: conn-abc123xyz_sales_data.csv
+    
+    Returns:
+        Dict with connector_id, data_type, and source_description
+    """
+    try:
+        # Remove .csv extension
+        name_without_ext = filename.replace('.csv', '')
+        
+        # Split on first underscore to separate connector_id from data_type
+        parts = name_without_ext.split('_', 1)
+        
+        if len(parts) == 2:
+            connector_id, data_type = parts
+            return {
+                "connector_id": connector_id,
+                "data_type": data_type,
+                "source_description": f"{data_type.replace('_', ' ').title()} from connector {connector_id}"
+            }
+        else:
+            # Fallback for non-standard filenames
+            return {
+                "connector_id": "unknown",
+                "data_type": name_without_ext,
+                "source_description": f"Data from {filename}"
+            }
+    except Exception as e:
+        logger.warning(f"Failed to parse filename metadata: {e}")
+        return {
+            "connector_id": "unknown",
+            "data_type": "unknown",
+            "source_description": f"Data from {filename}"
+        }
+
+
+def _get_tenant_csv_dir() -> Path:
+    """Get the tenant-specific CSV directory."""
+    base_path = Path(CSV_DATA_DIR)
+    if TENANT_ID:
+        return base_path / TENANT_ID
+    return base_path
 
 
 def _get_csv_path(filename: str) -> Path:
-    """Resolve CSV file path, ensuring it's within the data directory."""
-    base_path = Path(CSV_DATA_DIR).resolve()
+    """Resolve CSV file path, ensuring it's within the tenant's data directory."""
+    base_path = _get_tenant_csv_dir().resolve()
     file_path = (base_path / filename).resolve()
     
-    # Security: ensure path is within CSV_DATA_DIR
+    # Security: ensure path is within tenant's CSV directory
     if not str(file_path).startswith(str(base_path)):
         raise ValueError(f"Access denied: {filename} is outside data directory")
     
     if not file_path.exists():
-        raise FileNotFoundError(f"CSV file not found: {filename}")
+        raise FileNotFoundError(f"CSV file not found: {filename}. Available files: {_get_available_files()}")
     
     return file_path
 
@@ -49,8 +106,8 @@ def _load_csv(filename: str, **kwargs) -> pd.DataFrame:
 
 
 def _get_available_files() -> List[str]:
-    """List all CSV files in the data directory."""
-    base_path = Path(CSV_DATA_DIR)
+    """List all CSV files in the tenant's data directory."""
+    base_path = _get_tenant_csv_dir()
     if not base_path.exists():
         return []
     
@@ -64,98 +121,110 @@ def _get_available_files() -> List[str]:
 
 # ===== Resources =====
 
-@mcp.resource(uri_template="csv://files")
-def list_csv_files() -> str:
-    """List all available CSV files in the data directory."""
+RESOURCE_ERROR = "CSV MCP server disabled because mcp package is not installed."
+
+
+def _resource_unavailable() -> str:
+    raise RuntimeError(RESOURCE_ERROR)
+
+
+def _tool_unavailable(*args: object, **kwargs: object) -> dict[str, object]:
+    raise RuntimeError(RESOURCE_ERROR)
+
+
+def _list_csv_files_payload() -> str:
     files = _get_available_files()
-    return json.dumps({
-        "data_directory": CSV_DATA_DIR,
-        "files": files,
-        "count": len(files),
-    }, indent=2)
-
-
-@mcp.resource(uri_template="csv://file/{filename}/info")
-def get_csv_info(filename: str) -> str:
-    """Get metadata about a CSV file (columns, row count, sample data)."""
-    df = _load_csv(filename, nrows=5)
     
+    # Enrich file list with metadata
+    enriched_files = []
+    for filename in files:
+        metadata = _parse_filename_metadata(filename)
+        enriched_files.append({
+            "filename": filename,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "description": metadata["source_description"],
+        })
+    
+    return json.dumps(
+        {
+            "tenant_id": TENANT_ID,
+            "data_directory": CSV_DATA_DIR,
+            "files": enriched_files,
+            "count": len(files),
+        },
+        indent=2,
+    )
+
+
+def _get_csv_info_payload(filename: str) -> str:
+    df = _load_csv(filename, nrows=5)
+    metadata = _parse_filename_metadata(filename)
+
     info = {
         "filename": filename,
+        "connector_id": metadata["connector_id"],
+        "data_type": metadata["data_type"],
+        "source_description": metadata["source_description"],
         "columns": df.columns.tolist(),
         "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
         "sample_rows": df.to_dict(orient="records"),
     }
-    
-    # Try to get full row count without loading entire file
+
     try:
         full_df = _load_csv(filename)
         info["total_rows"] = len(full_df)
         info["memory_usage_mb"] = full_df.memory_usage(deep=True).sum() / 1024 / 1024
-    except Exception as e:
-        logger.warning(f"Could not get full file info: {e}")
+    except Exception as exc:
+        logger.warning("Could not get full file info: %s", exc)
         info["total_rows"] = "unknown"
-    
+
     return json.dumps(info, indent=2, default=str)
 
 
-@mcp.resource(uri_template="csv://file/{filename}/data")
-def get_csv_data(filename: str) -> str:
-    """Get full CSV data (use with caution for large files)."""
+def _get_csv_data_payload(filename: str) -> str:
     df = _load_csv(filename)
-    
-    return json.dumps({
-        "filename": filename,
-        "total_rows": len(df),
-        "columns": df.columns.tolist(),
-        "data": df.to_dict(orient="records"),
-    }, indent=2, default=str)
+    return json.dumps(
+        {
+            "filename": filename,
+            "total_rows": len(df),
+            "columns": df.columns.tolist(),
+            "data": df.to_dict(orient="records"),
+        },
+        indent=2,
+        default=str,
+    )
 
 
-# ===== Tools =====
-
-@mcp.tool()
-def query_csv(
+def _query_csv_payload(
     filename: str,
-    columns: Optional[List[str]] = None,
-    filters: Optional[Dict[str, Any]] = None,
+    columns: list[str] | None = None,
+    filters: dict[str, object] | None = None,
     limit: int = 100,
     offset: int = 0,
-) -> Dict[str, Any]:
-    """
-    Query CSV file with optional column selection and filtering.
-    
-    Args:
-        filename: Name of the CSV file
-        columns: List of columns to return (None = all columns)
-        filters: Dictionary of column:value pairs for exact match filtering
-        limit: Maximum number of rows to return
-        offset: Number of rows to skip (for pagination)
-    
-    Returns:
-        Dictionary with query results
-    """
+) -> dict[str, object]:
     df = _load_csv(filename)
-    
-    # Apply filters
+    metadata = _parse_filename_metadata(filename)
+
     if filters:
         for col, value in filters.items():
             if col in df.columns:
                 df = df[df[col] == value]
-    
-    # Select columns
+
     if columns:
         missing_cols = set(columns) - set(df.columns)
         if missing_cols:
             return {"error": f"Columns not found: {missing_cols}"}
         df = df[columns]
-    
-    # Apply pagination
+
     total_rows = len(df)
-    df = df.iloc[offset:offset + limit]
-    
+    df = df.iloc[offset : offset + limit]
+
     return {
         "filename": filename,
+        "connector_id": metadata["connector_id"],
+        "data_type": metadata["data_type"],
+        "source_description": metadata["source_description"],
         "total_rows": total_rows,
         "returned_rows": len(df),
         "offset": offset,
@@ -165,44 +234,42 @@ def query_csv(
     }
 
 
-@mcp.tool()
-def analyze_csv(filename: str, analysis_type: str = "summary") -> Dict[str, Any]:
-    """
-    Perform statistical analysis on CSV data.
-    
-    Args:
-        filename: Name of the CSV file
-        analysis_type: Type of analysis - 'summary', 'describe', 'missing', 'unique'
-    
-    Returns:
-        Analysis results
-    """
+def _analyze_csv_payload(filename: str, analysis_type: str = "summary") -> dict[str, object]:
     df = _load_csv(filename)
-    
+    metadata = _parse_filename_metadata(filename)
+
     if analysis_type == "summary":
         return {
             "filename": filename,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "source_description": metadata["source_description"],
             "total_rows": len(df),
             "total_columns": len(df.columns),
             "columns": df.columns.tolist(),
             "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
             "memory_usage_mb": df.memory_usage(deep=True).sum() / 1024 / 1024,
         }
-    
-    elif analysis_type == "describe":
-        # Get descriptive statistics for numeric columns
+
+    if analysis_type == "describe":
         desc = df.describe(include="all").to_dict()
         return {
             "filename": filename,
-            "statistics": desc,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "source_description": metadata["source_description"],
+            "analysis_type": "describe",
+            "describe": desc,
         }
-    
-    elif analysis_type == "missing":
-        # Find missing values
+
+    if analysis_type == "missing":
         missing = df.isnull().sum()
         missing_pct = (missing / len(df) * 100).round(2)
         return {
             "filename": filename,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "source_description": metadata["source_description"],
             "total_rows": len(df),
             "missing_values": {
                 col: {"count": int(count), "percentage": float(missing_pct[col])}
@@ -210,94 +277,66 @@ def analyze_csv(filename: str, analysis_type: str = "summary") -> Dict[str, Any]
                 if count > 0
             },
         }
-    
-    elif analysis_type == "unique":
-        # Get unique value counts for each column
+
+    if analysis_type == "unique":
         unique_counts = {col: int(df[col].nunique()) for col in df.columns}
         return {
             "filename": filename,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "source_description": metadata["source_description"],
             "unique_value_counts": unique_counts,
         }
-    
-    else:
-        return {"error": f"Unknown analysis type: {analysis_type}"}
+
+    return {"error": f"Unknown analysis type: {analysis_type}"}
 
 
-@mcp.tool()
-def aggregate_csv(
+def _aggregate_csv_payload(
     filename: str,
-    group_by: List[str],
-    aggregations: Dict[str, str],
-) -> Dict[str, Any]:
-    """
-    Perform groupby aggregation on CSV data.
-    
-    Args:
-        filename: Name of the CSV file
-        group_by: List of columns to group by
-        aggregations: Dictionary mapping column names to aggregation functions
-                     (e.g., {"sales": "sum", "quantity": "mean"})
-    
-    Returns:
-        Aggregated results
-    """
+    group_by: list[str],
+    aggregations: dict[str, str],
+) -> dict[str, object]:
     df = _load_csv(filename)
-    
-    # Validate group_by columns
+    metadata = _parse_filename_metadata(filename)
+
     missing_cols = set(group_by) - set(df.columns)
     if missing_cols:
         return {"error": f"Group by columns not found: {missing_cols}"}
-    
-    # Validate aggregation columns
+
     missing_agg_cols = set(aggregations.keys()) - set(df.columns)
     if missing_agg_cols:
         return {"error": f"Aggregation columns not found: {missing_agg_cols}"}
-    
+
     try:
-        # Perform aggregation
         result = df.groupby(group_by).agg(aggregations).reset_index()
-        
         return {
             "filename": filename,
+            "connector_id": metadata["connector_id"],
+            "data_type": metadata["data_type"],
+            "source_description": metadata["source_description"],
             "group_by": group_by,
             "aggregations": aggregations,
             "total_groups": len(result),
             "data": result.to_dict(orient="records"),
         }
-    except Exception as e:
-        return {"error": f"Aggregation failed: {str(e)}"}
+    except Exception as exc:
+        return {"error": f"Aggregation failed: {str(exc)}"}
 
 
-@mcp.tool()
-def search_csv(
+def _search_csv_payload(
     filename: str,
     search_column: str,
     search_term: str,
     match_type: str = "contains",
     limit: int = 100,
-) -> Dict[str, Any]:
-    """
-    Search for rows matching a search term.
-    
-    Args:
-        filename: Name of the CSV file
-        search_column: Column to search in
-        search_term: Term to search for
-        match_type: Type of match - 'contains', 'startswith', 'endswith', 'exact'
-        limit: Maximum number of results
-    
-    Returns:
-        Matching rows
-    """
+) -> dict[str, object]:
     df = _load_csv(filename)
-    
+
     if search_column not in df.columns:
         return {"error": f"Column not found: {search_column}"}
-    
-    # Convert to string for searching
+
     col_data = df[search_column].astype(str)
-    
-    # Apply search
+
     if match_type == "contains":
         mask = col_data.str.contains(search_term, case=False, na=False)
     elif match_type == "startswith":
@@ -308,51 +347,38 @@ def search_csv(
         mask = col_data.str.lower() == search_term.lower()
     else:
         return {"error": f"Unknown match type: {match_type}"}
-    
+
     result = df[mask].head(limit)
-    
+
     return {
         "filename": filename,
         "search_column": search_column,
         "search_term": search_term,
         "match_type": match_type,
-        "total_matches": mask.sum(),
+        "total_matches": int(mask.sum()),
         "returned_rows": len(result),
         "data": result.to_dict(orient="records"),
     }
 
 
-@mcp.tool()
-def get_column_values(
+def _column_values_payload(
     filename: str,
     column: str,
     unique_only: bool = True,
     limit: int = 1000,
-) -> Dict[str, Any]:
-    """
-    Get values from a specific column.
-    
-    Args:
-        filename: Name of the CSV file
-        column: Column name to extract
-        unique_only: Return only unique values
-        limit: Maximum number of values to return
-    
-    Returns:
-        Column values
-    """
+) -> dict[str, object]:
     df = _load_csv(filename)
-    
+
     if column not in df.columns:
         return {"error": f"Column not found: {column}"}
-    
+
     if unique_only:
         values = df[column].unique()[:limit]
         value_list = [v for v in values if pd.notna(v)]
     else:
         values = df[column].head(limit)
         value_list = [v for v in values if pd.notna(v)]
-    
+
     return {
         "filename": filename,
         "column": column,
@@ -362,10 +388,7 @@ def get_column_values(
     }
 
 
-# ===== Prompts =====
-
-@mcp.prompt(title="Analyze CSV data", description="Get insights from CSV file data")
-def analyze_data_prompt(filename: str) -> str:
+def _analyze_data_prompt(filename: str) -> str:
     return f"""
 Analyze the CSV file '{filename}':
 1. Get file info including columns and data types
@@ -376,8 +399,7 @@ Analyze the CSV file '{filename}':
 """
 
 
-@mcp.prompt(title="Find data patterns", description="Search for patterns in CSV data")
-def find_patterns_prompt(filename: str, target_column: str) -> str:
+def _find_patterns_prompt(filename: str, target_column: str) -> str:
     return f"""
 Find patterns in the '{target_column}' column of '{filename}':
 1. Get unique values and their frequencies
@@ -388,8 +410,7 @@ Find patterns in the '{target_column}' column of '{filename}':
 """
 
 
-@mcp.prompt(title="Compare data segments", description="Compare different segments of CSV data")
-def compare_segments_prompt(filename: str, segment_column: str, metric_column: str) -> str:
+def _compare_segments_prompt(filename: str, segment_column: str, metric_column: str) -> str:
     return f"""
 Compare segments in '{filename}':
 1. Group by '{segment_column}'
@@ -400,5 +421,146 @@ Compare segments in '{filename}':
 """
 
 
+if mcp:
+    # Resource decorators: use positional uri to avoid signature mismatches
+    @mcp.resource("csv://files")
+    def list_csv_files() -> str:
+        return _list_csv_files_payload()
+
+    @mcp.resource("csv://file/{filename}/info")
+    def get_csv_info(filename: str) -> str:
+        return _get_csv_info_payload(filename)
+
+    @mcp.resource("csv://file/{filename}/data")
+    def get_csv_data(filename: str) -> str:
+        return _get_csv_data_payload(filename)
+
+    @mcp.tool()
+    def query_csv(
+        filename: str,
+        columns: list[str] | None = None,
+        filters: dict[str, object] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        return _query_csv_payload(filename, columns, filters, limit, offset)
+
+    @mcp.tool()
+    def analyze_csv(filename: str, analysis_type: str = "summary") -> dict[str, object]:
+        return _analyze_csv_payload(filename, analysis_type)
+
+    @mcp.tool()
+    def aggregate_csv(
+        filename: str,
+        group_by: list[str],
+        aggregations: dict[str, str],
+    ) -> dict[str, object]:
+        return _aggregate_csv_payload(filename, group_by, aggregations)
+
+    @mcp.tool()
+    def search_csv(
+        filename: str,
+        search_column: str,
+        search_term: str,
+        match_type: str = "contains",
+        limit: int = 100,
+    ) -> dict[str, object]:
+        return _search_csv_payload(filename, search_column, search_term, match_type, limit)
+
+    @mcp.tool()
+    def get_column_values(
+        filename: str,
+        column: str,
+        unique_only: bool = True,
+        limit: int = 1000,
+    ) -> dict[str, object]:
+        return _column_values_payload(filename, column, unique_only, limit)
+
+    @mcp.prompt(title="Analyze CSV data", description="Get insights from CSV file data")
+    def analyze_data_prompt(filename: str) -> str:
+        return _analyze_data_prompt(filename)
+
+    @mcp.prompt(title="Find data patterns", description="Search for patterns in CSV data")
+    def find_patterns_prompt(filename: str, target_column: str) -> str:
+        return _find_patterns_prompt(filename, target_column)
+
+    @mcp.prompt(title="Compare data segments", description="Compare different segments of CSV data")
+    def compare_segments_prompt(filename: str, segment_column: str, metric_column: str) -> str:
+        return _compare_segments_prompt(filename, segment_column, metric_column)
+else:
+    def list_csv_files() -> str:
+        return _resource_unavailable()
+
+    def get_csv_info(filename: str) -> str:
+        return _resource_unavailable()
+
+    def get_csv_data(filename: str) -> str:
+        return _resource_unavailable()
+
+    def query_csv(
+        filename: str,
+        columns: list[str] | None = None,
+        filters: dict[str, object] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        return _tool_unavailable()
+
+    def analyze_csv(filename: str, analysis_type: str = "summary") -> dict[str, object]:
+        return _tool_unavailable()
+
+    def aggregate_csv(
+        filename: str,
+        group_by: list[str],
+        aggregations: dict[str, str],
+    ) -> dict[str, object]:
+        return _tool_unavailable()
+
+    def search_csv(
+        filename: str,
+        search_column: str,
+        search_term: str,
+        match_type: str = "contains",
+        limit: int = 100,
+    ) -> dict[str, object]:
+        return _tool_unavailable()
+
+    def get_column_values(
+        filename: str,
+        column: str,
+        unique_only: bool = True,
+        limit: int = 1000,
+    ) -> dict[str, object]:
+        return _tool_unavailable()
+
+    def analyze_data_prompt(filename: str) -> str:
+        return _resource_unavailable()
+
+    def find_patterns_prompt(filename: str, target_column: str) -> str:
+        return _resource_unavailable()
+
+    def compare_segments_prompt(filename: str, segment_column: str, metric_column: str) -> str:
+        return _resource_unavailable()
+
+
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
-    mcp.run()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="CSV MCP Server for Dyocense")
+    parser.add_argument("--tenant", type=str, required=True, help="Tenant ID")
+    parser.add_argument("--connector", type=str, required=True, help="Connector ID")
+    args = parser.parse_args()
+    
+    # Set global tenant/connector context
+    TENANT_ID = args.tenant
+    CONNECTOR_ID = args.connector
+    
+    logger.info(f"Starting CSV MCP server for tenant={TENANT_ID}, connector={CONNECTOR_ID}")
+    logger.info(f"CSV data directory: {_get_tenant_csv_dir()}")
+    logger.info(f"Available CSV files: {_get_available_files()}")
+    
+    if mcp:
+        mcp.run()
+    else:
+        logger.error("CSV MCP server not available; install the mcp package to enable it.")
+

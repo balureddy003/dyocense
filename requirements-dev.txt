@@ -22,6 +22,7 @@ psycopg2-binary>=2.9,<3  # PostgreSQL adapter for SMB-optimized deployments
 aiohttp>=3.9,<4
 asyncpg>=0.29,<1
 cryptography>=42,<45
+mcp>=0.1.0  # Enable Model Context Protocol server (FastMCP)
 
 # Multi-Agent System Dependencies (Pinned for stability - all versions locked)
 langgraph==0.0.40

@@ -10,9 +10,23 @@ from pydantic import BaseModel, Field
 
 class HealthScoreBreakdown(BaseModel):
     """Detailed breakdown of health score components"""
-    revenue: int = Field(ge=0, le=100, description="Revenue health score")
-    operations: int = Field(ge=0, le=100, description="Operations health score")
-    customer: int = Field(ge=0, le=100, description="Customer health score")
+    revenue: Optional[int] = Field(None, ge=0, le=100, description="Revenue health score")
+    operations: Optional[int] = Field(None, ge=0, le=100, description="Operations health score")
+    customer: Optional[int] = Field(None, ge=0, le=100, description="Customer health score")
+    
+    # Indicate which metrics are available
+    revenue_available: bool = Field(default=False)
+    operations_available: bool = Field(default=False)
+    customer_available: bool = Field(default=False)
+    
+    # Data source information for transparency
+    revenue_source: Optional[str] = Field(None, description="Source of revenue data (e.g., 'Shopify Integration', 'sales_data.csv')")
+    operations_source: Optional[str] = Field(None, description="Source of operations data")
+    customer_source: Optional[str] = Field(None, description="Source of customer data")
+    revenue_record_count: Optional[int] = Field(None, description="Number of records used for revenue calculation")
+    operations_record_count: Optional[int] = Field(None, description="Number of records used for operations calculation")
+    customer_record_count: Optional[int] = Field(None, description="Number of records used for customer calculation")
+    is_sample_data: bool = Field(default=False, description="Whether using sample/test data vs real integrations")
 
 
 class HealthScoreResponse(BaseModel):
@@ -30,17 +44,19 @@ class HealthScoreCalculator:
     def __init__(self, connector_data: Dict[str, Any]):
         self.connector_data = connector_data
         
-    def calculate_revenue_health(self) -> int:
+    def calculate_revenue_health(self) -> Optional[int]:
         """
         Calculate revenue health (0-100) based on:
         - Revenue growth rate
         - Sales velocity
         - Order value trends
+        
+        Returns None if no orders data available
         """
         orders = self.connector_data.get('orders', [])
         
         if not orders:
-            return 50  # Neutral score if no data
+            return None  # No data available
         
         # Calculate current period vs previous period
         now = datetime.now()
@@ -71,18 +87,20 @@ class HealthScoreCalculator:
         
         return int(score)
     
-    def calculate_operations_health(self) -> int:
+    def calculate_operations_health(self) -> Optional[int]:
         """
         Calculate operations health (0-100) based on:
         - Inventory turnover
         - Stockout rate
         - Fulfillment efficiency
+        
+        Returns None if no inventory data available
         """
         inventory = self.connector_data.get('inventory', [])
         orders = self.connector_data.get('orders', [])
         
         if not inventory:
-            return 50  # Neutral score if no data
+            return None  # No data available
         
         # Calculate inventory turnover (simplified)
         total_inventory_value = sum(item.get('value', 0) for item in inventory)
@@ -111,18 +129,20 @@ class HealthScoreCalculator:
         
         return int(final_score)
     
-    def calculate_customer_health(self) -> int:
+    def calculate_customer_health(self) -> Optional[int]:
         """
         Calculate customer health (0-100) based on:
         - Repeat customer rate
         - Customer retention
         - Average order frequency
+        
+        Returns None if no customer/order data available
         """
         customers = self.connector_data.get('customers', [])
         orders = self.connector_data.get('orders', [])
         
         if not customers or not orders:
-            return 50  # Neutral score if no data
+            return None  # No data available
         
         # Calculate repeat customer rate
         customer_order_counts = {}
@@ -133,7 +153,7 @@ class HealthScoreCalculator:
                     customer_order_counts[customer_id] = customer_order_counts.get(customer_id, 0) + 1
         
         if not customer_order_counts:
-            return 50
+            return None
         
         repeat_customers = sum(1 for count in customer_order_counts.values() if count > 1)
         total_customers = len(customer_order_counts)
@@ -152,17 +172,47 @@ class HealthScoreCalculator:
         operations_score = self.calculate_operations_health()
         customer_score = self.calculate_customer_health()
         
-        # Weighted average: Revenue 40%, Operations 30%, Customer 30%
-        overall_score = int(
-            (revenue_score * 0.4) + 
-            (operations_score * 0.3) + 
-            (customer_score * 0.3)
-        )
+        # Get data sources and counts
+        orders = self.connector_data.get('orders', [])
+        inventory = self.connector_data.get('inventory', [])
+        customers = self.connector_data.get('customers', [])
+        metadata = self.connector_data.get('metadata', {})
+        is_sample = metadata.get('is_sample_data', False)
+        
+        # Determine data sources (from metadata or infer from data type)
+        revenue_source = None
+        operations_source = None
+        customer_source = None
+        
+        if revenue_score is not None:
+            revenue_source = metadata.get('orders_source', f'{len(orders)} orders' if not is_sample else 'Sample data')
+        if operations_score is not None:
+            operations_source = metadata.get('inventory_source', f'{len(inventory)} items' if not is_sample else 'Sample data')
+        if customer_score is not None:
+            customer_source = metadata.get('customers_source', f'{len(customers)} customers' if not is_sample else 'Sample data')
+        
+        # Collect available scores and their weights
+        scores_and_weights = []
+        if revenue_score is not None:
+            scores_and_weights.append((revenue_score, 0.4))
+        if operations_score is not None:
+            scores_and_weights.append((operations_score, 0.3))
+        if customer_score is not None:
+            scores_and_weights.append((customer_score, 0.3))
+        
+        # Calculate weighted average only from available scores
+        if scores_and_weights:
+            total_weight = sum(weight for _, weight in scores_and_weights)
+            overall_score = int(
+                sum(score * weight for score, weight in scores_and_weights) / total_weight
+            )
+        else:
+            # No data available at all
+            overall_score = 0
         
         # Calculate trend (compare to previous period)
         # TODO: Store historical scores for accurate trend calculation
         # For now, estimate based on revenue growth
-        orders = self.connector_data.get('orders', [])
         trend = self._calculate_trend(orders)
         
         return HealthScoreResponse(
@@ -171,7 +221,17 @@ class HealthScoreCalculator:
             breakdown=HealthScoreBreakdown(
                 revenue=revenue_score,
                 operations=operations_score,
-                customer=customer_score
+                customer=customer_score,
+                revenue_available=revenue_score is not None,
+                operations_available=operations_score is not None,
+                customer_available=customer_score is not None,
+                revenue_source=revenue_source,
+                operations_source=operations_source,
+                customer_source=customer_source,
+                revenue_record_count=len(orders) if revenue_score is not None else None,
+                operations_record_count=len(inventory) if operations_score is not None else None,
+                customer_record_count=len(customers) if customer_score is not None else None,
+                is_sample_data=is_sample,
             ),
             last_updated=datetime.now(),
             period_days=30

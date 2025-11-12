@@ -2,24 +2,16 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 import importlib
-import logging
 import os
-
-# Load environment variables from .env early so persistence/backends honor settings
-try:
-    from dotenv import load_dotenv  # python-dotenv
-    load_dotenv()
-except Exception:
-    # Non-fatal if dotenv not available
-    pass
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from packages.kernel_common import persistence
 from packages.kernel_common.auth import get_auth_health
 from packages.kernel_common.keystone import health_check as get_keystone_health
+from packages.kernel_common.logging import configure_logging
 
-logger = logging.getLogger("kernel")
+logger = configure_logging("kernel")
 
 
 def _load_service(module_path: str) -> FastAPI | None:
@@ -99,8 +91,7 @@ for sub_app in SUB_APPS:
         service_name = service_tag.lower().replace(' ', '_').replace('service', '').replace('api', '').strip('_')
         app.mount(f"/api/{service_name}", sub_app)
     except Exception as e:
-        import logging
-        logging.getLogger("kernel").warning(f"Skipping router for sub-app due to error: {e}")
+        logger.warning(f"Skipping router for sub-app due to error: {e}")
 
 # Back-compat: also expose Accounts under /api/accounts for UIs expecting this prefix
 if accounts_app is not None:

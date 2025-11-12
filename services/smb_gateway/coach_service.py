@@ -22,6 +22,8 @@ from .evidence_system import (
     generate_data_lineage,
     Evidence,
 )
+from .coach_orchestrator import CoachOrchestrator, TaskType
+from .tool_executor import get_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,10 @@ class CoachService:
     def __init__(self):
         # In-memory conversation storage (replace with database in production)
         self.conversations: Dict[str, List[ChatMessage]] = {}  # {tenant_id: [messages]}
+        # Multi-agent orchestrator for dynamic task planning
+        self.orchestrator = CoachOrchestrator()
+        # Tool executor for decoupled business logic
+        self.tool_executor = get_tool_executor()
     
     def _run_demand_forecast(self, historical_data: List[float], horizon: int = 3) -> Dict[str, Any]:
         """
@@ -210,15 +216,70 @@ class CoachService:
             persona
         )
         
-        # Detect if user is asking for forecasting
-        user_message_lower = request.message.lower()
+        # ===== DYNAMIC MULTI-AGENT ORCHESTRATION =====
+        # Analyze intent and create execution plan
+        available_data = business_ctx.get("data_sources", {})
         
-        if request.include_forecast or any(word in user_message_lower for word in ["forecast", "predict", "future", "next month", "trend"]):
+        logger.info("=" * 80)
+        logger.info(f"[CoachOrchestrator] USER REQUEST: {request.message}")
+        logger.info(f"[CoachOrchestrator] AVAILABLE DATA: {available_data}")
+        
+        task_plan = self.orchestrator.analyze_intent(request.message, available_data)
+        
+        logger.info(f"[CoachOrchestrator] TASK PLAN CREATED:")
+        logger.info(f"  - Type: {task_plan.task_type.value}")
+        logger.info(f"  - Can Execute: {task_plan.can_execute}")
+        logger.info(f"  - Required Tools: {[t.tool_name for t in task_plan.required_tools]}")
+        logger.info(f"  - Execution Order: {task_plan.execution_order}")
+        logger.info(f"  - Missing Data: {task_plan.missing_data}")
+        logger.info(f"  - Report Sections: {task_plan.report_structure.get('sections', [])}")
+        logger.info("=" * 80)
+        
+        # Add task plan to context for the LLM
+        context["task_plan"] = {
+            "type": task_plan.task_type.value,
+            "tools": [t.dict() for t in task_plan.required_tools],
+            "execution_order": task_plan.execution_order,
+            "can_execute": task_plan.can_execute,
+            "missing_data": task_plan.missing_data
+        }
+        
+        # Execute tools based on task plan using ToolExecutor
+        logger.info("[CoachOrchestrator] EXECUTING TOOLS...")
+        
+        if task_plan.task_type == TaskType.INVENTORY_ANALYSIS:
+            logger.info("[CoachOrchestrator] Executing INVENTORY_ANALYSIS tools")
+            inventory_count = business_ctx.get("data_sources", {}).get("inventory", 0)
+            logger.info(f"[CoachOrchestrator] Inventory records available: {inventory_count}")
+            
+            if inventory_count > 0:
+                logger.info("[CoachOrchestrator] Running analyze_inventory tool via ToolExecutor...")
+                inventory_analysis = self.tool_executor.execute("analyze_inventory", business_ctx)
+                
+                if inventory_analysis:
+                    logger.info(f"[CoachOrchestrator] Inventory analysis completed:")
+                    logger.info(f"  - Total Items: {inventory_analysis['total_items']:,}")
+                    logger.info(f"  - Total Value: ${inventory_analysis['total_value']:,.2f}")
+                    logger.info(f"  - Stock Health: {inventory_analysis['stock_health']}")
+                    
+                    context["inventory_analysis"] = inventory_analysis
+                    evidence_tracker.add_evidence(
+                        conversation_id,
+                        f"Analyzed {inventory_analysis['total_items']} inventory items worth ${inventory_analysis['total_value']:,.2f}",
+                        f"Inventory Data Analysis Tool",
+                        query="Complete inventory dataset",
+                        confidence="high"
+                    )
+                else:
+                    logger.warning("[CoachOrchestrator] Inventory analysis returned None")
+            else:
+                logger.warning("[CoachOrchestrator] No inventory data available - skipping analysis")
+        
+        elif task_plan.task_type == TaskType.FORECAST:
             if context.get("metrics", {}).get("revenue_30d", 0) > 0:
                 forecast_result = self._run_demand_forecast([100, 120, 115, 130, 125, 140], horizon=3)
                 if forecast_result:
                     context["forecast_insight"] = forecast_result
-                    # Add evidence
                     evidence_tracker.add_evidence(
                         conversation_id,
                         f"Revenue forecast for next 3 periods: {forecast_result['forecasts'][0]['point']:.2f}, {forecast_result['forecasts'][1]['point']:.2f}, {forecast_result['forecasts'][2]['point']:.2f}",
@@ -227,8 +288,7 @@ class CoachService:
                         confidence="high"
                     )
         
-        # Run optimization if inventory issues mentioned
-        if any(word in user_message_lower for word in ["inventory", "stock", "reorder", "optimize"]):
+        elif task_plan.task_type == TaskType.OPTIMIZATION:
             if "alerts" in context:
                 context["optimization_insight"] = {
                     "available": True,
@@ -236,11 +296,32 @@ class CoachService:
                     "note": "Inventory optimization recommendations available"
                 }
         
-        # Build persona-specific system prompt
+        # Generate dynamic system prompt based on task plan
+        orchestrated_prompt = self.orchestrator.generate_system_prompt_for_plan(
+            task_plan,
+            available_data,
+            persona
+        )
+        
+        logger.info("[CoachOrchestrator] ORCHESTRATED PROMPT GENERATED:")
+        logger.info("-" * 80)
+        logger.info(orchestrated_prompt[:500] + "..." if len(orchestrated_prompt) > 500 else orchestrated_prompt)
+        logger.info("-" * 80)
+        
+        # Build persona-specific system prompt (legacy, will be replaced by orchestrated_prompt)
         system_prompt = self._build_persona_prompt(context, persona_config, request.include_evidence)
+        
+        # Prepend orchestrated prompt to give explicit instructions
+        system_prompt = f"{orchestrated_prompt}\n\n---\n\n{system_prompt}"
+        
+        logger.info(f"[CoachOrchestrator] FINAL SYSTEM PROMPT LENGTH: {len(system_prompt)} chars")
         
         # Build conversation history
         messages = self._build_messages(system_prompt, request.conversation_history, request.message)
+        
+        logger.info(f"[CoachOrchestrator] Invoking LLM with {len(messages)} messages")
+        logger.info(f"[CoachOrchestrator] Context keys: {list(context.keys())}")
+        logger.info(f"[CoachOrchestrator] Has inventory_analysis in context: {'inventory_analysis' in context}")
         
         # Invoke LLM with optional model parameters from request
         response_text = await self._invoke_llm(
@@ -250,6 +331,9 @@ class CoachService:
             max_tokens=request.max_tokens,
             model=request.model
         )
+        
+        logger.info(f"[CoachOrchestrator] LLM response length: {len(response_text)} chars")
+        logger.info(f"[CoachOrchestrator] Response preview: {response_text[:200]}...")
         
         # Collect evidence generated during response
         evidence_list = evidence_tracker.get_evidence(conversation_id)
@@ -474,7 +558,74 @@ Evidence-Based Responses:
 """
         
         # Add current business metrics
-        prompt += self._build_metrics_section(context)
+        metrics_section = self._build_metrics_section(context)
+        prompt += metrics_section
+        
+        # Add actionable analysis instructions based on available data
+        if "⚠️ IMPORTANT: You have inventory data but no sales/order data" in metrics_section:
+            prompt += """
+
+� INVENTORY ANALYSIS REQUIREMENTS:
+When asked to analyze inventory or generate reports, you must provide a COMPREHENSIVE, DATA-DRIVEN analysis.
+
+Required Analysis Components:
+1. **Inventory Valuation**: Calculate total inventory value and distribution
+2. **Stock Health**: Identify low-stock, out-of-stock, and overstock items  
+3. **ABC Analysis**: Categorize items by value (A: High-value 80%, B: Medium 15%, C: Low 5%)
+4. **Recommendations**: Specific actions for reordering, discounting, or optimizing
+
+Report Structure (MANDATORY):
+## 📦 Inventory Analysis Report
+
+### Executive Summary
+- Total SKUs: [X from metrics]
+- Total Units: [X from metrics]
+- Total Value: $[X from metrics]
+- Critical Issues: [List top 3]
+
+### Stock Health Breakdown
+| Status | Count | % of Total |
+|--------|-------|------------|
+| In Stock | X | Y% |
+| Low Stock | X | Y% |
+| Out of Stock | X | Y% |
+
+### ABC Analysis
+- **A Items (High Value)**: Top 20% of items = 80% of value
+- **B Items (Medium Value)**: Next 30% of items = 15% of value  
+- **C Items (Low Value)**: Remaining 50% = 5% of value
+
+### Recommended Actions
+1. **Immediate**: Reorder out-of-stock items
+2. **This Week**: Review low-stock thresholds
+3. **This Month**: Discount slow-moving inventory
+
+DO NOT give generic advice like "implement marketing". ANALYZE THE ACTUAL DATA and provide specific insights.
+
+"""
+        
+        # Add inventory analysis data if available
+        if "inventory_analysis" in context:
+            inv = context["inventory_analysis"]
+            stock_health = inv.get("stock_health", {})
+            prompt += f"""
+
+ACTUAL INVENTORY DATA (Use these numbers in your report):
+
+Total Inventory:
+- SKUs: {inv['total_items']:,}
+- Units: {inv['total_quantity']:,}  
+- Total Value: ${inv['total_value']:,.2f}
+- Avg Value per SKU: ${inv['avg_value_per_sku']:,.2f}
+
+Stock Health Breakdown:
+- In Stock: {stock_health['in_stock']['count']:,} items ({stock_health['in_stock']['percentage']}%)
+- Low Stock: {stock_health['low_stock']['count']:,} items ({stock_health['low_stock']['percentage']}%)
+- Out of Stock: {stock_health['out_of_stock']['count']:,} items ({stock_health['out_of_stock']['percentage']}%)
+
+USE THESE EXACT NUMBERS in your report tables and analysis.
+
+"""
         
         # Add persona-specific guidelines
         prompt += f"""
@@ -492,12 +643,53 @@ Response Format:
         """Build metrics context section for prompt"""
         section = "\nCurrent Business Metrics:\n"
         
+        # Add data source information if available
+        metadata = context.get("metadata", {})
+        data_sources = metadata.get("data_sources", {})
+        is_sample = context.get("is_sample_data", False)
+        
+        # Determine what data types are available
+        has_revenue_data = False
+        has_inventory_data = False
+        has_customer_data = False
+        
+        if data_sources:
+            has_revenue_data = "orders" in data_sources and data_sources["orders"].get("record_count", 0) > 0
+            has_inventory_data = "inventory" in data_sources and data_sources["inventory"].get("record_count", 0) > 0
+            has_customer_data = "customers" in data_sources and data_sources["customers"].get("record_count", 0) > 0
+        
+        # Show metrics based on available data
         if "metrics" in context:
             m = context["metrics"]
-            section += f"""
+            
+            # Only show revenue metrics if we have order data
+            if has_revenue_data or m.get('revenue_30d', 0) > 0:
+                section += f"""
 Revenue (30d): ${m.get('revenue_30d', 0):,.2f}
 Orders (30d): {m.get('orders_30d', 0)}
 Average Order Value: ${m.get('avg_order_value', 0):.2f}
+"""
+            
+            # Always show inventory metrics if available
+            if has_inventory_data or m.get('total_inventory_items', 0) > 0:
+                total_items = m.get('total_inventory_items', 0)
+                total_qty = m.get('total_inventory_quantity', 0)
+                total_value = m.get('total_inventory_value', 0)
+                low_stock = m.get('low_stock_items', 0)
+                out_of_stock = m.get('out_of_stock_items', 0)
+                
+                section += f"""
+Inventory Overview:
+- Total SKUs: {total_items:,}
+- Total Units: {total_qty:,}
+- Total Value: ${total_value:,.2f}
+- Low Stock: {low_stock} items
+- Out of Stock: {out_of_stock} items
+"""
+            
+            # Only show customer metrics if we have customer data
+            if has_customer_data or m.get('total_customers', 0) > 0:
+                section += f"""
 Total Customers: {m.get('total_customers', 0)}
 VIP Customers: {m.get('vip_customers', 0)}
 Repeat Customer Rate: {m.get('repeat_rate', 0):.1f}%
@@ -512,6 +704,26 @@ Business Health Score: {hs['score']}/100
 - Customer Health: {hs.get('customer_health', 0)}/100
 """
         
+        # Add data source transparency with emphasis on what's available
+        if data_sources:
+            section += "\nConnected Data Sources:\n"
+            for data_type, source_info in data_sources.items():
+                connector_name = source_info.get("connector_name", "Unknown")
+                record_count = source_info.get("record_count", 0)
+                section += f"- {data_type.title()}: {record_count:,} records from {connector_name}\n"
+            
+            # Add guidance based on what data is missing
+            if has_inventory_data and not has_revenue_data:
+                section += "\n⚠️ IMPORTANT: You have inventory data but no sales/order data. Focus analysis on:\n"
+                section += "- Stock levels and inventory health\n"
+                section += "- Product catalog analysis\n"
+                section += "- Recommendations to connect sales data for revenue insights\n"
+            elif has_revenue_data and not has_inventory_data:
+                section += "\n💡 Tip: Connect inventory data to get stock level insights and prevent stockouts.\n"
+        
+        if is_sample:
+            section += "\n⚠️ Currently using SAMPLE DATA. Recommend connecting real business data for accurate insights.\n"
+        
         if "alerts" in context:
             alerts = context["alerts"]
             if alerts.get("out_of_stock"):
@@ -520,6 +732,45 @@ Business Health Score: {hs['score']}/100
                 section += f"Low Stock: {', '.join(alerts['low_stock'][:5])}\n"
         
         return section
+    
+    def _analyze_inventory_data(self, business_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analyze inventory data and provide insights"""
+        try:
+            metrics = business_context.get("metrics", {})
+            total_items = metrics.get("total_inventory_items", 0)
+            total_qty = metrics.get("total_inventory_quantity", 0)
+            total_value = metrics.get("total_inventory_value", 0)
+            low_stock = metrics.get("low_stock_items", 0)
+            out_of_stock = metrics.get("out_of_stock_items", 0)
+            
+            if total_items == 0:
+                return None
+            
+            # Calculate stock health percentages
+            in_stock = total_items - low_stock - out_of_stock
+            in_stock_pct = (in_stock / total_items * 100) if total_items > 0 else 0
+            low_stock_pct = (low_stock / total_items * 100) if total_items > 0 else 0
+            out_of_stock_pct = (out_of_stock / total_items * 100) if total_items > 0 else 0
+            
+            # Average value per item
+            avg_value = (total_value / total_items) if total_items > 0 else 0
+            
+            return {
+                "total_items": total_items,
+                "total_quantity": total_qty,
+                "total_value": total_value,
+                "avg_value_per_sku": avg_value,
+                "stock_health": {
+                    "in_stock": {"count": in_stock, "percentage": round(in_stock_pct, 1)},
+                    "low_stock": {"count": low_stock, "percentage": round(low_stock_pct, 1)},
+                    "out_of_stock": {"count": out_of_stock, "percentage": round(out_of_stock_pct, 1)},
+                },
+                "critical_issues": [],
+                "recommendations": []
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing inventory data: {e}")
+            return None
     
     def get_conversation_history(self, tenant_id: str, limit: int = 50) -> List[ChatMessage]:
         """Get conversation history for a tenant"""

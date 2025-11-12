@@ -10,15 +10,16 @@ import time
 import uuid
 import os
 import json
-import logging
 import sys
+
+from packages.kernel_common.logging import configure_logging
 
 from packages.kernel_common.deps import require_auth
 
 # Add packages to path for multi-agent imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-logger = logging.getLogger(__name__)
+logger = configure_logging("chat-service")
 
 app = FastAPI(
     title="Chat Service",
@@ -530,4 +531,3 @@ def list_models(identity: dict = Depends(require_auth)) -> Dict[str, Any]:
             },
         ]
     }
-

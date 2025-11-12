@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from packages.llm import _invoke_llm
 from .coach_service import ChatMessage
+from .coach_orchestrator import CoachOrchestrator, TaskType
+from .tool_executor import get_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,14 @@ class MultiAgentCoach:
     
     def __init__(self):
         self.conversations: Dict[str, AgentState] = {}
+        
+        # Initialize coach orchestrator for dynamic task planning
+        self.task_orchestrator = CoachOrchestrator()
+        logger.info("✅ CoachOrchestrator initialized")
+        
+        # Initialize tool executor for decoupled business logic
+        self.tool_executor = get_tool_executor()
+        logger.info(f"✅ ToolExecutor initialized with {len(self.tool_executor.list_tools())} tools")
         
         if MULTI_AGENT_AVAILABLE:
             # Initialize orchestrator
@@ -142,11 +152,30 @@ class MultiAgentCoach:
         
         # Check for available connectors for this tenant
         available_connectors = []
+        mcp_tool_results = {}
         if tenant_id:
             try:
-                from packages.agents.mcp_tools import get_tenant_connectors
+                from packages.agents.mcp_tools import get_tenant_connectors, get_available_mcp_tools
                 available_connectors = get_tenant_connectors(tenant_id)
                 logger.info(f"Tenant {tenant_id} has connectors: {available_connectors}")
+                
+                # If user is asking about inventory/stock and we have ERPNext connector
+                if any(word in user_message.lower() for word in ["inventory", "stock", "item", "product"]):
+                    if "erpnext" in available_connectors:
+                        logger.info(f"Fetching ERPNext inventory data for tenant {tenant_id}")
+                        try:
+                            tools = get_available_mcp_tools(tenant_id)
+                            # Find stock check tool
+                            stock_tool = next((t for t in tools if "stock" in t.get("name", "").lower()), None)
+                            if stock_tool:
+                                # Call the tool (placeholder - actual implementation in mcp_tools.py)
+                                mcp_tool_results["erpnext_stock"] = {
+                                    "status": "available",
+                                    "note": "ERPNext stock data accessible via MCP"
+                                }
+                        except Exception as e:
+                            logger.warning(f"Could not fetch ERPNext data: {e}")
+                
             except Exception as e:
                 logger.warning(f"Could not get tenant connectors: {e}")
         
@@ -189,6 +218,7 @@ KEY BUSINESS METRICS:
 
 CONNECTED DATA SOURCES:
 {f"- {', '.join(available_connectors)}" if available_connectors else "- None (using sample data)"}
+{f"- MCP Tools Available: {list(mcp_tool_results.keys())}" if mcp_tool_results else ""}
 
 CURRENT BUSINESS HEALTH:
 - Overall Score: {health_score.get('score', 0)}/100
@@ -453,6 +483,20 @@ Respond naturally to help them understand and act on the analysis."""
     ) -> AsyncGenerator[StreamChunk, None]:
         """Stream conversational response, delegating to specialized agents when needed"""
         
+        # ===== TASK-BASED ORCHESTRATION =====
+        # Analyze intent and create execution plan
+        available_data = business_context.get("data_sources", {})
+        task_plan = self.task_orchestrator.analyze_intent(user_message, available_data)
+        
+        logger.info(
+            f"🎯 [MultiAgentCoach] Task Plan Generated:\n"
+            f"  - Type: {task_plan.task_type.value}\n"
+            f"  - Tools: {[t.tool_name for t in task_plan.required_tools]}\n"
+            f"  - Execution Order: {task_plan.execution_order}\n"
+            f"  - Can Execute: {task_plan.can_execute}\n"
+            f"  - Missing Data: {task_plan.missing_data}"
+        )
+        
         # Initialize conversation state
         if tenant_id not in self.conversations:
             self.conversations[tenant_id] = AgentState(
@@ -469,8 +513,63 @@ Respond naturally to help them understand and act on the analysis."""
         state = self.conversations[tenant_id]
         state["business_context"] = business_context
         
-        # Detect if we need a specialized agent
+        # Store task plan in state for debugging
+        state["agent_results"]["task_plan"] = {
+            "task_type": task_plan.task_type.value,
+            "required_tools": [t.tool_name for t in task_plan.required_tools],
+            "execution_order": task_plan.execution_order,
+            "can_execute": task_plan.can_execute,
+            "missing_data": task_plan.missing_data
+        }
+        
+        # 📊 Execute tools based on task plan using ToolExecutor
+        tool_results = {}
+        if task_plan.can_execute:
+            logger.info(f"🔧 Executing {len(task_plan.required_tools)} tools for {task_plan.task_type.value}")
+            
+            for tool_req in task_plan.required_tools:
+                # Map tool names from orchestrator to registered tool names
+                # This mapping allows orchestrator to use descriptive names while
+                # executor uses standardized function names
+                tool_mapping = {
+                    "analyze_inventory": "analyze_inventory",
+                    "analyze_revenue": "analyze_revenue",
+                    "analyze_customers": "analyze_customers",
+                    "analyze_health": "analyze_health",
+                    "_analyze_inventory_data": "analyze_inventory",  # Legacy mapping
+                }
+                
+                executor_tool_name = tool_mapping.get(tool_req.tool_name, tool_req.tool_name)
+                
+                if self.tool_executor.is_available(executor_tool_name):
+                    result = self.tool_executor.execute(
+                        executor_tool_name,
+                        business_context,
+                        **tool_req.parameters
+                    )
+                    if result:
+                        tool_results[tool_req.tool_name] = result
+                else:
+                    logger.warning(f"⚠️ Tool '{executor_tool_name}' not available in executor")
+                    # For external agents or MCP tools, keep existing behavior
+                    if tool_req.tool_name == "demand_forecast":
+                        logger.info(f"📈 Demand forecast - not yet implemented")
+                        tool_results["demand_forecast"] = {"status": "not_implemented"}
+                    elif tool_req.tool_name == "optimization_agent":
+                        logger.info(f"⚙️ Optimization agent - not yet implemented")
+                        tool_results["optimization"] = {"status": "not_implemented"}
+            
+            # Inject tool results back into business_context for prompt access
+            if tool_results:
+                business_context["tool_results"] = tool_results
+                logger.info(f"💾 Stored {len(tool_results)} tool results in business_context")
+        else:
+            logger.warning(f"⚠️ Task plan cannot execute - missing data: {task_plan.missing_data}")
+        
+        # 3. Detect specialized intent
         specialized_agent = self._detect_specialized_intent(user_message, business_context)
+        
+        logger.info(f"🔍 [MultiAgentCoach] Specialized agent detected: {specialized_agent}")
         
         response_text = ""
         
@@ -506,15 +605,36 @@ Respond naturally to help them understand and act on the analysis."""
             state["agent_results"] = agent_results
             
             # Build prompt with agent results
-            prompt = self._build_specialized_prompt(
-                user_message,
-                business_context,
-                specialized_agent,
-                agent_results
-            )
+            # 🎯 Use orchestrated prompt if we have a task plan, otherwise fall back to specialized prompt
+            if task_plan and task_plan.can_execute:
+                logger.info(f"🎨 Building orchestrated prompt for specialized agent: {specialized_agent}")
+                orchestrated_prompt = self.task_orchestrator.generate_system_prompt_for_plan(
+                    task_plan=task_plan,
+                    available_data=available_data,
+                    persona="business_analyst",
+                    analysis_results=tool_results if tool_results else None
+                )
+                specialized_prompt = self._build_specialized_prompt(
+                    user_message,
+                    business_context,
+                    specialized_agent,
+                    agent_results
+                )
+                prompt = f"{orchestrated_prompt}\n\n{specialized_prompt}"
+                logger.info(f"📄 Combined specialized prompt length: {len(prompt)} chars")
+            else:
+                logger.info(f"📝 Using standard specialized prompt for {specialized_agent}")
+                prompt = self._build_specialized_prompt(
+                    user_message,
+                    business_context,
+                    specialized_agent,
+                    agent_results
+                )
+                logger.info(f"📄 Specialized prompt length: {len(prompt)} chars")
             
             # Generate response
             try:
+                logger.info(f"🤖 Invoking LLM for {specialized_agent} with prompt preview: {prompt[:200]}...")
                 response_text = _invoke_llm(prompt)
                 
                 if response_text:
@@ -562,9 +682,35 @@ Respond naturally to help them understand and act on the analysis."""
         
         else:
             # General conversation (no specialist needed)
-            prompt = self._build_general_prompt(user_message, business_context)
+            # 🎯 Use orchestrated prompt if we have a task plan
+            if task_plan and task_plan.can_execute:
+                logger.info(f"🎨 Building orchestrated prompt for {task_plan.task_type.value}")
+                orchestrated_prompt = self.task_orchestrator.generate_system_prompt_for_plan(
+                    task_plan=task_plan,
+                    available_data=available_data,
+                    persona="business_analyst",
+                    analysis_results=tool_results if tool_results else None
+                )
+                # Prepend orchestrated prompt to general prompt
+                general_prompt = self._build_general_prompt(user_message, business_context)
+                prompt = f"{orchestrated_prompt}\n\n{general_prompt}"
+                logger.info(f"📄 Combined prompt length: {len(prompt)} chars (orchestrated: {len(orchestrated_prompt)}, general: {len(general_prompt)})")
+            elif task_plan and not task_plan.can_execute:
+                logger.info(f"⚠️ Cannot execute task plan - generating missing data prompt")
+                missing_data_prompt = self.task_orchestrator._generate_missing_data_prompt(
+                    task_plan=task_plan,
+                    available_data=available_data
+                )
+                general_prompt = self._build_general_prompt(user_message, business_context)
+                prompt = f"{missing_data_prompt}\n\n{general_prompt}"
+                logger.info(f"📄 Missing data prompt length: {len(prompt)} chars")
+            else:
+                logger.info(f"📝 Using standard general prompt")
+                prompt = self._build_general_prompt(user_message, business_context)
+                logger.info(f"📄 Standard prompt length: {len(prompt)} chars")
             
             try:
+                logger.info(f"🤖 Invoking LLM with prompt preview: {prompt[:200]}...")
                 response_text = _invoke_llm(prompt)
                 
                 if response_text:
@@ -646,6 +792,9 @@ Respond naturally to help them understand and act on the analysis."""
         if response_text:
             state["messages"].append({"role": "assistant", "content": response_text})
         self.conversations[tenant_id] = state
+    
+    # Business-specific analysis methods removed - now handled by ToolExecutor
+    # This keeps MultiAgentCoach decoupled from specific business domains
     
     def _build_general_prompt(self, user_message: str, context: Dict[str, Any]) -> str:
         """Build prompt for general conversation"""

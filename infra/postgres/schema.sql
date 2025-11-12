@@ -65,6 +65,7 @@ limits JSONB DEFAULT jsonb_build_object (
 
 -- Usage tracking
 
+
 usage JSONB DEFAULT jsonb_build_object(
     'users_count', 0,
     'projects_count', 0,
@@ -130,57 +131,61 @@ CREATE TABLE tenants.projects (
 CREATE INDEX idx_projects_tenant ON tenants.projects (tenant_id);
 
 CREATE TABLE tenants.api_tokens (
-  token_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES tenants.users(user_id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  secret_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    token_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants.tenants (tenant_id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES tenants.users (user_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    secret_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_api_tokens_tenant_user ON tenants.api_tokens (tenant_id, user_id);
+
 CREATE INDEX idx_api_tokens_secret_hash ON tenants.api_tokens (secret_hash);
 
 CREATE TABLE tenants.invitations (
-  invite_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
-  inviter_user_id TEXT NOT NULL REFERENCES tenants.users(user_id) ON DELETE CASCADE,
-  invitee_email TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL,
-  metadata JSONB DEFAULT '{}'
+    invite_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants.tenants (tenant_id) ON DELETE CASCADE,
+    inviter_user_id TEXT NOT NULL REFERENCES tenants.users (user_id) ON DELETE CASCADE,
+    invitee_email TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    metadata JSONB DEFAULT '{}'
 );
 
 CREATE INDEX idx_invitations_tenant ON tenants.invitations (tenant_id);
+
 CREATE INDEX idx_invitations_email ON tenants.invitations (invitee_email);
 
 CREATE TABLE tenants.usage_events (
-  event_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
-  user_id TEXT REFERENCES tenants.users(user_id) ON DELETE SET NULL,
-  event_type TEXT NOT NULL,
-  payload JSONB DEFAULT '{}',
-  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    event_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants.tenants (tenant_id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES tenants.users (user_id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    payload JSONB DEFAULT '{}',
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_usage_events_tenant_time ON tenants.usage_events (tenant_id, timestamp DESC);
+
 CREATE INDEX idx_usage_events_type ON tenants.usage_events (event_type);
 
 CREATE TABLE tenants.verification_tokens (
-  token_id TEXT PRIMARY KEY,
-  token TEXT NOT NULL UNIQUE,
-  email TEXT NOT NULL,
-  full_name TEXT NOT NULL,
-  business_name TEXT NOT NULL,
-  metadata JSONB DEFAULT '{}',
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  used BOOLEAN NOT NULL DEFAULT FALSE,
-  used_at TIMESTAMPTZ
+    token_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    business_name TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    used_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_verification_tokens_token ON tenants.verification_tokens (token);
+
 CREATE INDEX idx_verification_tokens_email ON tenants.verification_tokens (email);
 
 CREATE INDEX idx_projects_owner ON tenants.projects (owner_id);
@@ -205,6 +210,7 @@ completed_at TIMESTAMPTZ,
 duration_seconds NUMERIC,
 
 -- Error tracking
+
 
 error_message TEXT,
   error_details JSONB,
@@ -267,6 +273,7 @@ CREATE TABLE connectors.connectors (
 
 -- Encrypted credentials
 
+
 config_encrypted BYTEA,
   encryption_key_id TEXT,
   
@@ -305,6 +312,7 @@ CREATE INDEX idx_sync_history_connector ON connectors.sync_history (connector_id
 
 -- Connector data cache (stores synced data from external systems)
 
+
 CREATE TABLE connectors.connector_data (
   data_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
@@ -324,34 +332,60 @@ CREATE INDEX idx_connector_data_type ON connectors.connector_data (data_type);
 
 CREATE INDEX idx_connector_data_synced ON connectors.connector_data (synced_at DESC);
 
+-- -------------------------------------------------------------------
+-- Chunked connector data storage (append-only, scalable for large sets)
+-- -------------------------------------------------------------------
+-- Allows splitting very large ingestions into multiple chunks to reduce
+-- row lock contention and large JSONB updates. Each chunk stores a slice
+-- of records for (tenant, connector, data_type) with ordering preserved
+-- via chunk_index and timestamp.
+
+CREATE TABLE IF NOT EXISTS connectors.connector_data_chunks (
+  chunk_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
+  connector_id TEXT NOT NULL REFERENCES connectors.connectors(connector_id) ON DELETE CASCADE,
+  data_type TEXT NOT NULL,
+  chunk_index INT NOT NULL,
+  data JSONB NOT NULL,
+  record_count INT NOT NULL,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_connector_chunks_tenant ON connectors.connector_data_chunks (tenant_id, connector_id);
+
+CREATE INDEX IF NOT EXISTS idx_connector_chunks_type ON connectors.connector_data_chunks (data_type);
+
+CREATE INDEX IF NOT EXISTS idx_connector_chunks_synced ON connectors.connector_data_chunks (synced_at DESC);
+
 -- =====================================================================
 -- EVIDENCE SCHEMA (Graph + run evidence storage)
 -- =====================================================================
 
 CREATE TABLE evidence.records (
-  run_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
-  ops JSONB NOT NULL,
-  solution JSONB NOT NULL,
-  explanation JSONB NOT NULL,
-  artifacts JSONB,
-  goal_pack JSONB,
-  stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants.tenants (tenant_id) ON DELETE CASCADE,
+    ops JSONB NOT NULL,
+    solution JSONB NOT NULL,
+    explanation JSONB NOT NULL,
+    artifacts JSONB,
+    goal_pack JSONB,
+    stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_evidence_records_tenant ON evidence.records (tenant_id, stored_at DESC);
 
 CREATE TABLE evidence.attachments (
-  attachment_id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES evidence.records(run_id) ON DELETE CASCADE,
-  filename TEXT NOT NULL,
-  content_type TEXT,
-  storage_url TEXT,
-  data BYTEA,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    attachment_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES evidence.records (run_id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    content_type TEXT,
+    storage_url TEXT,
+    data BYTEA,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_evidence_attachments_run ON evidence.attachments (run_id);
@@ -398,15 +432,15 @@ CREATE INDEX idx_evidence_edges_type ON evidence.evidence_edges (relationship_ty
 -- =====================================================================
 
 CREATE TABLE trust.compliance_facts (
-  fact_id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES evidence.records(run_id) ON DELETE CASCADE,
-  tenant_id TEXT NOT NULL REFERENCES tenants.tenants(tenant_id) ON DELETE CASCADE,
-  category TEXT NOT NULL,
-  statement TEXT NOT NULL,
-  status TEXT NOT NULL,
-  source TEXT,
-  metadata JSONB DEFAULT '{}',
-  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    fact_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES evidence.records (run_id) ON DELETE CASCADE,
+    tenant_id TEXT NOT NULL REFERENCES tenants.tenants (tenant_id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT,
+    metadata JSONB DEFAULT '{}',
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_trust_facts_run ON trust.compliance_facts (run_id);
@@ -436,7 +470,11 @@ CREATE TABLE versioning.goal_versions (
 
 CREATE INDEX idx_goal_versions_tenant ON versioning.goal_versions (tenant_id, created_at DESC);
 
-CREATE INDEX idx_goal_versions_project ON versioning.goal_versions (tenant_id, project_id, created_at DESC);
+CREATE INDEX idx_goal_versions_project ON versioning.goal_versions (
+    tenant_id,
+    project_id,
+    created_at DESC
+);
 
 -- =====================================================================
 -- KNOWLEDGE SCHEMA (Vector embeddings for RAG)

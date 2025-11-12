@@ -5,7 +5,6 @@ Manages data source connectors with secure credential storage.
 Supports OAuth flows, API key authentication, and connector testing.
 """
 
-import logging
 import os
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from packages.kernel_common.deps import require_auth
+from packages.kernel_common.logging import configure_logging
 from packages.connectors.models import (
     ConnectorConfig,
     ConnectorResponse,
@@ -31,12 +31,18 @@ from packages.connectors.testing import ConnectorTester
 
 # Connector marketplace metadata
 from packages.connectors.catalog import CONNECTOR_CATALOG
+from services.connectors import router as legacy_router
 
-logger = logging.getLogger(__name__)
+logger = configure_logging("connectors-service")
 
 ERP_MCP_SCRIPT = Path(__file__).with_name("erpnext_mcp.py")
 CSV_MCP_SCRIPT = Path(__file__).with_name("csv_mcp.py")
-CSV_DATA_DIR = os.getenv("CSV_DATA_DIR", "/data/csv")
+
+# Use a writable directory for CSV data
+# In production, set CSV_DATA_DIR env var to a persistent volume
+# In development, use /tmp or project directory
+_default_csv_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "csv")
+CSV_DATA_DIR = os.getenv("CSV_DATA_DIR", _default_csv_dir)
 
 # Track per-connector MCP processes
 erp_mcp_processes: dict[str, subprocess.Popen] = {}
@@ -87,14 +93,20 @@ def _start_csv_mcp_for(tenant_id: str, connector_id: str, data_dir: str | None =
         return
     if _csv_mcp_is_running(connector_id):
         return
+    
+    # Ensure CSV data directory exists
+    csv_data_dir = data_dir or CSV_DATA_DIR
+    tenant_csv_dir = os.path.join(csv_data_dir, tenant_id)
+    os.makedirs(tenant_csv_dir, exist_ok=True)
+    
     cmd = [sys.executable, str(CSV_MCP_SCRIPT), "--tenant", tenant_id, "--connector", connector_id]
     env = os.environ.copy()
-    if data_dir:
-        env["CSV_DATA_DIR"] = data_dir
+    env["CSV_DATA_DIR"] = csv_data_dir
+    
     try:
         proc = subprocess.Popen(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
         csv_mcp_processes[connector_id] = proc
-        logger.info("Started CSV MCP for %s (pid=%s)", connector_id, proc.pid)
+        logger.info("Started CSV MCP for %s (pid=%s, data_dir=%s)", connector_id, proc.pid, tenant_csv_dir)
     except Exception as exc:
         logger.error("Failed to launch CSV MCP for %s: %s", connector_id, exc)
 
@@ -205,6 +217,24 @@ async def connector_identity(authorization: str = Header(default="")) -> dict:
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting Connectors service...")
+    
+    # Ensure CSV data directory exists (use temp dir or project-relative path for local dev)
+    default_csv_dir = os.path.join(os.getcwd(), ".data", "csv")
+    csv_data_dir = os.getenv("CSV_DATA_DIR", default_csv_dir)
+    
+    try:
+        os.makedirs(csv_data_dir, exist_ok=True)
+        logger.info(f"CSV data directory: {csv_data_dir}")
+    except OSError as e:
+        logger.warning(f"Failed to create CSV data directory at {csv_data_dir}: {e}")
+        # Fallback to temp directory
+        import tempfile
+        csv_data_dir = os.path.join(tempfile.gettempdir(), "dyocense_csv")
+        os.makedirs(csv_data_dir, exist_ok=True)
+        logger.info(f"Using fallback CSV data directory: {csv_data_dir}")
+        # Update environment for child processes
+        os.environ["CSV_DATA_DIR"] = csv_data_dir
+    
     _start_erp_mcp_server()
     _start_csv_mcp_server()
     yield
@@ -245,6 +275,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include legacy/aux routes (e.g., upload_csv) under /api/connectors
+app.include_router(legacy_router)
 
 
 class CreateConnectorRequest(BaseModel):

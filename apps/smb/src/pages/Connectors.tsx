@@ -18,30 +18,31 @@ import {
 } from '@mantine/core'
 import { showNotification } from '@mantine/notifications'
 import { IconUpload, IconX } from '@tabler/icons-react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React from 'react'
 import { useForm } from 'react-hook-form'
 import { Link } from 'react-router-dom'
 import { useConnectorsQuery } from '../hooks/useConnectors'
-import { createConnector, deleteConnector, testConnector, updateConnector, type ConnectorTestResponse, type TenantConnector } from '../lib/api'
+import {
+    createConnector,
+    deleteConnector,
+    getConnectorRecommendations,
+    testConnector,
+    updateConnector,
+    uploadCSV,
+    type ConnectorRecommendation,
+    type ConnectorTestResponse,
+    type TenantConnector
+} from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 type ConnectorField = {
-    name: keyof ConnectorFormValues
+    name: string
     label: string
     placeholder?: string
     type?: 'text' | 'textarea' | 'file'
     helper?: string
     accept?: string
-}
-
-type ConnectorPreset = {
-    id: string
-    label: string
-    description: string
-    fields: ConnectorField[]
-    icon?: string
-    category?: 'files' | 'ecommerce' | 'erp' | 'cloud'
 }
 
 type ConnectorFormValues = {
@@ -59,13 +60,17 @@ type ConnectorFormValues = {
     enable_mcp?: boolean
 }
 
-const presets: ConnectorPreset[] = [
+type ConnectorPreset = ConnectorRecommendation
+
+const FALLBACK_PRESETS: ConnectorPreset[] = [
     {
         id: 'csv_upload',
         label: 'CSV/Excel Upload',
         description: 'Upload a CSV or Excel file from your device, or provide a URL to fetch data automatically.',
         icon: '📊',
         category: 'files',
+        priority: 1,
+        reason: 'Quick start - upload your existing spreadsheets',
         fields: [
             {
                 name: 'uploaded_file',
@@ -82,72 +87,6 @@ const presets: ConnectorPreset[] = [
             },
         ],
     },
-    {
-        id: 'google-drive',
-        label: 'Google Drive',
-        description: 'Bring in spreadsheets from a shared Drive folder.',
-        icon: '📁',
-        category: 'cloud',
-        fields: [
-            { name: 'folder_id', label: 'Folder ID', placeholder: 'e.g. 1AbCDriveFolderID' },
-            {
-                name: 'service_account_json',
-                label: 'Service account JSON',
-                type: 'textarea',
-                placeholder: '{ "type": "service_account", ... }',
-                helper: 'Create a Google Cloud service account and share the folder with it.',
-            },
-        ],
-    },
-    {
-        id: 'shopify',
-        label: 'Shopify',
-        description: 'Connect your Shopify storefront for orders, carts, and customers.',
-        icon: '🛍️',
-        category: 'ecommerce',
-        fields: [
-            { name: 'store_url', label: 'Store URL', placeholder: 'https://yourstore.myshopify.com' },
-            { name: 'api_key', label: 'Admin API access token', type: 'textarea' },
-        ],
-    },
-    {
-        id: 'grandnode',
-        label: 'GrandNode',
-        description: 'Sync sales and catalog data from your GrandNode shop.',
-        icon: '🛒',
-        category: 'ecommerce',
-        fields: [
-            { name: 'store_url', label: 'Store URL', placeholder: 'https://shop.example.com' },
-            { name: 'api_key', label: 'API key', type: 'text' },
-        ],
-    },
-    {
-        id: 'erpnext',
-        label: 'ERPNext',
-        description: 'Connect your ERPNext ERP system to sync inventory, sales orders, and supplier data automatically.',
-        icon: '⚙️',
-        category: 'erp',
-        fields: [
-            {
-                name: 'api_url',
-                label: 'ERPNext URL',
-                placeholder: 'https://erp.example.com',
-                helper: 'Your ERPNext instance URL (e.g., https://erp.yourcompany.com)'
-            },
-            {
-                name: 'api_key',
-                label: 'API Key',
-                type: 'text',
-                helper: 'Found in User Settings → API Access after generating keys'
-            },
-            {
-                name: 'api_secret',
-                label: 'API Secret',
-                type: 'textarea',
-                helper: '⚠️ Copy this immediately when generating keys - it\'s only shown once! Go to: User → Settings → API Access → Generate Keys'
-            },
-        ],
-    },
 ]
 
 export default function Connectors() {
@@ -155,7 +94,7 @@ export default function Connectors() {
     const apiToken = useAuthStore((s) => s.apiToken)
     const queryClient = useQueryClient()
     const [modalOpen, setModalOpen] = React.useState(false)
-    const [presetId, setPresetId] = React.useState(presets[0].id)
+    const [presetId, setPresetId] = React.useState(FALLBACK_PRESETS[0].id)
     const [editingConnector, setEditingConnector] = React.useState<TenantConnector | null>(null)
     const form = useForm<ConnectorFormValues>({
         defaultValues: {
@@ -165,6 +104,18 @@ export default function Connectors() {
         },
     })
 
+    // Fetch dynamic recommendations based on business profile and data
+    const recommendationsQuery = useQuery({
+        queryKey: ['connector-recommendations', tenantId],
+        queryFn: () => getConnectorRecommendations(apiToken, tenantId),
+        enabled: !!apiToken && !!tenantId,
+        staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    })
+
+    const presets = recommendationsQuery.data?.recommendations ?? FALLBACK_PRESETS
+    const businessProfile = recommendationsQuery.data?.business_profile
+    const dataStatus = recommendationsQuery.data?.data_status
+
     const resetForm = React.useCallback(
         (preset: ConnectorPreset, connector?: TenantConnector | null) => {
             const defaults: ConnectorFormValues = {
@@ -173,7 +124,7 @@ export default function Connectors() {
                 enable_mcp: Boolean(connector?.metadata?.mcp_enabled),
             }
             preset.fields.forEach((field) => {
-                defaults[field.name] = '' as never
+                (defaults as any)[field.name] = '' as never
             })
             form.reset(defaults)
         },
@@ -189,7 +140,7 @@ export default function Connectors() {
         setPresetId(preset.id)
         resetForm(preset)
         setModalOpen(true)
-    }, [resetForm])
+    }, [resetForm, presets])
 
     const openEditModal = React.useCallback(
         (connector: TenantConnector) => {
@@ -199,7 +150,7 @@ export default function Connectors() {
             resetForm(preset, connector)
             setModalOpen(true)
         },
-        [resetForm],
+        [resetForm, presets],
     )
 
     const createMutation = useMutation({
@@ -208,10 +159,11 @@ export default function Connectors() {
             if (!tenantId) throw new Error('Missing tenant')
             const config: Record<string, unknown> = {}
             selectedPreset.fields.forEach((field) => {
-                const value = values[field.name]
-                if (value) config[field.name] = value
+                const value = (values as any)[field.name]
+                // Skip file field from config - we'll handle it separately
+                if (value && field.type !== 'file') config[field.name] = value
             })
-            return await createConnector(
+            const connector = await createConnector(
                 {
                     connector_type: selectedPreset.id,
                     display_name: values.displayName || selectedPreset.label,
@@ -222,12 +174,20 @@ export default function Connectors() {
                 apiToken,
                 tenantId,
             )
+
+            // If user uploaded a CSV file, send it to the upload endpoint
+            if (values.uploaded_file && connector?.connector_id) {
+                await uploadCSV(values.uploaded_file, connector.connector_id, apiToken, tenantId)
+            }
+
+            return connector
         },
         onSuccess: () => {
             showNotification({ title: 'Connector created', message: 'We will start syncing shortly.', color: 'green' })
             setModalOpen(false)
             setEditingConnector(null)
             queryClient.invalidateQueries({ queryKey: ['connectors', tenantId] })
+            queryClient.invalidateQueries({ queryKey: ['connector-recommendations', tenantId] })
         },
         onError: () => {
             showNotification({ title: 'Unable to create connector', message: 'Double-check credentials and try again.', color: 'red' })
@@ -259,10 +219,11 @@ export default function Connectors() {
             if (!tenantId) throw new Error('Missing tenant')
             const config: Record<string, unknown> = {}
             preset.fields.forEach((field) => {
-                const value = values[field.name]
-                if (value) config[field.name] = value
+                const value = (values as any)[field.name]
+                // Skip file field from config - we'll handle it separately
+                if (value && field.type !== 'file') config[field.name] = value
             })
-            return await updateConnector(
+            const result = await updateConnector(
                 connector.connector_id,
                 {
                     display_name: values.displayName || connector.display_name,
@@ -273,6 +234,13 @@ export default function Connectors() {
                 apiToken,
                 tenantId,
             )
+
+            // If user uploaded a new CSV file, send it to the upload endpoint
+            if (values.uploaded_file && connector?.connector_id) {
+                await uploadCSV(values.uploaded_file, connector.connector_id, apiToken, tenantId)
+            }
+
+            return result
         },
         onSuccess: (_resp, { connector }) => {
             showNotification({
@@ -283,6 +251,7 @@ export default function Connectors() {
             setModalOpen(false)
             setEditingConnector(null)
             queryClient.invalidateQueries({ queryKey: ['connectors', tenantId] })
+            queryClient.invalidateQueries({ queryKey: ['connector-recommendations', tenantId] })
         },
         onError: (error) => {
             const detail = (error as any)?.body?.detail || (error as Error).message
@@ -361,6 +330,34 @@ export default function Connectors() {
                                 Start with CSV uploads or Google Drive for quick setup. Your connected data enables auto-tracking of goals,
                                 real-time health metrics, and AI-powered recommendations.
                             </Text>
+
+                            {/* Business Profile & Data Status Insights */}
+                            {businessProfile && (
+                                <Card mt="md" radius="lg" shadow="xs" className="border border-blue-100 bg-blue-50">
+                                    <Group gap="sm">
+                                        <Text size="sm" fw={600}>📊 Your Business Profile:</Text>
+                                        {businessProfile.business_type && (
+                                            <Badge size="sm" variant="light" color="blue">{businessProfile.business_type}</Badge>
+                                        )}
+                                        {businessProfile.industry && (
+                                            <Badge size="sm" variant="light" color="cyan">{businessProfile.industry}</Badge>
+                                        )}
+                                        {businessProfile.team_size && (
+                                            <Badge size="sm" variant="light" color="grape">Team: {businessProfile.team_size}</Badge>
+                                        )}
+                                    </Group>
+                                    {dataStatus && (
+                                        <Text size="xs" c="dimmed" mt="xs">
+                                            Data connected: {' '}
+                                            {dataStatus.has_orders && '✓ Orders '}
+                                            {dataStatus.has_inventory && '✓ Inventory '}
+                                            {dataStatus.has_customers && '✓ Customers '}
+                                            {dataStatus.has_products && '✓ Products '}
+                                            {!dataStatus.has_orders && !dataStatus.has_inventory && !dataStatus.has_customers && !dataStatus.has_products && 'None yet - add a connector to get started'}
+                                        </Text>
+                                    )}
+                                </Card>
+                            )}
                             <Card mt="lg" radius="lg" shadow="xs" className="border border-dashed border-purple-200">
                                 <Group justify="space-between">
                                     <Text fw={600}>ERPNext + MCP docs</Text>
@@ -531,34 +528,52 @@ export default function Connectors() {
                     {/* Recommended Starters - Right */}
                     <Grid.Col span={{ base: 12, md: 6 }}>
                         <Card className="glass-panel--light">
-                            <Text size="xs" fw={600} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.25em' }} mb="md">
-                                RECOMMENDED STARTERS
-                            </Text>
-                            <Stack gap="sm">
-                                {presets.map((preset) => (
-                                    <Card key={preset.id} withBorder p="md" radius="md" className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => {
-                                        setEditingConnector(null)
-                                        setPresetId(preset.id)
-                                        resetForm(preset)
-                                        setModalOpen(true)
-                                    }}>
-                                        <Group justify="space-between" align="flex-start" mb="xs">
-                                            <div style={{ flex: 1 }}>
-                                                <Group gap="xs" mb={4}>
-                                                    <Badge size="xs" variant="dot">CONNECTOR</Badge>
-                                                </Group>
-                                                <Text fw={600} size="sm">{preset.label}</Text>
-                                                <Text size="xs" c="dimmed" lineClamp={2}>
-                                                    {preset.description}
-                                                </Text>
-                                            </div>
-                                        </Group>
-                                        <Button size="xs" variant="light" fullWidth mt="sm">
-                                            CONFIGURE
-                                        </Button>
-                                    </Card>
-                                ))}
-                            </Stack>
+                            <Group justify="space-between" align="center" mb="md">
+                                <Text size="xs" fw={600} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.25em' }}>
+                                    {recommendationsQuery.isLoading ? 'LOADING RECOMMENDATIONS...' : 'RECOMMENDED FOR YOU'}
+                                </Text>
+                                {recommendationsQuery.isLoading && <Loader size="xs" />}
+                            </Group>
+
+                            {recommendationsQuery.isLoading ? (
+                                <div className="flex items-center justify-center py-12">
+                                    <Loader />
+                                </div>
+                            ) : (
+                                <Stack gap="sm">
+                                    {presets.map((preset) => (
+                                        <Card key={preset.id} withBorder p="md" radius="md" className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => {
+                                            setEditingConnector(null)
+                                            setPresetId(preset.id)
+                                            resetForm(preset)
+                                            setModalOpen(true)
+                                        }}>
+                                            <Group justify="space-between" align="flex-start" mb="xs">
+                                                <div style={{ flex: 1 }}>
+                                                    <Group gap="xs" mb={4}>
+                                                        <Text size="xl">{preset.icon}</Text>
+                                                        <Badge size="xs" variant="dot" color="blue">
+                                                            {preset.category.toUpperCase()}
+                                                        </Badge>
+                                                    </Group>
+                                                    <Text fw={600} size="sm">{preset.label}</Text>
+                                                    <Text size="xs" c="dimmed" lineClamp={2} mb="xs">
+                                                        {preset.description}
+                                                    </Text>
+                                                    {preset.reason && (
+                                                        <Badge size="sm" variant="light" color="violet" leftSection="💡">
+                                                            {preset.reason}
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                            </Group>
+                                            <Button size="xs" variant="light" fullWidth mt="sm">
+                                                CONFIGURE
+                                            </Button>
+                                        </Card>
+                                    ))}
+                                </Stack>
+                            )}
                         </Card>
                     </Grid.Col>
                 </Grid>
@@ -707,7 +722,7 @@ export default function Connectors() {
                                     placeholder={field.placeholder}
                                     description={field.helper}
                                     minRows={3}
-                                    {...form.register(field.name)}
+                                    {...form.register(field.name as any)}
                                 />
                             ) : (
                                 <TextInput
@@ -715,7 +730,7 @@ export default function Connectors() {
                                     label={field.label}
                                     placeholder={field.placeholder}
                                     description={field.helper}
-                                    {...form.register(field.name)}
+                                    {...form.register(field.name as any)}
                                 />
                             ),
                         )}
@@ -740,6 +755,6 @@ export default function Connectors() {
                     </Stack>
                 </form>
             </Modal>
-        </div>
+        </div >
     )
 }

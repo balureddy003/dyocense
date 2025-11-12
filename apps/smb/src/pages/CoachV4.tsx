@@ -2,7 +2,7 @@ import { Badge, Button, Card, Group, HoverCard, Menu, ScrollArea, Stack, Text, T
 import { useMediaQuery } from '@mantine/hooks'
 import { IconChevronDown, IconExternalLink, IconHelp, IconPlayerStop, IconSearch, IconSend, IconSparkles } from '@tabler/icons-react'
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import CoachSettings from '../components/CoachSettings'
 import ConversationHistory from '../components/ConversationHistory'
@@ -12,9 +12,11 @@ import EvidencePanel from '../components/EvidencePanel'
 import LoadingSkeleton from '../components/LoadingSkeleton'
 import MetricsCard from '../components/MetricsCard'
 import OnboardingTour from '../components/OnboardingTour'
+import { useConnectorsQuery } from '../hooks/useConnectors'
 import { API_BASE, get } from '../lib/api'
 import { Conversation, deleteConversation, generateConversationTitle, loadConversations, saveConversation } from '../lib/conversations'
 import { formatRelativeTime, isDataStale } from '../lib/time'
+import { getTenantToolsAndPrompts } from '../lib/toolSuggestions'
 import { useAuthStore } from '../stores/auth'
 
 export interface Evidence {
@@ -58,6 +60,11 @@ export interface Message {
         runCost?: number
         runDuration?: number
         error?: boolean
+        rich_data?: {
+            type: string
+            metrics?: any[]
+            chart?: any
+        }
     }
 }
 
@@ -136,6 +143,27 @@ export default function CoachV4() {
         queryFn: () => get(`/v1/tenants/${tenantId}/tasks?status=todo`, apiToken),
         enabled: !!tenantId && !!apiToken,
     })
+    // Connectors (for MCP-aware tools & prompts)
+    const connectorsQuery = useConnectorsQuery(apiToken, tenantId, { enabled: !!tenantId && !!apiToken })
+    const enabledConnectors = useMemo(
+        () => {
+            const filtered = (connectorsQuery.data ?? []).filter((c: any) => c.status === 'active' && c?.metadata?.mcp_enabled)
+            console.log('[CoachV4] All connectors:', connectorsQuery.data)
+            console.log('[CoachV4] Enabled connectors (active + mcp_enabled):', filtered)
+            return filtered
+        },
+        [connectorsQuery.data]
+    )
+    const { tools: suggestedTools, prompts: suggestedPrompts } = useMemo(() => {
+        try {
+            const result = getTenantToolsAndPrompts(enabledConnectors as any)
+            console.log('[CoachV4] Tools and prompts:', result)
+            return result
+        } catch (err) {
+            console.error('[CoachV4] Error getting tools/prompts:', err)
+            return { tools: [], prompts: [] }
+        }
+    }, [enabledConnectors])
 
     // Active goals list for sidebar (must be after goalsData query)
     const activeGoals = goalsData?.filter((g: any) => g.status === 'active').slice(0, 5) || []
@@ -154,11 +182,47 @@ export default function CoachV4() {
     // Helper to generate Today's Focus
     const generateTodaysFocus = () => {
         const score = healthScore?.score || 0
-        const urgentTasks = tasksData?.filter((t: any) => t.priority === 'high' || new Date(t.due_date) < new Date()).slice(0, 3) || []
+        const breakdown = healthScore?.breakdown
+        // Exclude starter tasks from urgent tasks calculation
+        const realTasks = tasksData?.filter((t: any) => !t.is_starter_task) || []
+        const urgentTasks = realTasks.filter((t: any) => t.priority === 'high' || t.priority === 'urgent' || new Date(t.due_date) < new Date()).slice(0, 3)
         const activeGoalsList = goalsData?.filter((g: any) => g.status === 'active') || []
 
-        // Priority 1: Critical health score
-        if (score < 40) {
+        // Check if we have any real data connected
+        const hasAnyRealData = realTasks.length > 0 || activeGoalsList.length > 0 || score > 0
+
+        // Priority 0: No data connected OR data synced but needs analysis
+        if (score === 0 && !hasAnyRealData) {
+            // Check if connector exists but data hasn't synced yet
+            const hasConnector = enabledConnectors.length > 0
+
+            if (hasConnector) {
+                const connectorNames = enabledConnectors.map((c: any) => c.connector_name).join(', ')
+                return {
+                    title: "🔄 Data Sync in Progress",
+                    message: `Great! I see you've connected: **${connectorNames}**\n\nI'm analyzing your data to calculate your business health score. This usually takes a few moments.\n\nOnce sync completes, I'll show you:\n• Business health breakdown\n• Revenue & operations insights\n• Personalized recommendations`,
+                    quickActions: [
+                        { label: "🔍 Check Sync Status", prompt: "What's the status of my data sync?" },
+                        { label: "📊 What Data Types", prompt: "What types of data can you analyze from my connector?" },
+                        { label: "🎯 Set a Goal", prompt: "Help me set my first business goal while we wait" }
+                    ]
+                }
+            }
+
+            // No connector at all
+            return {
+                title: "👋 Welcome to Your AI Business Coach!",
+                message: `To get personalized insights and track your business health, let's connect your data sources.\n\nI can help you analyze data from:\n• ERPNext integrations\n• CSV file uploads\n• E-commerce platforms`,
+                quickActions: [
+                    { label: "🔗 Connect ERPNext", prompt: "How do I connect my ERPNext data?" },
+                    { label: "📁 Upload CSV", prompt: "I want to upload CSV files to analyze" },
+                    { label: "🎯 Set a Goal", prompt: "Help me set my first business goal" }
+                ]
+            }
+        }
+
+        // Priority 1: Critical health score (but only if we have data)
+        if (score > 0 && score < 40) {
             return {
                 title: "🚨 Today's Focus: Critical Business Health",
                 message: `Your health score is ${score}/100 - this needs immediate attention! Let's identify the biggest issue and create a recovery plan.`,
@@ -170,11 +234,13 @@ export default function CoachV4() {
             }
         }
 
-        // Priority 2: Urgent/overdue tasks
+        // Priority 2: Urgent/overdue tasks (exclude starter tasks)
         if (urgentTasks.length > 0) {
+            const taskList = urgentTasks.map((t: any) => `• ${t.title}`).join('\n')
+            const taskCount = urgentTasks.length
             return {
                 title: "⚠️ Today's Focus: Urgent Tasks",
-                message: `You have ${urgentTasks.length} urgent task${urgentTasks.length > 1 ? 's' : ''} that need attention today.`,
+                message: `You have ${taskCount} urgent task${taskCount > 1 ? 's' : ''} that need${taskCount === 1 ? 's' : ''} attention today:\n\n${taskList}`,
                 quickActions: [
                     { label: "📋 View Tasks", prompt: `Tell me about these urgent tasks: ${urgentTasks.map((t: any) => t.title).join(', ')}` },
                     { label: "✅ Prioritize", prompt: "Help me prioritize my urgent tasks" },
@@ -202,10 +268,45 @@ export default function CoachV4() {
             }
         }
 
-        // Default: Positive check-in
+        // Default: Positive check-in (or welcome for new tenants)
+        if (!hasAnyRealData) {
+            // New tenant without data
+            return {
+                title: `👋 Welcome${user?.name ? ', ' + user.name.split(' ')[0] : ''}!`,
+                message: `Let's set up your business for success! I can help you:\n\n• Connect your data sources (ERPNext, CSV files)\n• Set your first business goal\n• Create an action plan\n• Track your progress`,
+                quickActions: [
+                    { label: "🔗 Connect Data", prompt: "How do I connect my business data?" },
+                    { label: "🎯 Set a Goal", prompt: "Help me set my first business goal" },
+                    { label: "📋 Create Tasks", prompt: "Create a weekly action plan for my business" }
+                ]
+            }
+        }
+
+        // Existing tenant with data - show data insights
+        const dataInsights: string[] = []
+        if (breakdown?.revenue_available && breakdown?.revenue_source) {
+            const recordCount = breakdown.revenue_record_count || 0
+            const isSample = breakdown.is_sample_data
+            dataInsights.push(`📊 **Revenue**: ${recordCount.toLocaleString()} orders from ${breakdown.revenue_source}${isSample ? ' (sample)' : ''}`)
+        }
+        if (breakdown?.operations_available && breakdown?.operations_source) {
+            const recordCount = breakdown.operations_record_count || 0
+            const isSample = breakdown.is_sample_data
+            dataInsights.push(`⚙️ **Operations**: ${recordCount.toLocaleString()} items from ${breakdown.operations_source}${isSample ? ' (sample)' : ''}`)
+        }
+        if (breakdown?.customer_available && breakdown?.customer_source) {
+            const recordCount = breakdown.customer_record_count || 0
+            const isSample = breakdown.is_sample_data
+            dataInsights.push(`👥 **Customers**: ${recordCount.toLocaleString()} records from ${breakdown.customer_source}${isSample ? ' (sample)' : ''}`)
+        }
+
+        const dataInsightMessage = dataInsights.length > 0
+            ? `\n\n**Connected Data:**\n${dataInsights.join('\n')}`
+            : ''
+
         return {
             title: `👋 Good Morning${user?.name ? ', ' + user.name.split(' ')[0] : ''}!`,
-            message: `Your business is running smoothly (Health: ${score}/100). What would you like to work on today?`,
+            message: `Your business is running smoothly (Health: ${score}/100). What would you like to work on today?${dataInsightMessage}`,
             quickActions: [
                 { label: "📊 Daily Summary", prompt: "Show me yesterday's performance summary" },
                 { label: "🎯 Set New Goal", prompt: "Help me set a new business goal" },
@@ -693,51 +794,6 @@ export default function CoachV4() {
                                         <Text size="11px" c="#8e8ea0">Your fitness trainer for business growth</Text>
                                     </div>
                                 </Group>
-                                <Group gap={8}>
-                                    {/* Coach Selector */}
-                                    <Menu shadow="md" width={240} position="bottom-end">
-                                        <Menu.Target>
-                                            <Button
-                                                size="sm"
-                                                variant="light"
-                                                rightSection={<IconChevronDown size={14} />}
-                                                styles={{
-                                                    root: {
-                                                        fontWeight: 500,
-                                                        fontSize: '13px',
-                                                        background: '#f3f4f6',
-                                                        border: 'none'
-                                                    }
-                                                }}
-                                            >
-                                                {AGENTS.find(a => a.id === selectedAgent)?.emoji} {AGENTS.find(a => a.id === selectedAgent)?.label}
-                                            </Button>
-                                        </Menu.Target>
-                                        <Menu.Dropdown>
-                                            <Menu.Label>Switch Coach</Menu.Label>
-                                            {AGENTS.map(a => (
-                                                <Menu.Item
-                                                    key={a.id}
-                                                    onClick={() => setSelectedAgent(a.id)}
-                                                    leftSection={<span style={{ fontSize: '16px' }}>{a.emoji}</span>}
-                                                    bg={selectedAgent === a.id ? '#f3f4f6' : undefined}
-                                                >
-                                                    {a.label}
-                                                </Menu.Item>
-                                            ))}
-                                        </Menu.Dropdown>
-                                    </Menu>
-
-                                    <Button
-                                        size="xs"
-                                        variant="subtle"
-                                        onClick={() => setSettingsOpen(true)}
-                                        c="#6b7280"
-                                        styles={{ root: { fontWeight: 400, fontSize: '12px' } }}
-                                    >
-                                        ⚙️ Settings
-                                    </Button>
-                                </Group>
                             </Group>
                         </div>
                     </div>                {/* Chat thread - CLEAN, NO BORDERS */}
@@ -824,7 +880,7 @@ export default function CoachV4() {
                                                         {m.metadata?.rich_data?.type === 'metrics_card' && (
                                                             <div style={{ marginTop: 12 }}>
                                                                 <MetricsCard
-                                                                    metrics={m.metadata.rich_data.metrics}
+                                                                    metrics={m.metadata.rich_data.metrics || []}
                                                                     chart={m.metadata.rich_data.chart}
                                                                 />
                                                             </div>
@@ -933,98 +989,162 @@ export default function CoachV4() {
                                                                 {/* Traffic Light Breakdown */}
                                                                 <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12, marginBottom: 12 }}>
                                                                     <Text size="11px" c="#8e8ea0" fw={500} tt="uppercase" mb={10}>Health Breakdown</Text>
+
+                                                                    {healthScore?.breakdown?.is_sample_data && (
+                                                                        <div style={{
+                                                                            padding: 8,
+                                                                            background: '#fef3c7',
+                                                                            borderRadius: 4,
+                                                                            marginBottom: 12,
+                                                                            border: '1px solid #fbbf24'
+                                                                        }}>
+                                                                            <Text size="11px" c="#92400e">
+                                                                                ⚠️ Using sample data - Connect real integrations for accurate insights
+                                                                            </Text>
+                                                                        </div>
+                                                                    )}
+
                                                                     <Stack gap={8}>
                                                                         {/* Revenue */}
-                                                                        <Group gap={8} wrap="nowrap">
-                                                                            <div style={{
-                                                                                width: 20,
-                                                                                height: 20,
-                                                                                borderRadius: '50%',
-                                                                                background: '#10b981',
-                                                                                flexShrink: 0
-                                                                            }} />
-                                                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                                                <Group gap={4} mb={2}>
-                                                                                    <Text size="13px" fw={500} c="#202123">Revenue</Text>
-                                                                                    <Text size="12px" c="#6b7280">82/100</Text>
-                                                                                </Group>
-                                                                                <Text size="11px" c="#059669">✓ Healthy - trending up</Text>
-                                                                            </div>
-                                                                        </Group>
+                                                                        {healthScore?.breakdown?.revenue_available && (
+                                                                            <Group gap={8} wrap="nowrap">
+                                                                                <div style={{
+                                                                                    width: 20,
+                                                                                    height: 20,
+                                                                                    borderRadius: '50%',
+                                                                                    background: healthScore.breakdown.revenue >= 70 ? '#10b981' : healthScore.breakdown.revenue >= 50 ? '#f59e0b' : '#ef4444',
+                                                                                    flexShrink: 0
+                                                                                }} />
+                                                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                                                    <Group gap={4} mb={2}>
+                                                                                        <Text size="13px" fw={500} c="#202123">Revenue</Text>
+                                                                                        <Text size="12px" c="#6b7280">{healthScore.breakdown.revenue}/100</Text>
+                                                                                        {healthScore.breakdown.is_sample_data && (
+                                                                                            <Badge size="xs" color="yellow" variant="filled">SAMPLE</Badge>
+                                                                                        )}
+                                                                                    </Group>
+                                                                                    <Text size="11px" c={healthScore.breakdown.revenue >= 70 ? '#059669' : healthScore.breakdown.revenue >= 50 ? '#8e8ea0' : '#dc2626'}>
+                                                                                        {healthScore.breakdown.revenue >= 70 ? '✓ Healthy' : healthScore.breakdown.revenue >= 50 ? '⚠️ Needs Work' : '🚨 Critical'}
+                                                                                    </Text>
+                                                                                    {healthScore.breakdown.revenue_source && (
+                                                                                        <Text size="10px" c="dimmed" mt={2}>
+                                                                                            📊 {healthScore.breakdown.revenue_source}
+                                                                                        </Text>
+                                                                                    )}
+                                                                                </div>
+                                                                            </Group>
+                                                                        )}
 
                                                                         {/* Operations */}
-                                                                        <Group gap={8} wrap="nowrap">
-                                                                            <div style={{
-                                                                                width: 20,
-                                                                                height: 20,
-                                                                                borderRadius: '50%',
-                                                                                background: '#f59e0b',
-                                                                                flexShrink: 0
-                                                                            }} />
-                                                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                                                <Group gap={4} mb={2}>
-                                                                                    <Text size="13px" fw={500} c="#202123">Operations</Text>
-                                                                                    <Text size="12px" c="#6b7280">48/100</Text>
-                                                                                </Group>
-                                                                                <Text size="11px" c="#8e8ea0">⚠️ Needs Work - inventory turnover slow</Text>
-                                                                                <Button
-                                                                                    size="xs"
-                                                                                    variant="subtle"
-                                                                                    onClick={() => {
-                                                                                        setInput("How can I improve my operations score? Specifically inventory turnover.")
-                                                                                        setTimeout(() => sendMessage(), 100)
-                                                                                    }}
-                                                                                    mt={4}
-                                                                                    styles={{
-                                                                                        root: {
-                                                                                            fontSize: '11px',
-                                                                                            height: 24,
-                                                                                            padding: '0 8px',
-                                                                                            color: '#d97706'
-                                                                                        }
-                                                                                    }}
-                                                                                >
-                                                                                    Fix This →
-                                                                                </Button>
-                                                                            </div>
-                                                                        </Group>
+                                                                        {healthScore?.breakdown?.operations_available && (
+                                                                            <Group gap={8} wrap="nowrap">
+                                                                                <div style={{
+                                                                                    width: 20,
+                                                                                    height: 20,
+                                                                                    borderRadius: '50%',
+                                                                                    background: healthScore.breakdown.operations >= 70 ? '#10b981' : healthScore.breakdown.operations >= 50 ? '#f59e0b' : '#ef4444',
+                                                                                    flexShrink: 0
+                                                                                }} />
+                                                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                                                    <Group gap={4} mb={2}>
+                                                                                        <Text size="13px" fw={500} c="#202123">Operations</Text>
+                                                                                        <Text size="12px" c="#6b7280">{healthScore.breakdown.operations}/100</Text>
+                                                                                        {healthScore.breakdown.is_sample_data && (
+                                                                                            <Badge size="xs" color="yellow" variant="filled">SAMPLE</Badge>
+                                                                                        )}
+                                                                                    </Group>
+                                                                                    <Text size="11px" c={healthScore.breakdown.operations >= 70 ? '#059669' : healthScore.breakdown.operations >= 50 ? '#8e8ea0' : '#dc2626'}>
+                                                                                        {healthScore.breakdown.operations >= 70 ? '✓ Healthy' : healthScore.breakdown.operations >= 50 ? '⚠️ Needs Work' : '🚨 Critical'}
+                                                                                    </Text>
+                                                                                    {healthScore.breakdown.operations_source && (
+                                                                                        <Text size="10px" c="dimmed" mt={2}>
+                                                                                            📊 {healthScore.breakdown.operations_source}
+                                                                                        </Text>
+                                                                                    )}
+                                                                                    {healthScore.breakdown.operations < 70 && (
+                                                                                        <Button
+                                                                                            size="xs"
+                                                                                            variant="subtle"
+                                                                                            onClick={() => {
+                                                                                                setInput("How can I improve my operations score?")
+                                                                                                setTimeout(() => sendMessage(), 100)
+                                                                                            }}
+                                                                                            mt={4}
+                                                                                            styles={{
+                                                                                                root: {
+                                                                                                    fontSize: '11px',
+                                                                                                    height: 24,
+                                                                                                    padding: '0 8px',
+                                                                                                    color: healthScore.breakdown.operations >= 50 ? '#d97706' : '#dc2626'
+                                                                                                }
+                                                                                            }}
+                                                                                        >
+                                                                                            Fix This →
+                                                                                        </Button>
+                                                                                    )}
+                                                                                </div>
+                                                                            </Group>
+                                                                        )}
 
                                                                         {/* Customer */}
-                                                                        <Group gap={8} wrap="nowrap">
-                                                                            <div style={{
-                                                                                width: 20,
-                                                                                height: 20,
-                                                                                borderRadius: '50%',
-                                                                                background: '#ef4444',
-                                                                                flexShrink: 0
-                                                                            }} />
-                                                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                                                <Group gap={4} mb={2}>
-                                                                                    <Text size="13px" fw={500} c="#202123">Customer</Text>
-                                                                                    <Text size="12px" c="#6b7280">24/100</Text>
-                                                                                </Group>
-                                                                                <Text size="11px" c="#dc2626">🚨 Critical - churn rate 35% (avg 15%)</Text>
-                                                                                <Button
-                                                                                    size="xs"
-                                                                                    variant="filled"
-                                                                                    color="red"
-                                                                                    onClick={() => {
-                                                                                        setInput("Create an urgent action plan to reduce customer churn from 35% to 15%")
-                                                                                        setTimeout(() => sendMessage(), 100)
-                                                                                    }}
-                                                                                    mt={4}
-                                                                                    styles={{
-                                                                                        root: {
-                                                                                            fontSize: '11px',
-                                                                                            height: 24,
-                                                                                            padding: '0 8px'
-                                                                                        }
-                                                                                    }}
-                                                                                >
-                                                                                    Fix This Now 🚀
-                                                                                </Button>
-                                                                            </div>
-                                                                        </Group>
+                                                                        {healthScore?.breakdown?.customer_available && (
+                                                                            <Group gap={8} wrap="nowrap">
+                                                                                <div style={{
+                                                                                    width: 20,
+                                                                                    height: 20,
+                                                                                    borderRadius: '50%',
+                                                                                    background: healthScore.breakdown.customer >= 70 ? '#10b981' : healthScore.breakdown.customer >= 50 ? '#f59e0b' : '#ef4444',
+                                                                                    flexShrink: 0
+                                                                                }} />
+                                                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                                                    <Group gap={4} mb={2}>
+                                                                                        <Text size="13px" fw={500} c="#202123">Customer</Text>
+                                                                                        <Text size="12px" c="#6b7280">{healthScore.breakdown.customer}/100</Text>
+                                                                                        {healthScore.breakdown.is_sample_data && (
+                                                                                            <Badge size="xs" color="yellow" variant="filled">SAMPLE</Badge>
+                                                                                        )}
+                                                                                    </Group>
+                                                                                    <Text size="11px" c={healthScore.breakdown.customer >= 70 ? '#059669' : healthScore.breakdown.customer >= 50 ? '#8e8ea0' : '#dc2626'}>
+                                                                                        {healthScore.breakdown.customer >= 70 ? '✓ Healthy' : healthScore.breakdown.customer >= 50 ? '⚠️ Needs Work' : '🚨 Critical'}
+                                                                                    </Text>
+                                                                                    {healthScore.breakdown.customer_source && (
+                                                                                        <Text size="10px" c="dimmed" mt={2}>
+                                                                                            📊 {healthScore.breakdown.customer_source}
+                                                                                        </Text>
+                                                                                    )}
+                                                                                    {healthScore.breakdown.customer < 70 && (
+                                                                                        <Button
+                                                                                            size="xs"
+                                                                                            variant={healthScore.breakdown.customer < 50 ? "filled" : "subtle"}
+                                                                                            color={healthScore.breakdown.customer < 50 ? "red" : undefined}
+                                                                                            onClick={() => {
+                                                                                                setInput("How can I improve my customer health score?")
+                                                                                                setTimeout(() => sendMessage(), 100)
+                                                                                            }}
+                                                                                            mt={4}
+                                                                                            styles={{
+                                                                                                root: {
+                                                                                                    fontSize: '11px',
+                                                                                                    height: 24,
+                                                                                                    padding: '0 8px'
+                                                                                                }
+                                                                                            }}
+                                                                                        >
+                                                                                            {healthScore.breakdown.customer < 50 ? 'Fix This Now 🚀' : 'Fix This →'}
+                                                                                        </Button>
+                                                                                    )}
+                                                                                </div>
+                                                                            </Group>
+                                                                        )}
+
+                                                                        {/* No data message */}
+                                                                        {!healthScore?.breakdown?.revenue_available &&
+                                                                            !healthScore?.breakdown?.operations_available &&
+                                                                            !healthScore?.breakdown?.customer_available && (
+                                                                                <Text size="12px" c="dimmed" ta="center" py={12}>
+                                                                                    No health data available. Connect your data sources to see metrics.
+                                                                                </Text>
+                                                                            )}
                                                                     </Stack>
                                                                 </div>
 
@@ -1088,6 +1208,165 @@ export default function CoachV4() {
                     {/* Composer - CLEAN, SUBTLE BORDER */}
                     <div style={{ background: 'white', padding: '20px 0 32px' }}>
                         <div style={{ maxWidth: 750, margin: '0 auto', padding: '0 24px' }}>
+                            {/* Coach selector, tools, and settings bar */}
+                            <Group gap={8} mb={8} wrap="wrap">
+                                {/* Coach Selector */}
+                                <Menu shadow="sm" width={200}>
+                                    <Menu.Target>
+                                        <Button
+                                            size="xs"
+                                            variant="light"
+                                            rightSection={<IconChevronDown size={12} />}
+                                            styles={{
+                                                root: {
+                                                    fontSize: '11px',
+                                                    height: 26,
+                                                    padding: '0 10px',
+                                                    background: '#f3f4f6',
+                                                    border: 'none'
+                                                }
+                                            }}
+                                        >
+                                            {AGENTS.find(a => a.id === selectedAgent)?.emoji} {AGENTS.find(a => a.id === selectedAgent)?.label}
+                                        </Button>
+                                    </Menu.Target>
+                                    <Menu.Dropdown>
+                                        <Menu.Label>Switch Coach</Menu.Label>
+                                        {AGENTS.map(a => (
+                                            <Menu.Item
+                                                key={a.id}
+                                                onClick={() => setSelectedAgent(a.id)}
+                                                leftSection={<span style={{ fontSize: '14px' }}>{a.emoji}</span>}
+                                                bg={selectedAgent === a.id ? '#f3f4f6' : undefined}
+                                            >
+                                                {a.label}
+                                            </Menu.Item>
+                                        ))}
+                                    </Menu.Dropdown>
+                                </Menu>
+
+                                {/* Tool/Connector Selector */}
+                                {(suggestedTools.length > 0 || enabledConnectors.length > 0) && (
+                                    <>
+                                        <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
+                                        <Menu shadow="sm" width={280}>
+                                            <Menu.Target>
+                                                <Button
+                                                    size="xs"
+                                                    variant="light"
+                                                    rightSection={<IconChevronDown size={12} />}
+                                                    styles={{
+                                                        root: {
+                                                            fontSize: '11px',
+                                                            height: 26,
+                                                            padding: '0 10px',
+                                                            background: '#f3f4f6',
+                                                            border: 'none',
+                                                            color: '#6b21a8'
+                                                        }
+                                                    }}
+                                                >
+                                                    🔧 Tools ({suggestedTools.length})
+                                                </Button>
+                                            </Menu.Target>
+                                            <Menu.Dropdown>
+                                                <Menu.Label>Connected Tools</Menu.Label>
+                                                {(() => {
+                                                    // Group connectors by type to avoid duplicates
+                                                    const connectorsByType = enabledConnectors.reduce((acc: any, connector: any) => {
+                                                        const type = connector.connector_type
+                                                        if (!acc[type]) {
+                                                            acc[type] = []
+                                                        }
+                                                        acc[type].push(connector)
+                                                        return acc
+                                                    }, {})
+
+                                                    return Object.entries(connectorsByType).map(([connectorType, connectors]: [string, any]) => {
+                                                        const connectorTools = suggestedTools.filter((t) => t.connector === connectorType)
+                                                        if (connectorTools.length === 0) return null
+
+                                                        const connectorList = connectors as any[]
+                                                        const displayName = connectorList.length > 1
+                                                            ? `${connectorType.toUpperCase()} (${connectorList.length} sources)`
+                                                            : connectorList[0].display_name || connectorType
+
+                                                        return (
+                                                            <div key={connectorType}>
+                                                                <Menu.Label style={{ fontSize: '10px', textTransform: 'uppercase', color: '#9ca3af', marginTop: 8 }}>
+                                                                    {displayName}
+                                                                </Menu.Label>
+                                                                {connectorTools.map((tool) => (
+                                                                    <Menu.Item
+                                                                        key={tool.id}
+                                                                        leftSection={<span style={{ fontSize: '12px' }}>🔧</span>}
+                                                                        onClick={() => {
+                                                                            // Generate contextual prompt based on tool
+                                                                            let prompt = ''
+                                                                            if (tool.id.includes('stock') || tool.id.includes('inventory')) {
+                                                                                prompt = `Check my current inventory stock levels and show which items are low or out of stock`
+                                                                            } else if (tool.id.includes('sales') || tool.id.includes('orders')) {
+                                                                                prompt = `Show me recent sales orders and their status`
+                                                                            } else if (tool.id.includes('purchase') || tool.id.includes('po')) {
+                                                                                prompt = `Check purchase orders and show what needs to be reordered`
+                                                                            } else if (tool.id.includes('csv.query')) {
+                                                                                prompt = `Query my CSV data to find top products by revenue`
+                                                                            } else if (tool.id.includes('csv.analyze')) {
+                                                                                prompt = `Analyze my CSV data for trends and insights`
+                                                                            } else if (tool.id.includes('csv.aggregate')) {
+                                                                                prompt = `Aggregate my CSV data by category and show summary metrics`
+                                                                            } else {
+                                                                                prompt = `Use "${tool.label}" to ${tool.description?.toLowerCase() || 'analyze the data'}`
+                                                                            }
+                                                                            setInput(prompt)
+                                                                        }}
+                                                                        styles={{
+                                                                            item: {
+                                                                                fontSize: '12px',
+                                                                                padding: '6px 12px',
+                                                                                cursor: 'pointer'
+                                                                            }
+                                                                        }}
+                                                                    >
+                                                                        <div>
+                                                                            <div style={{ fontWeight: 500 }}>{tool.label}</div>
+                                                                            {tool.description && (
+                                                                                <div style={{ fontSize: '10px', color: '#6b7280', marginTop: 2 }}>
+                                                                                    {tool.description}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    </Menu.Item>
+                                                                ))}
+                                                            </div>
+                                                        )
+                                                    })
+                                                })()}
+                                            </Menu.Dropdown>
+                                        </Menu>
+                                    </>
+                                )}
+
+                                {/* Settings button */}
+                                <Button
+                                    size="xs"
+                                    variant="subtle"
+                                    onClick={() => setSettingsOpen(true)}
+                                    ml="auto"
+                                    styles={{
+                                        root: {
+                                            fontSize: '11px',
+                                            height: 26,
+                                            padding: '0 10px',
+                                            color: '#6b7280'
+                                        }
+                                    }}
+                                >
+                                    ⚙️ Settings
+                                </Button>
+                            </Group>
+
+                            {/* Input box */}
                             <div style={{
                                 display: 'flex',
                                 gap: '12px',
@@ -1160,55 +1439,88 @@ export default function CoachV4() {
                             {/* Guided Question Prompts (only show when input is empty) */}
                             {!input && messages.length <= 1 && (
                                 <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
-                                    <Text size="11px" c="#8e8ea0" fw={500} mb={8}>💬 Suggested Questions:</Text>
-                                    <Group gap={6}>
-                                        {(() => {
-                                            const score = healthScore?.score || 0
-                                            const hasGoals = (goalsData?.length || 0) > 0
-                                            const hasTasks = (tasksData?.length || 0) > 0
+                                    {suggestedPrompts.length > 0 ? (
+                                        <>
+                                            <Text size="11px" c="#8e8ea0" fw={500} mb={8}>� Try these prompts:</Text>
+                                            <Group gap={6}>
+                                                {suggestedPrompts.map((p) => (
+                                                    <Button
+                                                        key={p.id}
+                                                        size="xs"
+                                                        variant="light"
+                                                        onClick={() => {
+                                                            setInput(p.text)
+                                                            setTimeout(() => sendMessage(), 100)
+                                                        }}
+                                                        styles={{
+                                                            root: {
+                                                                fontSize: '11px',
+                                                                fontWeight: 400,
+                                                                height: 28,
+                                                                background: '#f9fafb',
+                                                                border: '1px solid #e5e7eb',
+                                                                color: '#374151'
+                                                            }
+                                                        }}
+                                                    >
+                                                        {p.title}
+                                                    </Button>
+                                                ))}
+                                            </Group>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Text size="11px" c="#8e8ea0" fw={500} mb={8}>�💬 Suggested Questions:</Text>
+                                            <Group gap={6}>
+                                                {(() => {
+                                                    const score = healthScore?.score || 0
+                                                    const hasGoals = (goalsData?.length || 0) > 0
+                                                    const hasTasks = (tasksData?.length || 0) > 0
 
-                                            // Smart suggestions based on context
-                                            const suggestions = []
-                                            if (score < 50) {
-                                                suggestions.push("Why is my health score low?")
-                                            } else {
-                                                suggestions.push("Show me yesterday's sales")
-                                            }
+                                                    // Smart suggestions based on context
+                                                    const suggestions = []
+                                                    if (score < 50) {
+                                                        suggestions.push("Why is my health score low?")
+                                                    } else {
+                                                        suggestions.push("Show me yesterday's sales")
+                                                    }
 
-                                            if (hasTasks) {
-                                                suggestions.push("What should I focus on today?")
-                                            } else {
-                                                suggestions.push("Create a weekly action plan")
-                                            }
+                                                    if (hasTasks) {
+                                                        suggestions.push("What should I focus on today?")
+                                                    } else {
+                                                        suggestions.push("Create a weekly action plan")
+                                                    }
 
-                                            if (hasGoals) {
-                                                suggestions.push("Check my goal progress")
-                                            } else {
-                                                suggestions.push("Help me set a new goal")
-                                            }
+                                                    if (hasGoals) {
+                                                        suggestions.push("Check my goal progress")
+                                                    } else {
+                                                        suggestions.push("Help me set a new goal")
+                                                    }
 
-                                            return suggestions.map((s, i) => (
-                                                <Button
-                                                    key={i}
-                                                    size="xs"
-                                                    variant="light"
-                                                    onClick={() => setInput(s)}
-                                                    styles={{
-                                                        root: {
-                                                            fontSize: '11px',
-                                                            fontWeight: 400,
-                                                            height: 28,
-                                                            background: '#f9fafb',
-                                                            border: '1px solid #e5e7eb',
-                                                            color: '#6b7280'
-                                                        }
-                                                    }}
-                                                >
-                                                    {s}
-                                                </Button>
-                                            ))
-                                        })()}
-                                    </Group>
+                                                    return suggestions.map((s, i) => (
+                                                        <Button
+                                                            key={i}
+                                                            size="xs"
+                                                            variant="light"
+                                                            onClick={() => setInput(s)}
+                                                            styles={{
+                                                                root: {
+                                                                    fontSize: '11px',
+                                                                    fontWeight: 400,
+                                                                    height: 28,
+                                                                    background: '#f9fafb',
+                                                                    border: '1px solid #e5e7eb',
+                                                                    color: '#6b7280'
+                                                                }
+                                                            }}
+                                                        >
+                                                            {s}
+                                                        </Button>
+                                                    ))
+                                                })()}
+                                            </Group>
+                                        </>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -1230,7 +1542,7 @@ export default function CoachV4() {
                     personas={AGENTS.map(a => ({ id: a.id, name: a.label, emoji: a.emoji, description: '', expertise: [], tone: 'neutral' }))}
                     dataSources={[]}
                 />
-            </div>
+            </div >
         </>
     )
 }

@@ -4,7 +4,6 @@ import uuid
 from importlib import resources
 import json
 import os
-import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -14,9 +13,10 @@ from pydantic import BaseModel, Field
 import jsonschema
 
 # PostgreSQL persistence layer
+from packages.kernel_common.logging import configure_logging
 from packages.kernel_common.persistence_v2 import get_backend
 
-logger = logging.getLogger(__name__)
+logger = configure_logging("smb-gateway")
 
 from .health_score import HealthScoreCalculator, HealthScoreResponse
 from .goals_service import (
@@ -258,6 +258,7 @@ async def _fetch_connector_data(tenant_id: str) -> Dict:
     try:
         from packages.connectors.repository_postgres import ConnectorRepositoryPG
         from packages.connectors.models import ConnectorStatus
+        from packages.kernel_common.persistence_v2 import get_backend, PostgresBackend
         
         logger.info(f"[_fetch_connector_data] Checking connectors for tenant {tenant_id}")
         
@@ -281,22 +282,137 @@ async def _fetch_connector_data(tenant_id: str) -> Dict:
         
         logger.info(f"[_fetch_connector_data] Found {len(connectors)} active connectors for tenant {tenant_id}")
         
-        # TODO: Query connector_data table for actual synced data
-        # For now, return empty arrays indicating connectors exist but no data synced yet
-        return {
-            "orders": [],
-            "inventory": [],
-            "customers": [],
-            "has_data_connected": True,
-            "_meta": {
-                "fetched_at": datetime.now().isoformat(),
-                "tenant_id": tenant_id,
-                "data_source": "connectors_api",
-                "active_connectors": len(connectors),
-                "connector_types": [c.connector_type for c in connectors],
-                "note": "Connectors configured but no data synced yet. Use connector sync to import data."
+        # Query connector_data (compact) + connector_data_chunks (chunked) with single tenant-scoped queries
+        try:
+            backend = get_backend()
+            if not isinstance(backend, PostgresBackend):
+                raise RuntimeError("PostgresBackend required for connector data queries")
+
+            result = {
+                "orders": [],
+                "inventory": [],
+                "customers": [],
+                "products": [],
+                "has_data_connected": True,
+                "metadata": {
+                    "is_sample_data": False,
+                    "orders_source": None,
+                    "inventory_source": None,
+                    "customers_source": None,
+                    "active_connectors": len(connectors),
+                    "connector_names": {c.connector_id: c.display_name for c in connectors},
+                },
+                "_meta": {
+                    "fetched_at": datetime.now().isoformat(),
+                    "tenant_id": tenant_id,
+                    "data_source": "connector_data_table+chunks",
+                    "active_connectors": len(connectors),
+                    "connector_types": [c.connector_type for c in connectors],
+                }
             }
-        }
+
+            connector_ids = [c.connector_id for c in connectors]
+            data_source_map = {}  # Track which connector provided which data type
+
+            with backend.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Compact rows in one query
+                    cur.execute(
+                        """
+                        SELECT connector_id, data_type, data, record_count, synced_at
+                        FROM connectors.connector_data
+                        WHERE tenant_id = %s AND connector_id = ANY(%s)
+                        ORDER BY synced_at DESC
+                        """,
+                        (tenant_id, connector_ids)
+                    )
+                    compact_rows = cur.fetchall()
+                    for connector_id, data_type, data_array, record_count, _ in compact_rows:
+                        if data_type in result:
+                            if isinstance(data_array, list):
+                                result[data_type].extend(data_array)
+                            else:
+                                result[data_type].append(data_array)
+                            logger.debug(f"[_fetch_connector_data] Merged {record_count} {data_type} (compact)")
+                            
+                            # Track data source
+                            if data_type not in data_source_map:
+                                connector_name = result["metadata"]["connector_names"].get(connector_id, connector_id)
+                                data_source_map[data_type] = f"{connector_name} ({record_count} records)"
+
+                    # Chunked rows in one query (ordered by latest first, chunk order descending)
+                    try:
+                        cur.execute(
+                            """
+                            SELECT connector_id, data_type, data, record_count, synced_at
+                            FROM connectors.connector_data_chunks
+                            WHERE tenant_id = %s AND connector_id = ANY(%s)
+                            ORDER BY synced_at DESC, chunk_index DESC
+                            """,
+                            (tenant_id, connector_ids)
+                        )
+                        chunk_rows = cur.fetchall()
+                        for connector_id, data_type, data_array, record_count, _ in chunk_rows:
+                            if data_type in result:
+                                if isinstance(data_array, list):
+                                    result[data_type].extend(data_array)
+                                else:
+                                    result[data_type].append(data_array)
+                                logger.debug(f"[_fetch_connector_data] Merged {record_count} {data_type} (chunk)")
+                                
+                                # Track data source if not already tracked
+                                if data_type not in data_source_map:
+                                    connector_name = result["metadata"]["connector_names"].get(connector_id, connector_id)
+                                    data_source_map[data_type] = f"{connector_name} ({record_count} records)"
+                    except Exception as e:
+                        # Graceful degradation when chunks table not yet migrated
+                        logger.warning("[_fetch_connector_data] Skipping chunks: %s", str(e))
+            
+            # Populate metadata with data sources
+            result["metadata"]["orders_source"] = data_source_map.get("orders")
+            result["metadata"]["inventory_source"] = data_source_map.get("inventory")
+            result["metadata"]["customers_source"] = data_source_map.get("customers")
+
+            total_records = (
+                len(result.get("orders", [])) +
+                len(result.get("inventory", [])) +
+                len(result.get("customers", [])) +
+                len(result.get("products", []))
+            )
+
+            logger.info(
+                f"[_fetch_connector_data] Aggregated records for tenant {tenant_id}: "
+                f"orders={len(result['orders'])} inventory={len(result['inventory'])} "
+                f"customers={len(result['customers'])} products={len(result['products'])} total={total_records}"
+            )
+
+            result["_meta"]["total_records"] = total_records
+            result["_meta"]["note"] = (
+                "Connectors configured but no data synced yet. Upload CSV or sync connector data." if total_records == 0
+                else f"Loaded {total_records} total records from {len(connectors)} active connectors"
+            )
+            return result
+            
+        except Exception as db_error:
+            logger.error(f"[_fetch_connector_data] Database query failed: {db_error}")
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback to empty arrays if DB query fails
+            return {
+                "orders": [],
+                "inventory": [],
+                "customers": [],
+                "has_data_connected": True,
+                "_meta": {
+                    "fetched_at": datetime.now().isoformat(),
+                    "tenant_id": tenant_id,
+                    "data_source": "connectors_api",
+                    "active_connectors": len(connectors),
+                    "connector_types": [c.connector_type for c in connectors],
+                    "note": f"Connectors configured but failed to query data: {str(db_error)}"
+                }
+            }
     
     except Exception as e:
         logger.error(f"[_fetch_connector_data] Failed to fetch connector data for tenant {tenant_id}: {e}")
@@ -675,7 +791,9 @@ async def get_data_source_info(tenant_id: str):
     """Get information about connected data sources"""
     # Fetch connector data
     connector_data = await _fetch_connector_data(tenant_id)
-    has_real_data = tenant_id in TENANT_CONNECTOR_DATA
+    
+    # Check if has real data from database (not in-memory mock)
+    has_real_data = connector_data.get("has_data_connected", False)
     
     # Count records
     total_orders = len(connector_data.get("orders", []))
@@ -703,7 +821,22 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
     try:
         # Get connector data and check if it's real or sample data
         connector_data = await _fetch_connector_data(tenant_id)
-        has_real_data = tenant_id in TENANT_CONNECTOR_DATA
+        
+        # Extract metadata from connector_data
+        connector_metadata = connector_data.get("metadata", {})
+        data_source_map = {}
+        if "connector_names" in connector_metadata:
+            # Build data source map from connector_data metadata
+            for data_type in ["orders", "inventory", "customers"]:
+                source_key = f"{data_type}_source"
+                if connector_metadata.get(source_key):
+                    data_source_map[data_type] = {
+                        "connector_name": connector_metadata.get(source_key),
+                        "record_count": len(connector_data.get(data_type, []))
+                    }
+        
+        # Check if has real data from database (not in-memory mock)
+        has_real_data = connector_data.get("has_data_connected", False)
         
         # Calculate health score
         calculator = HealthScoreCalculator(connector_data)
@@ -743,6 +876,7 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
         low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
         out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
         total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
+        total_inventory_quantity = sum(i.get("quantity", 0) for i in inventory)
         
         # Customer metrics
         vip_customers = [c for c in customers if c.get("segment") == "vip"]
@@ -760,10 +894,16 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
                 "inventory": total_inventory,
                 "customers": total_customers,
             },
+            "metadata": {
+                "data_sources": data_source_map,
+                "is_sample_data": not has_real_data,
+            },
             "metrics": {
                 "revenue_last_30_days": round(total_revenue_30d, 2),
                 "orders_last_30_days": len(recent_orders),
                 "avg_order_value": round(avg_order_value, 2),
+                "total_inventory_items": total_inventory,
+                "total_inventory_quantity": total_inventory_quantity,
                 "low_stock_items": len(low_stock_items),
                 "out_of_stock_items": len(out_of_stock_items),
                 "total_inventory_value": round(total_inventory_value, 2),
@@ -865,7 +1005,22 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
     try:
         # Get connector data and check if it's real or sample data
         connector_data = await _fetch_connector_data(tenant_id)
-        has_real_data = tenant_id in TENANT_CONNECTOR_DATA
+        
+        # Extract metadata from connector_data
+        connector_metadata = connector_data.get("metadata", {})
+        data_source_map = {}
+        if "connector_names" in connector_metadata:
+            # Build data source map from connector_data metadata
+            for data_type in ["orders", "inventory", "customers"]:
+                source_key = f"{data_type}_source"
+                if connector_metadata.get(source_key):
+                    data_source_map[data_type] = {
+                        "connector_name": connector_metadata.get(source_key),
+                        "record_count": len(connector_data.get(data_type, []))
+                    }
+        
+        # Check if has real data from database (not in-memory mock)
+        has_real_data = connector_data.get("has_data_connected", False)
         
         # Calculate health score
         calculator = HealthScoreCalculator(connector_data)
@@ -905,6 +1060,7 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
         out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
         total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
+        total_inventory_quantity = sum(i.get("quantity", 0) for i in inventory)
         
         # Customer metrics
         vip_customers = [c for c in customers if c.get("segment") == "vip"]
@@ -922,10 +1078,16 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
                 "inventory": total_inventory,
                 "customers": total_customers,
             },
+            "metadata": {
+                "data_sources": data_source_map,
+                "is_sample_data": not has_real_data,
+            },
             "metrics": {
                 "revenue_last_30_days": round(total_revenue_30d, 2),
                 "orders_last_30_days": len(recent_orders),
                 "avg_order_value": round(avg_order_value, 2),
+                "total_inventory_items": total_inventory,
+                "total_inventory_quantity": total_inventory_quantity,
                 "low_stock_items": len(low_stock_items),
                 "out_of_stock_items": len(out_of_stock_items),
                 "total_inventory_value": round(total_inventory_value, 2),
@@ -1313,6 +1475,214 @@ async def update_integration_settings(
 # Connector Marketplace Endpoints
 # ===================================
 
+@app.get("/v1/tenants/{tenant_id}/connectors/recommendations")
+async def get_connector_recommendations(tenant_id: str):
+    """
+    Get personalized connector recommendations based on business profile and synced data.
+    
+    Returns dynamic connector presets tailored to:
+    - Business type (restaurant, retail, ecommerce, etc.)
+    - Current data gaps (missing orders, inventory, customers)
+    - Industry best practices
+    """
+    try:
+        # Fetch tenant profile to understand business type
+        business_profile = {}
+        industry = None
+        business_type = None
+        
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            
+            pg_url = os.getenv("POSTGRES_URL")
+            if not pg_url:
+                pg_host = os.getenv("POSTGRES_HOST", "localhost")
+                pg_port = os.getenv("POSTGRES_PORT", "5432")
+                pg_db = os.getenv("POSTGRES_DB", "dyocense")
+                pg_user = os.getenv("POSTGRES_USER", "dyocense")
+                pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+                pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+            
+            conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM accounts.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                if result:
+                    metadata = dict(result).get('metadata', {})
+                    business_profile = metadata.get('business_profile', {})
+                    industry = business_profile.get('industry')
+                    business_type = business_profile.get('business_type')
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Could not fetch tenant profile: {e}")
+        
+        # Fetch current connector data to understand gaps
+        connector_data = await _fetch_connector_data(tenant_id)
+        has_orders = len(connector_data.get('orders', [])) > 0
+        has_inventory = len(connector_data.get('inventory', [])) > 0
+        has_customers = len(connector_data.get('customers', [])) > 0
+        has_products = len(connector_data.get('products', [])) > 0
+        
+        # Fetch existing connectors to avoid duplication
+        existing_connector_types = set()
+        try:
+            from packages.connectors.repository_postgres import ConnectorRepositoryPG
+            repo = ConnectorRepositoryPG()
+            existing_connectors = repo.list_by_tenant(tenant_id)
+            existing_connector_types = {c.connector_type for c in existing_connectors}
+        except Exception as e:
+            logger.warning(f"Could not fetch existing connectors: {e}")
+        
+        # Build personalized recommendations
+        recommendations = []
+        
+        # Always offer CSV upload as the easiest starting point
+        if 'csv_upload' not in existing_connector_types:
+            recommendations.append({
+                "id": "csv_upload",
+                "label": "CSV/Excel Upload",
+                "description": "Upload a CSV or Excel file from your device, or provide a URL to fetch data automatically.",
+                "icon": "📊",
+                "category": "files",
+                "priority": 1,
+                "reason": "Quick start - upload your existing spreadsheets",
+                "fields": [
+                    {
+                        "name": "uploaded_file",
+                        "label": "Upload file",
+                        "type": "file",
+                        "accept": ".csv,.xlsx,.xls",
+                        "helper": "Select a CSV or Excel file from your computer"
+                    },
+                    {
+                        "name": "file_url",
+                        "label": "Or provide a URL (optional)",
+                        "placeholder": "https://example.com/export.csv",
+                        "helper": "If you have a hosted file that updates regularly"
+                    }
+                ]
+            })
+        
+        # Google Drive for collaborative teams
+        if 'google-drive' not in existing_connector_types and business_profile.get('team_size', '1') != '1':
+            recommendations.append({
+                "id": "google-drive",
+                "label": "Google Drive",
+                "description": "Bring in spreadsheets from a shared Drive folder.",
+                "icon": "📁",
+                "category": "cloud",
+                "priority": 2,
+                "reason": "Your team can collaborate on shared spreadsheets",
+                "fields": [
+                    {"name": "folder_id", "label": "Folder ID", "placeholder": "e.g. 1AbCDriveFolderID"},
+                    {
+                        "name": "service_account_json",
+                        "label": "Service account JSON",
+                        "type": "textarea",
+                        "placeholder": '{ "type": "service_account", ... }',
+                        "helper": "Create a Google Cloud service account and share the folder with it."
+                    }
+                ]
+            })
+        
+        # E-commerce connectors for online businesses
+        if business_type in ['ecommerce', 'retail', 'eCommerce', 'Retail']:
+            if 'shopify' not in existing_connector_types and not has_orders:
+                recommendations.append({
+                    "id": "shopify",
+                    "label": "Shopify",
+                    "description": "Connect your Shopify storefront for orders, carts, and customers.",
+                    "icon": "🛍️",
+                    "category": "ecommerce",
+                    "priority": 3,
+                    "reason": f"Perfect for {business_type} businesses - sync orders and customers automatically",
+                    "fields": [
+                        {"name": "store_url", "label": "Store URL", "placeholder": "https://yourstore.myshopify.com"},
+                        {"name": "api_key", "label": "Admin API access token", "type": "textarea"}
+                    ]
+                })
+            
+            if 'grandnode' not in existing_connector_types and not has_orders:
+                recommendations.append({
+                    "id": "grandnode",
+                    "label": "GrandNode",
+                    "description": "Sync sales and catalog data from your GrandNode shop.",
+                    "icon": "🛒",
+                    "category": "ecommerce",
+                    "priority": 4,
+                    "reason": "Alternative e-commerce platform for sales tracking",
+                    "fields": [
+                        {"name": "store_url", "label": "Store URL", "placeholder": "https://shop.example.com"},
+                        {"name": "api_key", "label": "API key", "type": "text"}
+                    ]
+                })
+        
+        # ERP for businesses needing inventory/operations management
+        if business_type in ['manufacturing', 'retail', 'restaurant', 'Manufacturing', 'Retail', 'Restaurant'] or not has_inventory:
+            if 'erpnext' not in existing_connector_types:
+                priority = 3 if not has_inventory else 5
+                reason = "Sync inventory, orders, and suppliers" if not has_inventory else "Advanced ERP integration for comprehensive data"
+                recommendations.append({
+                    "id": "erpnext",
+                    "label": "ERPNext",
+                    "description": "Connect your ERPNext ERP system to sync inventory, sales orders, and supplier data automatically.",
+                    "icon": "⚙️",
+                    "category": "erp",
+                    "priority": priority,
+                    "reason": reason,
+                    "fields": [
+                        {
+                            "name": "api_url",
+                            "label": "ERPNext URL",
+                            "placeholder": "https://erp.example.com",
+                            "helper": "Your ERPNext instance URL (e.g., https://erp.yourcompany.com)"
+                        },
+                        {
+                            "name": "api_key",
+                            "label": "API Key",
+                            "type": "text",
+                            "helper": "Found in User Settings → API Access after generating keys"
+                        },
+                        {
+                            "name": "api_secret",
+                            "label": "API Secret",
+                            "type": "textarea",
+                            "helper": "⚠️ Copy this immediately when generating keys - it's only shown once! Go to: User → Settings → API Access → Generate Keys"
+                        }
+                    ]
+                })
+        
+        # Sort by priority
+        recommendations.sort(key=lambda x: x.get('priority', 999))
+        
+        return {
+            "recommendations": recommendations,
+            "business_profile": {
+                "industry": industry,
+                "business_type": business_type,
+                "team_size": business_profile.get('team_size')
+            },
+            "data_status": {
+                "has_orders": has_orders,
+                "has_inventory": has_inventory,
+                "has_customers": has_customers,
+                "has_products": has_products
+            },
+            "existing_connectors": list(existing_connector_types),
+            "message": f"Showing {len(recommendations)} personalized connector recommendations"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching connector recommendations: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching recommendations: {str(e)}")
+
+
 @app.get("/v1/marketplace/connectors")
 async def get_marketplace_connectors(
     category: Optional[str] = Query(None, description="Filter by category (ecommerce, finance, crm, etc)"),
@@ -1602,6 +1972,12 @@ async def seed_tenant_data(tenant_id: str):
             "orders": orders,
             "inventory": inventory,
             "customers": customers,
+            "metadata": {
+                "is_sample_data": True,
+                "orders_source": "Sample data (seeded for testing)",
+                "inventory_source": "Sample data (seeded for testing)",
+                "customers_source": "Sample data (seeded for testing)",
+            },
             "_meta": {
                 "generated": now.isoformat(),
                 "tenant_id": tenant_id,
@@ -1630,6 +2006,5 @@ async def seed_tenant_data(tenant_id: str):
     except Exception as e:
         logger.error(f"[seed_tenant_data] Failed to seed data for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to seed data: {str(e)}")
-
 
 

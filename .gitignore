@@ -21,3 +21,7 @@ dist/
 build/
 .next/
 out/
+
+# Data directories
+data/
+/data/csv/

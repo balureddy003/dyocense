@@ -1,5 +1,5 @@
+import { AlertCircle, CheckCircle2, Database, FileUp, Link2, Loader2, Sheet, X } from "lucide-react";
 import { useState } from "react";
-import { FileUp, Database, Link2, Sheet, CheckCircle2, AlertCircle, Loader2, X } from "lucide-react";
 
 export type DataSource = {
   id: string;
@@ -74,9 +74,13 @@ const AVAILABLE_CONNECTORS: DataConnector[] = [
 export type DataUploaderProps = {
   onDataSourceAdded: (source: DataSource) => void;
   existingSources: DataSource[];
+  // Optional backend ingestion wiring
+  tenantId?: string;
+  csvConnectorId?: string; // connector_id for csv_upload type
+  ingestionApiBase?: string; // e.g. http://localhost:8002 (connectors service)
 };
 
-export function DataUploader({ onDataSourceAdded, existingSources }: DataUploaderProps) {
+export function DataUploader({ onDataSourceAdded, existingSources, tenantId, csvConnectorId, ingestionApiBase }: DataUploaderProps) {
   const [dragActive, setDragActive] = useState(false);
   const [showConnectors, setShowConnectors] = useState(false);
   const [selectedConnector, setSelectedConnector] = useState<DataConnector | null>(null);
@@ -105,11 +109,11 @@ export function DataUploader({ onDataSourceAdded, existingSources }: DataUploade
     try {
       // Read file content
       const content = await file.text();
-      
+
       // Parse based on file type
       let parsedData: any[] = [];
       let columns: string[] = [];
-      
+
       if (file.name.endsWith('.csv')) {
         const lines = content.split('\n').filter(l => l.trim());
         if (lines.length > 0) {
@@ -146,6 +150,29 @@ export function DataUploader({ onDataSourceAdded, existingSources }: DataUploade
       };
 
       onDataSourceAdded(updatedSource);
+
+      // Optional server ingestion if wiring provided and looks like CSV connector context
+      if (tenantId && csvConnectorId && ingestionApiBase && file.name.endsWith('.csv')) {
+        try {
+          const form = new FormData();
+          form.append('tenant_id', tenantId);
+          form.append('connector_id', csvConnectorId);
+          form.append('file', new File([content], file.name, { type: 'text/csv' }));
+          // No explicit data_type; let server infer
+          const resp = await fetch(`${ingestionApiBase}/api/connectors/upload_csv`, {
+            method: 'POST',
+            body: form
+          });
+          if (!resp.ok) {
+            console.error('CSV ingestion failed', await resp.text());
+          } else {
+            const payload = await resp.json();
+            console.log('CSV ingestion success', payload);
+          }
+        } catch (ingestErr) {
+          console.error('Error posting CSV to backend', ingestErr);
+        }
+      }
     } catch (error) {
       const errorSource: DataSource = {
         id: sourceId,
@@ -199,9 +226,8 @@ export function DataUploader({ onDataSourceAdded, existingSources }: DataUploade
     <div className="space-y-4">
       {/* File Drop Zone */}
       <div
-        className={`relative rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
-          dragActive ? "border-primary bg-blue-50" : "border-gray-300 bg-gray-50"
-        }`}
+        className={`relative rounded-xl border-2 border-dashed p-8 text-center transition-colors ${dragActive ? "border-primary bg-blue-50" : "border-gray-300 bg-gray-50"
+          }`}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);

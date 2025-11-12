@@ -2236,7 +2236,13 @@ Return ONLY the JSON object, no additional text.`;
         {mode === "data-upload" && (
           <div>
             <h3 className="mb-4 text-lg font-bold text-gray-900">Upload Data & Connect Sources</h3>
-            <DataUploader onDataSourceAdded={handleDataSourceAdded} existingSources={dataSources} />
+            <DataUploader
+              onDataSourceAdded={handleDataSourceAdded}
+              existingSources={dataSources}
+              tenantId={profile?.tenant_id}
+              csvConnectorId={(tenantConnectors.find(c => c.connector_type === 'csv_upload')?.connector_id) as any}
+              ingestionApiBase={(import.meta as any).env?.VITE_CONNECTORS_API_BASE || '/api/dyocense_connectors'}
+            />
           </div>
         )}
 

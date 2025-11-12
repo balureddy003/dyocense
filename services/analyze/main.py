@@ -168,6 +168,8 @@ async def analyze(
     date_col: Optional[str] = Form(None),
     amount_col: Optional[str] = Form(None),
     product_col: Optional[str] = Form(None),
+    connector_id: Optional[str] = Form(None),
+    data_type: Optional[str] = Form(None),
     identity: dict = Depends(require_auth),
 ) -> AnalyzeResponse:
     """Ingest sales data, infer schema and produce first insights.
@@ -230,6 +232,25 @@ async def analyze(
         notes=notes,
     )
 
+    # ------------------------------------------------------------------
+    # Optional persistence into connectors.connector_data if connector_id provided
+    # ------------------------------------------------------------------
+    try:
+        if connector_id:
+            inferred_type = data_type or _infer_data_type(df)
+            _persist_connector_data(
+                tenant_id=identity.get("tenant_id"),
+                connector_id=connector_id,
+                data_type=inferred_type,
+                # Cast records to dict[str, Any] for typing consistency
+                records=[{str(k): v for k, v in r.items()} for r in df.to_dict(orient="records")],
+                source_notes=notes,
+            )
+            resp.notes.append(f"Persisted {df.shape[0]} records as '{inferred_type}' for connector {connector_id}")
+    except Exception as persist_exc:
+        # Non-fatal: append note and continue
+        resp.notes.append(f"Persistence skipped: {persist_exc}")
+
     logger.info(
         "Analyze completed rows=%d cols=%d tenant=%s insights=%d",
         resp.rows,
@@ -238,6 +259,68 @@ async def analyze(
         len(resp.insights),
     )
     return resp
+
+
+# ----------------------------------------------------------------------
+# Persistence helpers
+# ----------------------------------------------------------------------
+def _infer_data_type(df: "pd.DataFrame") -> str:
+    """Heuristically infer data_type from columns.
+
+    Priority order based on presence of distinguishing columns.
+    This is intentionally lightweight; improve as needed.
+    """
+    cols = {c.lower() for c in df.columns}
+    if {"order_id", "order", "total"} & cols or "order_id" in cols:
+        return "orders"
+    if {"sku", "stock", "quantity", "qty"} & cols:
+        return "inventory"
+    if {"customer_id", "email", "first_name", "last_name"} & cols:
+        return "customers"
+    if {"product_id", "price", "category"} & cols:
+        return "products"
+    return "generic"
+
+
+def _persist_connector_data(
+    tenant_id: Optional[str],
+    connector_id: str,
+    data_type: str,
+    records: list[dict[str, Any]],
+    source_notes: list[str],
+) -> None:
+    """Insert or upsert data into connectors.connector_data via postgres backend pool."""
+    if not tenant_id:
+        raise ValueError("tenant_id missing from identity for persistence")
+    from packages.kernel_common.persistence_v2 import get_backend, PostgresBackend
+    backend = get_backend()
+    if not isinstance(backend, PostgresBackend):
+        raise RuntimeError("PostgresBackend required for connector data persistence")
+    from psycopg2.extras import Json
+    with backend.get_connection() as conn:  # type: ignore[attr-defined]
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO connectors.connector_data
+                (tenant_id, connector_id, data_type, data, record_count, synced_at, metadata)
+                VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                ON CONFLICT (tenant_id, connector_id, data_type)
+                DO UPDATE SET
+                  data = EXCLUDED.data,
+                  record_count = EXCLUDED.record_count,
+                  synced_at = NOW(),
+                  metadata = EXCLUDED.metadata
+                """,
+                (
+                    tenant_id,
+                    connector_id,
+                    data_type,
+                    Json(records),
+                    len(records),
+                    Json({"notes": source_notes[:5]}),
+                ),
+            )
+        conn.commit()
 
 
 @app.get("/v1/analyze/sample", response_model=AnalyzeResponse)

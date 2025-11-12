@@ -9,12 +9,15 @@ from pydantic import BaseModel, Field
 from packages.agent.schemas import PlanPack, Step
 from packages.agent.executor import PlanExecutor, STORE
 from packages.archetypes import build_ops_from_template
+from packages.kernel_common.logging import configure_logging
 
 app = FastAPI(
     title="Dyocense Planner Service",
     version="0.1.0",
     description="Structured plan creation and execution for forecasting and optimisation.",
 )
+
+logger = configure_logging("plan-service")
 
 
 class PlanCreateRequest(BaseModel):
@@ -35,6 +38,13 @@ class PlanCreateResponse(BaseModel):
 @app.post("/v1/plan", response_model=PlanCreateResponse)
 def create_plan(body: PlanCreateRequest) -> PlanCreateResponse:
     plan_id = body.project_id or f"plan-{uuid.uuid4().hex[:12]}"
+    logger.info(
+        "Creating plan %s for goal=%s tenant=%s template=%s",
+        plan_id,
+        body.goal,
+        body.tenant_id or "tenant-demo",
+        body.template_id,
+    )
 
     # Build baseline OPS from template for optimisation and policy steps
     ops = build_ops_from_template(
@@ -143,6 +153,7 @@ class PlanExecuteResponse(BaseModel):
 
 @app.post("/v1/plan/execute/{plan_id}", response_model=PlanExecuteResponse)
 def execute_plan(plan_id: str, background_tasks: BackgroundTasks) -> PlanExecuteResponse:
+    logger.info("Executing plan %s", plan_id)
     plan = STORE.get(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -198,6 +209,7 @@ def execute_plan(plan_id: str, background_tasks: BackgroundTasks) -> PlanExecute
 
 @app.get("/v1/plan/{plan_id}", response_model=PlanPack)
 def get_plan(plan_id: str) -> PlanPack:
+    logger.debug("Fetching plan %s", plan_id)
     plan = STORE.get(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")

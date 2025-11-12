@@ -1,15 +1,19 @@
 from fastapi import FastAPI, Depends, Body
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-from agent_logic import run_agent_conversation
 import uuid
 import time
+
+from agent_logic import run_agent_conversation
+from packages.kernel_common.logging import configure_logging
 
 # Simple in-memory stores for dev/demo. Replace with DB in production.
 USERS: Dict[str, Dict] = {}
 TENANTS: Dict[str, Dict] = {}
 WORKSPACES: Dict[str, Dict] = {}
 VERIFICATION_TOKENS: Dict[str, Dict] = {}
+
+logger = configure_logging("agent-shell")
 
 app = FastAPI(title="Agent Shell API", description="APIs for conversational UI shell, agent flows, and workspace/tenant context.")
 
@@ -37,6 +41,7 @@ class WorkspaceInfo(BaseModel):
 @app.post("/v1/agent/message", response_model=MessageResponse)
 def agent_message(payload: MessageRequest = Body(...)):
     # Use actual LangChain agent logic for real response
+    logger.debug("agent_message invoked for tenant=%s workspace=%s", payload.tenant_id, payload.workspace_id)
     agent_reply = run_agent_conversation(payload.message, context={"tenant_id": payload.tenant_id, "workspace_id": payload.workspace_id, **(payload.context or {})})
     # Example: parse agent_reply for actionable triggers (demo only)
     actions = [
@@ -53,6 +58,7 @@ def agent_message(payload: MessageRequest = Body(...)):
 @app.get("/v1/workspace/{tenant_id}/{workspace_id}", response_model=WorkspaceInfo)
 def get_workspace(tenant_id: str, workspace_id: str):
     # TODO: Fetch workspace info from DB
+    logger.debug("get_workspace request for tenant=%s workspace=%s", tenant_id, workspace_id)
     return WorkspaceInfo(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -84,6 +90,7 @@ class SignupResponse(BaseModel):
 @app.post("/v1/auth/signup", response_model=SignupResponse)
 def signup(payload: SignupRequest = Body(...)):
     # Create user
+    logger.info("Signup requested for email=%s", payload.email)
     user_id = f"u_{uuid.uuid4().hex[:8]}"
     USERS[user_id] = {"id": user_id, "email": payload.email, "name": payload.name, "status": "pending", "created_at": int(time.time())}
 
@@ -114,6 +121,7 @@ class VerifyResponse(BaseModel):
 
 @app.post("/v1/auth/verify", response_model=VerifyResponse)
 def verify(payload: VerifyRequest = Body(...)):
+    logger.info("Verification attempt for token=%s", payload.token)
     info = VERIFICATION_TOKENS.get(payload.token)
     if not info:
         return VerifyResponse(user_id="", tenant_id="", workspace_id="", jwt="")

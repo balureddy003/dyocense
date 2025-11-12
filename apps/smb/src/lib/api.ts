@@ -231,3 +231,76 @@ export async function updateConnector(connectorId: string, payload: UpdateConnec
     if (!tenantId) throw new Error('Tenant ID required')
     return put(`/v1/tenants/${tenantId}/connectors/${connectorId}`, payload, token)
 }
+
+export async function uploadCSV(file: File, connectorId: string, token?: string, tenantId?: string) {
+    if (!tenantId) throw new Error('Tenant ID required')
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('connector_id', connectorId)
+    formData.append('tenant_id', tenantId)
+
+    const res = await fetch(`${API_BASE}/api/connectors/upload_csv`, {
+        method: 'POST',
+        headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(PROXY_API_KEY ? { 'x-api-key': PROXY_API_KEY } : {}),
+            // Don't set Content-Type - let browser set it with boundary for multipart/form-data
+        },
+        body: formData,
+    })
+
+    if (!res.ok) {
+        const error: any = new Error(`CSV upload failed with ${res.status}`)
+        error.status = res.status
+        error.statusText = res.statusText
+        try {
+            error.body = await res.json()
+        } catch {
+            // Ignore if response body is not JSON
+        }
+        throw error
+    }
+
+    return readBody(res)
+}
+
+export type ConnectorRecommendation = {
+    id: string
+    label: string
+    description: string
+    icon: string
+    category: string
+    priority: number
+    reason: string
+    fields: Array<{
+        name: string
+        label: string
+        type?: 'text' | 'textarea' | 'file'
+        placeholder?: string
+        helper?: string
+        accept?: string
+    }>
+}
+
+export type ConnectorRecommendationsResponse = {
+    recommendations: ConnectorRecommendation[]
+    business_profile: {
+        industry?: string | null
+        business_type?: string | null
+        team_size?: string | null
+    }
+    data_status: {
+        has_orders: boolean
+        has_inventory: boolean
+        has_customers: boolean
+        has_products: boolean
+    }
+    existing_connectors: string[]
+    message: string
+}
+
+export async function getConnectorRecommendations(token?: string, tenantId?: string): Promise<ConnectorRecommendationsResponse> {
+    if (!tenantId) throw new Error('Tenant ID required')
+    return get(`/v1/tenants/${tenantId}/connectors/recommendations`, token)
+}

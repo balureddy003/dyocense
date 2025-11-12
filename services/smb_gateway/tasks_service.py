@@ -60,6 +60,7 @@ class Task(BaseModel):
     created_at: datetime
     updated_at: datetime
     ai_generated: bool = False
+    is_starter_task: bool = False  # Flag for non-persisted starter tasks
     order: int = 0  # For sorting/ordering tasks
 
 
@@ -323,6 +324,7 @@ class TasksService:
                 updated_at=now,
                 order=len(tasks),
                 ai_generated=True,
+                is_starter_task=True,  # Mark as starter task
             )
             tasks.append(task)
         
