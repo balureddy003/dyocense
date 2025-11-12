@@ -17,12 +17,18 @@ def analyze_inventory_data(business_context: Dict[str, Any], **kwargs) -> Option
     """
     Analyze inventory data and provide insights
     
-    This is SMB/retail-specific. Other industries could register different implementations:
-    - Healthcare: analyze_medical_supplies()
-    - Manufacturing: analyze_raw_materials()
-    - Restaurant: analyze_ingredient_stock()
+    Industry-agnostic implementation that adapts to business terminology:
+    - Retail/Ecommerce: products, SKUs
+    - Healthcare: supplies, medical items
+    - Manufacturing: raw materials, components
+    - Restaurant: ingredients, menu items
+    - Services: resources, assets
     """
     try:
+        # Get industry-specific terminology
+        terminology = business_context.get("terminology", {})
+        items_term = terminology.get("items", "items")
+        
         metrics = business_context.get("metrics", {})
         total_items = metrics.get("total_inventory_items", 0)
         total_qty = metrics.get("total_inventory_quantity", 0)

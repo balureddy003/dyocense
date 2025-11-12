@@ -47,6 +47,13 @@ from .conversational_coach import (
 from .multi_agent_coach import (
     get_multi_agent_coach,
 )
+from .report_generator import (
+    get_report_generator,
+    ReportFormat,
+    AgentThought,
+    Evidence,
+    ReportSection,
+)
 from .run_logs import (
     create_run as create_runlog,
     append_event as runlog_append_event,
@@ -992,9 +999,104 @@ async def list_data_sources(tenant_id: str):
     return {"data_sources": data_sources}
 
 
+@app.post("/v1/tenants/{tenant_id}/coach/chat/stream/v2")
+async def coach_chat_stream_v2(tenant_id: str, request: ChatRequest):
+    """NEW: LangGraph-based streaming endpoint with native HITL and checkpointing"""
+    logger.info(f"[coach_chat_stream_v2] 🎬 START - Tenant: {tenant_id}, Message: {request.message[:100]}...")
+    
+    from .coach_langgraph_workflow import get_coach_workflow
+    from .coach_langgraph_streaming import stream_langgraph_to_sse
+    
+    # Gather business context
+    goals_service = get_goals_service()
+    tasks_service = get_tasks_service()
+    settings_service = get_settings_service()
+    
+    try:
+        connector_data = await _fetch_connector_data(tenant_id)
+        calculator = HealthScoreCalculator(connector_data)
+        health_score = calculator.calculate_overall_health()
+        
+        goals = goals_service.get_goals(tenant_id, status=GoalStatus.ACTIVE)
+        tasks = tasks_service.get_tasks(tenant_id, status=TaskStatus.TODO, limit=10)
+        settings = settings_service.get_settings(tenant_id)
+        business_name = settings.account.business_name or "your business"
+        
+        # Build business context
+        business_context = {
+            "business_name": business_name,
+            "health_score": {
+                "score": health_score.score,
+                "trend": health_score.trend,
+                "breakdown": {
+                    "revenue": health_score.breakdown.revenue,
+                    "operations": health_score.breakdown.operations,
+                    "customer": health_score.breakdown.customer,
+                }
+            },
+            "goals": [g.dict() for g in goals],
+            "tasks": [t.dict() for t in tasks],
+        }
+        
+        # Prepare available data
+        available_data = {
+            "orders": connector_data.get("orders", []),
+            "inventory": connector_data.get("inventory", []),
+            "customers": connector_data.get("customers", [])
+        }
+        
+        # Build initial state
+        initial_state = {
+            "tenant_id": tenant_id,
+            "user_message": request.message,
+            "conversation_history": [],
+            "business_context": business_context,
+            "available_data": available_data,
+            "intent": None,
+            "sub_tasks": [],
+            "completed_tasks": [],
+            "current_task_index": 0,
+            "task_results": {},
+            "report_id": None,
+            "final_response": "",
+            "pending_approval": None,
+            "human_feedback": None,
+        }
+        
+        # Get workflow
+        workflow = get_coach_workflow()
+        
+        # Use thread_id for conversation persistence
+        # Generate thread_id from first message or timestamp
+        thread_id = f"thread-{tenant_id}-{int(datetime.now().timestamp())}"
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+        
+        # Stream workflow execution
+        return StreamingResponse(
+            stream_langgraph_to_sse(workflow, initial_state, config),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "X-Thread-ID": thread_id,
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"[coach_chat_stream_v2] FATAL ERROR: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Coach streaming error: {str(e)}")
+
+
 @app.post("/v1/tenants/{tenant_id}/coach/chat/stream")
 async def coach_chat_stream(tenant_id: str, request: ChatRequest):
-    """Stream conversational AI coach responses via Server-Sent Events with multi-agent orchestration"""
+    """Stream conversational AI coach responses via Server-Sent Events with multi-agent orchestration (LEGACY)"""
+    logger.info(f"[coach_chat_stream] 🎬 START - Tenant: {tenant_id}, Message: {request.message[:100]}...")
+    
     # Use multi-agent coach for specialized queries
     coach = get_multi_agent_coach()
     goals_service = get_goals_service()
@@ -1003,8 +1105,10 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
     
     # Gather business context (same as regular coach endpoint)
     try:
+        logger.info(f"[coach_chat_stream] 📊 Step 1: Fetching connector data for tenant {tenant_id}")
         # Get connector data and check if it's real or sample data
         connector_data = await _fetch_connector_data(tenant_id)
+        logger.info(f"[coach_chat_stream] ✅ Connector data fetched: {len(connector_data.get('orders', []))} orders, {len(connector_data.get('inventory', []))} inventory, {len(connector_data.get('customers', []))} customers")
         
         # Extract metadata from connector_data
         connector_metadata = connector_data.get("metadata", {})
@@ -1051,26 +1155,115 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         inventory = connector_data.get("inventory", [])
         customers = connector_data.get("customers", [])
         
-        # Revenue metrics
-        recent_orders = [o for o in orders if datetime.fromisoformat(o.get("created_at", now.isoformat())) >= thirty_days_ago]
-        total_revenue_30d = sum(o.get("total_amount", 0) for o in recent_orders)
-        avg_order_value = total_revenue_30d / len(recent_orders) if recent_orders else 0
+        logger.info(f"[coach_chat_stream] 📊 Step 4: Creating execution plan like GitHub Copilot")
         
-        # Inventory metrics
-        low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
-        out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
-        total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
-        total_inventory_quantity = sum(i.get("quantity", 0) for i in inventory)
+        # 🎯 GitHub Copilot-style Task Planning
+        from .task_planner import get_task_planner
+        task_planner = get_task_planner()
         
-        # Customer metrics
-        vip_customers = [c for c in customers if c.get("segment") == "vip"]
-        repeat_customers = [c for c in customers if c.get("total_orders", 0) > 1]
-        repeat_rate = (len(repeat_customers) / len(customers) * 100) if customers else 0
+        # Create execution plan
+        sub_tasks = task_planner.create_plan(request.message, {
+            "orders": len(orders),
+            "inventory": len(inventory),
+            "customers": len(customers)
+        })
         
-        # Build context with ACTUAL data
+        logger.info(f"[coach_chat_stream] 📋 Created plan with {len(sub_tasks)} sub-tasks:")
+        for task in sub_tasks:
+            logger.info(f"[coach_chat_stream]   - {task.description}")
+        
+        # Prepare data for execution
+        available_data = {
+            "orders": orders,
+            "inventory": inventory,
+            "customers": customers
+        }
+        
+        # Also keep backward compatibility with orchestrator
+        from .coach_orchestrator import CoachOrchestrator
+        orchestrator = CoachOrchestrator()
+        task_plan = orchestrator.analyze_intent(request.message, {
+            "orders": len(orders),
+            "inventory": len(inventory),
+            "customers": len(customers)
+        })
+        
+        logger.info(f"[coach_chat_stream] 🎯 Intent Analysis: {task_plan.task_type.value}")
+        logger.info(f"[coach_chat_stream] 📋 Required data: {task_plan.data_requirements}")
+        logger.info(f"[coach_chat_stream] ✅ Can execute: {task_plan.can_execute}, Missing: {task_plan.missing_data}")
+        
+        # 🎯 Execute sub-tasks step-by-step (GitHub Copilot style)
+        # Store for later use in streaming
+        metrics = {}
+        alerts = {}
+        task_results = {}
+        
+        # Store sub_tasks and task_planner for streaming
+        execution_plan = {
+            "sub_tasks": sub_tasks,
+            "task_planner": task_planner,
+            "available_data": available_data
+        }
+        
+        logger.info(f"[coach_chat_stream] 📋 Created execution plan with {len(sub_tasks)} sub-tasks")
+        
+        logger.info(f"[coach_chat_stream] 📊 Step 5: Detecting business profile")
+        # 🎯 NEW: Dynamically detect business profile
+        from .business_profiler import BusinessProfiler
+        
+        # Get tenant metadata for profile detection
+        tenant_metadata = {}
+        try:
+            logger.debug(f"[coach_chat_stream] Fetching tenant metadata from database")
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            pg_url = os.getenv("POSTGRES_URL")
+            if not pg_url:
+                pg_host = os.getenv("POSTGRES_HOST", "localhost")
+                pg_port = os.getenv("POSTGRES_PORT", "5432")
+                pg_db = os.getenv("POSTGRES_DB", "dyocense")
+                pg_user = os.getenv("POSTGRES_USER", "dyocense")
+                pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+                pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+            
+            conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                if result:
+                    tenant_metadata = dict(result).get('metadata', {})
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Could not fetch tenant metadata: {e}")
+        
+        # Detect business profile from metadata and data patterns
+        data_samples = {
+            "orders": orders[:5] if orders else [],
+            "inventory": inventory[:5] if inventory else [],
+            "customers": customers[:5] if customers else []
+        }
+        
+        business_profile = BusinessProfiler.get_profile(
+            tenant_metadata=tenant_metadata,
+            data_samples=data_samples
+        )
+        
+        logger.info(f"[coach_chat_stream] 🏢 Business Profile Detected:")
+        logger.info(f"[coach_chat_stream]   - Industry: {business_profile.industry}")
+        logger.info(f"[coach_chat_stream]   - Business Type: {business_profile.business_type}")
+        logger.info(f"[coach_chat_stream]   - Terminology: {business_profile.terminology}")
+        logger.info(f"[coach_chat_stream] 📋 Metrics calculated: {list(metrics.keys())}")
+        logger.info(f"[coach_chat_stream] 🚨 Alerts calculated: {list(alerts.keys())}")
+        
+        # Build context with ONLY RELEVANT data based on task type
         business_context = {
             "business_name": business_name,
-            "industry": "retail",
+            "industry": business_profile.industry,  # 🎯 Dynamic industry detection
+            "business_type": business_profile.business_type,
+            "terminology": business_profile.terminology,  # 🎯 Industry-specific terms
             "has_data_connected": has_data_connected,
             "is_sample_data": not has_real_data,
             "data_sources": {
@@ -1082,23 +1275,10 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
                 "data_sources": data_source_map,
                 "is_sample_data": not has_real_data,
             },
-            "metrics": {
-                "revenue_last_30_days": round(total_revenue_30d, 2),
-                "orders_last_30_days": len(recent_orders),
-                "avg_order_value": round(avg_order_value, 2),
-                "total_inventory_items": total_inventory,
-                "total_inventory_quantity": total_inventory_quantity,
-                "low_stock_items": len(low_stock_items),
-                "out_of_stock_items": len(out_of_stock_items),
-                "total_inventory_value": round(total_inventory_value, 2),
-                "total_customers": len(customers),
-                "vip_customers": len(vip_customers),
-                "repeat_customer_rate": round(repeat_rate, 1),
-            },
-            "alerts": {
-                "low_stock_products": [i.get("product_name") for i in low_stock_items[:3]],
-                "out_of_stock_products": [i.get("product_name") for i in out_of_stock_items[:3]],
-            },
+            "metrics": metrics,  # 🎯 Dynamically calculated metrics
+            "alerts": alerts,    # 🎯 Dynamically generated alerts
+            "task_type": task_plan.task_type.value,  # 🎯 Pass task type to prompt
+            "execution_plan": execution_plan,  # 🎯 Sub-tasks to execute during streaming
             "health_score": {
                 "score": health_score.score,
                 "trend": health_score.trend,
@@ -1113,21 +1293,168 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         }
         
         # Create local run log for this conversation turn
+        logger.info(f"[coach_chat_stream] 📝 Creating run log")
         run_id = create_runlog(tenant_id, input_text=request.message, persona=request.persona, metadata={
             "source": "coach_chat_stream"
         })
+        logger.info(f"[coach_chat_stream] ✅ Run log created: {run_id}")
         
         # Log business context for debugging
-        logger.info(
-            f"[coach_chat_stream] Business context for tenant {tenant_id}: "
-            f"has_data={has_data_connected}, orders={total_orders}, "
-            f"revenue_30d={business_context['metrics']['revenue_last_30_days']}, "
-            f"customers={total_customers}"
-        )
+        logger.info(f"[coach_chat_stream] 📊 Step 6: Business Context Summary:")
+        logger.info(f"[coach_chat_stream]   - Has Real Data: {has_data_connected}")
+        logger.info(f"[coach_chat_stream]   - Data Counts: {total_orders} orders, {total_inventory} inventory, {total_customers} customers")
+        logger.info(f"[coach_chat_stream]   - Metrics Calculated: {list(business_context['metrics'].keys())}")
+        logger.info(f"[coach_chat_stream]   - Health Score: {business_context['health_score']['score']}/100")
+        logger.info(f"[coach_chat_stream]   - Goals: {len(business_context['goals'])}, Tasks: {len(business_context['tasks'])}")
 
         # Create event generator for SSE streaming
+        logger.info(f"[coach_chat_stream] 🚀 Step 7: Starting streaming response with task execution")
         async def event_generator():
             try:
+                # 🎯 PHASE 1: Execute sub-tasks with progress updates (GitHub Copilot style)
+                logger.info(f"[coach_chat_stream] � Phase 1: Executing {len(sub_tasks)} sub-tasks...")
+                
+                task_results_stream = {}
+                for idx, task in enumerate(sub_tasks):
+                    # Send progress update
+                    progress_msg = f"{task.description}\n"
+                    yield f"data: {json.dumps({'delta': progress_msg, 'done': False, 'metadata': {'phase': 'task_execution', 'task_id': task.id}})}\n\n"
+                    
+                    # Execute task
+                    completed_task = task_planner.execute_task(task, available_data)
+
+                    if completed_task.status.value == "awaiting_human":
+                        logger.info(f"[coach_chat_stream] ⏸ Task {task.id} awaiting human review")
+                        review_info = completed_task.result or {}
+                        try:
+                            # Store remaining execution context to resume later
+                            remaining_sub_tasks = sub_tasks[idx+1:]
+                            _rid = review_info.get('review_id')
+                            if _rid:
+                                PENDING_EXECUTIONS[_rid] = {
+                                    'tenant_id': tenant_id,
+                                    'awaiting_task_id': task.id,
+                                    'awaiting_task_description': task.description,
+                                    'remaining_tasks': remaining_sub_tasks,
+                                    'available_data': available_data,
+                                    'business_context': business_context,
+                                    'task_results_stream': task_results_stream,
+                                    'task_planner': task_planner,
+                                    'run_id': run_id,
+                                    'request_message': request.message,
+                                    'business_name': business_name,
+                                    'conversation_history': request.conversation_history or [],
+                                }
+                                logger.info(f"[coach_chat_stream] 💾 Stored pending execution for review_id={_rid} with {len(remaining_sub_tasks)} remaining tasks")
+                            else:
+                                logger.warning("[coach_chat_stream] Missing review_id in awaiting_human result; cannot store pending execution context")
+                        except Exception as store_err:
+                            logger.warning(f"[coach_chat_stream] Failed to store pending execution: {store_err}")
+                        # Send awaiting human update and stop further execution
+                        yield f"data: {json.dumps({'delta': '⏸ Awaiting your approval\n', 'done': False, 'metadata': {'phase': 'task_execution', 'task_id': task.id, 'task_status': 'awaiting_human', 'review_id': review_info.get('review_id'), 'proposed_result': review_info.get('proposed_result')}})}\n\n"
+                        # End the stream for now; frontend will call review endpoint and user can trigger next action
+                        yield f"data: {json.dumps({'delta': '', 'done': True, 'metadata': {'phase': 'task_execution', 'task_id': task.id, 'task_status': 'awaiting_human'}})}\n\n"
+                        return
+                    
+                    if completed_task.status.value == "completed":
+                        logger.info(f"[coach_chat_stream] ✅ Task {task.id} completed")
+                        task_results_stream[task.id] = completed_task.result
+                        
+                        # Update metrics for business_context
+                        if completed_task.result:
+                            business_context["metrics"].update(completed_task.result)
+                        
+                        # Send completion update
+                        yield f"data: {json.dumps({'delta': '✓ ', 'done': False, 'metadata': {'phase': 'task_execution', 'task_status': 'completed'}})}\n\n"
+                    else:
+                        logger.error(f"[coach_chat_stream] ❌ Task {task.id} failed")
+                        yield f"data: {json.dumps({'delta': '✗ Failed\n', 'done': False, 'metadata': {'phase': 'task_execution', 'task_status': 'failed'}})}\n\n"
+                
+                # Add task results to business context
+                business_context["task_results"] = task_results_stream
+                business_context["sub_tasks_completed"] = [t.id for t in sub_tasks if t.status.value == "completed"]
+                
+                # 🎯 PHASE 1.5: Generate downloadable report with agent thinking and evidence
+                logger.info(f"[coach_chat_stream] 📊 Generating downloadable report...")
+                try:
+                    report_generator = get_report_generator()
+                    
+                    # Create report with sections, agent thoughts, and evidence
+                    from .report_generator import BusinessReport, ReportSection, AgentThought, Evidence
+                    
+                    report = BusinessReport(
+                        title="Business Analysis Report",
+                        business_name=business_name,
+                        report_type="comprehensive_analysis"
+                    )
+                    
+                    # Build report from task results
+                    for task in sub_tasks:
+                        if task.status.value == "completed" and task.result:
+                            result = task.result
+                            
+                            # Extract agent thoughts and evidence from result
+                            agent_thoughts = []
+                            if "agent_thoughts" in result:
+                                for thought_data in result["agent_thoughts"]:
+                                    agent_thoughts.append(AgentThought(
+                                        agent_name=thought_data.get("agent", "Analysis Agent"),
+                                        thought=thought_data.get("thought", ""),
+                                        action=thought_data.get("action", ""),
+                                        observation=thought_data.get("observation", ""),
+                                        data_source=thought_data.get("data_source", "")
+                                    ))
+                            
+                            evidence_list = []
+                            if "evidence" in result:
+                                for ev_data in result["evidence"]:
+                                    evidence_list.append(Evidence(
+                                        claim=ev_data.get("claim", ""),
+                                        data_source=ev_data.get("data_source", ""),
+                                        calculation=ev_data.get("calculation", ""),
+                                        raw_value=ev_data.get("value", ""),
+                                        confidence=ev_data.get("confidence", 1.0)
+                                    ))
+                            
+                            # Create section for this task
+                            section = ReportSection(
+                                title=task.description,
+                                content=f"Analysis completed for: {task.description}",
+                                data=result,
+                                insights=[],
+                                recommendations=[],
+                                agent_thoughts=agent_thoughts,
+                                evidence=evidence_list
+                            )
+                            report.add_section(section)
+                    
+                    # Set summary
+                    report.set_summary(f"Analyzed data for {business_name} across {len(sub_tasks)} dimensions.")
+                    
+                    # Store report for download
+                    if tenant_id not in TENANT_REPORTS:
+                        TENANT_REPORTS[tenant_id] = {}
+                    
+                    TENANT_REPORTS[tenant_id][report.report_id] = {
+                        "report": report,
+                        "original_query": request.message,
+                        "created_at": datetime.now().isoformat()
+                    }
+                    
+                    # Send report availability message
+                    report_msg = f"\n📊 **Report Generated:** [Download Report](/v1/tenants/{tenant_id}/reports/download?report_id={report.report_id}&format=html) | Report ID: `{report.report_id}`\n\n"
+                    yield f"data: {json.dumps({'delta': report_msg, 'done': False, 'metadata': {'phase': 'report_generated', 'report_id': report.report_id}})}\n\n"
+                    
+                    logger.info(f"[coach_chat_stream] ✅ Report generated: {report.report_id}")
+                except Exception as report_error:
+                    logger.error(f"[coach_chat_stream] ⚠️ Failed to generate report: {report_error}")
+                    # Continue anyway - report is nice-to-have
+                
+                # Send separator before analysis
+                yield f"data: {json.dumps({'delta': '\n🤖 Analyzing results...\n\n', 'done': False, 'metadata': {'phase': 'analysis'}})}\n\n"
+                
+                # 🎯 PHASE 2: Stream coach response with analysis
+                logger.info(f"[coach_chat_stream] 💬 Phase 2: Streaming coach response")
                 async for chunk in coach.stream_response(
                     tenant_id=tenant_id,
                     user_message=request.message,
@@ -1163,6 +1490,7 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
                     yield f"data: {chunk.model_dump_json()}\n\n"
             except Exception as e:
                 # Send error as final chunk
+                logger.error(f"[coach_chat_stream] ❌ Error in event generator: {str(e)}", exc_info=True)
                 error_chunk = {
                     "delta": f"\n\nI apologize, but I encountered an error: {str(e)}",
                     "done": True,
@@ -1170,6 +1498,7 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
                 }
                 yield f"data: {json.dumps(error_chunk)}\n\n"
         
+        logger.info(f"[coach_chat_stream] ✅ Returning streaming response")
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
@@ -1181,6 +1510,8 @@ async def coach_chat_stream(tenant_id: str, request: ChatRequest):
         )
         
     except Exception as e:
+        logger.error(f"[coach_chat_stream] ❌ FATAL ERROR: {str(e)}", exc_info=True)
+        logger.error(f"[coach_chat_stream] Tenant: {tenant_id}, Message: {request.message}")
         raise HTTPException(status_code=500, detail=f"Coach streaming error: {str(e)}")
 
 
@@ -1304,11 +1635,11 @@ async def record_health_score_analytics(tenant_id: str):
     # Record in analytics
     point = analytics_service.record_health_score(
         tenant_id,
-        health_score.score,
+        float(health_score.score if health_score.score is not None else 0.0),
         {
-            'revenue': health_score.breakdown.revenue,
-            'operations': health_score.breakdown.operations,
-            'customer': health_score.breakdown.customer,
+            'revenue': float(health_score.breakdown.revenue if health_score.breakdown.revenue is not None else 0.0),
+            'operations': float(health_score.breakdown.operations if health_score.breakdown.operations is not None else 0.0),
+            'customer': float(health_score.breakdown.customer if health_score.breakdown.customer is not None else 0.0),
         }
     )
     
@@ -1868,6 +2199,214 @@ async def trigger_connector_sync(tenant_id: str, connector_id: str):
     raise HTTPException(status_code=501, detail="Manual sync not yet implemented")
 
 
+@app.get("/v1/tenants/{tenant_id}/reports/{report_type}")
+async def generate_downloadable_report(
+    tenant_id: str,
+    report_type: str,
+    format: str = Query("json", regex="^(json|markdown|html)$")
+):
+    """
+    Generate downloadable business report with charts and visualizations
+    
+    Args:
+        tenant_id: Tenant ID
+        report_type: Type of report (inventory, revenue, customer, health)
+        format: Output format (json, markdown, html)
+    
+    Returns:
+        Structured report with charts, tables, insights, and recommendations
+    """
+    try:
+        from .report_generator import ReportGenerator, ReportFormat
+        from .business_profiler import BusinessProfiler
+        from fastapi.responses import Response
+        
+        # Get connector data
+        connector_data = await _fetch_connector_data(tenant_id)
+        
+        # Get business profile
+        orders = connector_data.get("orders", [])
+        inventory = connector_data.get("inventory", [])
+        customers = connector_data.get("customers", [])
+        
+        tenant_metadata = {}
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            pg_url = os.getenv("POSTGRES_URL")
+            if not pg_url:
+                pg_host = os.getenv("POSTGRES_HOST", "localhost")
+                pg_port = os.getenv("POSTGRES_PORT", "5432")
+                pg_db = os.getenv("POSTGRES_DB", "dyocense")
+                pg_user = os.getenv("POSTGRES_USER", "dyocense")
+                pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+                pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+            
+            conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                if result:
+                    tenant_metadata = dict(result).get('metadata', {})
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Could not fetch tenant metadata: {e}")
+        
+        data_samples = {
+            "orders": orders[:5] if orders else [],
+            "inventory": inventory[:5] if inventory else [],
+            "customers": customers[:5] if customers else []
+        }
+        
+        business_profile = BusinessProfiler.get_profile(
+            tenant_metadata=tenant_metadata,
+            data_samples=data_samples
+        )
+        
+        # Get settings for business name
+        settings_service = get_settings_service()
+        settings = settings_service.get_settings(tenant_id)
+        business_name = settings.account.business_name or "Your Business"
+        
+        # Generate report based on type
+        if report_type == "inventory":
+            # Run inventory analysis
+            from .analysis_tools import analyze_inventory_data
+            from datetime import datetime, timedelta
+            
+            now = datetime.now()
+            thirty_days_ago = now - timedelta(days=30)
+            
+            low_stock_items = [i for i in inventory if i.get("status") == "low_stock"]
+            out_of_stock_items = [i for i in inventory if i.get("status") == "out_of_stock"]
+            total_inventory_value = sum(i.get("quantity", 0) * i.get("unit_cost", 0) for i in inventory)
+            total_inventory_quantity = sum(i.get("quantity", 0) for i in inventory)
+            
+            metrics = {
+                "total_inventory_items": len(inventory),
+                "total_inventory_quantity": total_inventory_quantity,
+                "low_stock_items": len(low_stock_items),
+                "out_of_stock_items": len(out_of_stock_items),
+                "total_inventory_value": round(total_inventory_value, 2),
+            }
+            
+            analysis_result = analyze_inventory_data({"metrics": metrics})
+            
+            if not analysis_result:
+                raise HTTPException(status_code=404, detail="No inventory data available")
+            
+            report = ReportGenerator.create_inventory_report(
+                business_name=business_name,
+                analysis_result=analysis_result,
+                business_profile=business_profile
+            )
+        
+        elif report_type == "revenue":
+            from .analysis_tools import analyze_revenue_data
+            from datetime import datetime, timedelta
+            
+            now = datetime.now()
+            thirty_days_ago = now - timedelta(days=30)
+            
+            recent_orders = [o for o in orders if datetime.fromisoformat(o.get("created_at", now.isoformat())) >= thirty_days_ago]
+            total_revenue_30d = sum(o.get("total_amount", 0) for o in recent_orders)
+            avg_order_value = total_revenue_30d / len(recent_orders) if recent_orders else 0
+            
+            metrics = {
+                "revenue_last_30_days": round(total_revenue_30d, 2),
+                "orders_last_30_days": len(recent_orders),
+                "avg_order_value": round(avg_order_value, 2),
+            }
+            
+            analysis_result = analyze_revenue_data({"metrics": metrics})
+            
+            if not analysis_result:
+                raise HTTPException(status_code=404, detail="No revenue data available")
+            
+            report = ReportGenerator.create_revenue_report(
+                business_name=business_name,
+                analysis_result=analysis_result,
+                business_profile=business_profile
+            )
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
+        
+        # Export in requested format
+        if format == "json":
+            return Response(
+                content=report.to_json(),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f"attachment; filename={report_type}_report_{datetime.now().strftime('%Y%m%d')}.json"
+                }
+            )
+        elif format == "markdown":
+            return Response(
+                content=report.to_markdown(),
+                media_type="text/markdown",
+                headers={
+                    "Content-Disposition": f"attachment; filename={report_type}_report_{datetime.now().strftime('%Y%m%d')}.md"
+                }
+            )
+        else:
+            # HTML format (basic)
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>{report.title}</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; max-width: 1200px; margin: 40px auto; padding: 20px; }}
+                    h1 {{ color: #2563eb; }}
+                    h2 {{ color: #1e40af; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }}
+                    .metadata {{ background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+                    .section {{ margin: 30px 0; }}
+                    .insights {{ background: #dbeafe; padding: 15px; border-left: 4px solid #3b82f6; }}
+                    .recommendations {{ background: #d1fae5; padding: 15px; border-left: 4px solid #10b981; }}
+                    ul {{ line-height: 1.8; }}
+                </style>
+            </head>
+            <body>
+                <h1>{report.title}</h1>
+                <div class="metadata">
+                    <p><strong>Business:</strong> {report.business_name}</p>
+                    <p><strong>Report Type:</strong> {report.report_type}</p>
+                    <p><strong>Generated:</strong> {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                </div>
+                
+                <h2>Executive Summary</h2>
+                <p>{report.summary}</p>
+                
+                {"".join([f'''
+                <div class="section">
+                    <h2>{section.title}</h2>
+                    <p>{section.content}</p>
+                    
+                    {f'<div class="insights"><h3>Key Insights</h3><ul>{"".join([f"<li>{i}</li>" for i in section.insights])}</ul></div>' if section.insights else ''}
+                    
+                    {f'<div class="recommendations"><h3>Recommendations</h3><ol>{"".join([f"<li>{r}</li>" for r in section.recommendations])}</ol></div>' if section.recommendations else ''}
+                </div>
+                ''' for section in report.sections])}
+            </body>
+            </html>
+            """
+            return Response(
+                content=html_content,
+                media_type="text/html",
+                headers={
+                    "Content-Disposition": f"attachment; filename={report_type}_report_{datetime.now().strftime('%Y%m%d')}.html"
+                }
+            )
+    
+    except Exception as e:
+        logger.error(f"Error generating report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/v1/tenants/{tenant_id}/data/seed")
 async def seed_tenant_data(tenant_id: str):
     """
@@ -2006,5 +2545,529 @@ async def seed_tenant_data(tenant_id: str):
     except Exception as e:
         logger.error(f"[seed_tenant_data] Failed to seed data for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to seed data: {str(e)}")
+
+
+# In-memory storage for generated reports (move to database in production)
+TENANT_REPORTS: Dict[str, Dict[str, Any]] = {}
+
+# In-memory storage for pending executions that paused for human review
+# Keyed by review_id; values hold remaining tasks and context to resume
+PENDING_EXECUTIONS: Dict[str, Dict[str, Any]] = {}
+
+
+class DownloadReportRequest(BaseModel):
+    report_id: str
+    format: str = Field(default="html", description="Format: html, json, markdown, pdf")
+    include_thinking: bool = Field(default=True, description="Include agent reasoning")
+    include_evidence: bool = Field(default=True, description="Include evidence and calculations")
+
+
+@app.post("/v1/tenants/{tenant_id}/reports/download")
+async def download_report(tenant_id: str, request: DownloadReportRequest):
+    """
+    Download a generated report in various formats
+    
+    Supports: HTML, JSON, Markdown, PDF
+    """
+    logger.info(f"[download_report] 📥 Downloading report {request.report_id} for tenant {tenant_id} in format {request.format}")
+    
+    try:
+        # Get report from storage
+        if tenant_id not in TENANT_REPORTS or request.report_id not in TENANT_REPORTS[tenant_id]:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        report_data = TENANT_REPORTS[tenant_id][request.report_id]
+        report = report_data["report"]
+        
+        # Generate requested format
+        if request.format == "html":
+            content = report.to_html(
+                include_thinking=request.include_thinking,
+                include_evidence=request.include_evidence
+            )
+            media_type = "text/html"
+            filename = f"{report.title.replace(' ', '_')}_{report.report_id}.html"
+        
+        elif request.format == "json":
+            content = report.to_json()
+            media_type = "application/json"
+            filename = f"{report.title.replace(' ', '_')}_{report.report_id}.json"
+        
+        elif request.format == "markdown":
+            content = report.to_markdown()
+            media_type = "text/markdown"
+            filename = f"{report.title.replace(' ', '_')}_{report.report_id}.md"
+        
+        elif request.format == "pdf":
+            # PDF generation requires additional library (weasyprint or pdfkit)
+            # For now, return HTML and suggest client-side conversion
+            content = report.to_html(
+                include_thinking=request.include_thinking,
+                include_evidence=request.include_evidence
+            )
+            media_type = "application/pdf"
+            filename = f"{report.title.replace(' ', '_')}_{report.report_id}.pdf"
+            # TODO: Add PDF generation with weasyprint
+            raise HTTPException(status_code=501, detail="PDF generation coming soon. Use HTML format and print to PDF.")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
+        
+        logger.info(f"[download_report] ✅ Generated {request.format} report: {filename}")
+        
+        from fastapi.responses import Response
+        
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Report-ID": request.report_id,
+                "X-Format": request.format
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[download_report] Failed to generate report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
+
+
+class ShareReportRequest(BaseModel):
+    report_id: str
+    expiry_days: int = Field(default=7, description="Number of days until link expires")
+
+
+@app.post("/v1/tenants/{tenant_id}/reports/share")
+async def share_report(tenant_id: str, request: ShareReportRequest):
+    """
+    Generate a shareable link for a report
+    
+    Returns a public URL that expires after specified days
+    """
+    logger.info(f"[share_report] 🔗 Creating shareable link for report {request.report_id}")
+    
+    try:
+        # Get report from storage
+        if tenant_id not in TENANT_REPORTS or request.report_id not in TENANT_REPORTS[tenant_id]:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        report_data = TENANT_REPORTS[tenant_id][request.report_id]
+        
+        # Generate share token
+        share_token = f"share-{uuid.uuid4().hex[:16]}"
+        expiry_date = datetime.now() + timedelta(days=request.expiry_days)
+        
+        # Store share info
+        if "shares" not in report_data:
+            report_data["shares"] = {}
+        
+        report_data["shares"][share_token] = {
+            "created_at": datetime.now().isoformat(),
+            "expires_at": expiry_date.isoformat(),
+            "views": 0
+        }
+        
+        # Generate shareable URL
+        # In production, this would be your public domain
+        share_url = f"/v1/public/reports/{share_token}"
+        
+        logger.info(f"[share_report] ✅ Created shareable link: {share_url}")
+        
+        return {
+            "share_url": share_url,
+            "share_token": share_token,
+            "expires_at": expiry_date.isoformat(),
+            "report_id": request.report_id,
+            "message": "Report can be accessed via this link until expiry"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[share_report] Failed to create share link: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create share link: {str(e)}")
+
+
+@app.get("/v1/public/reports/{share_token}")
+async def get_shared_report(share_token: str, format: str = Query(default="html")):
+    """
+    Access a shared report via public link
+    
+    No authentication required, but link must be valid and not expired
+    """
+    logger.info(f"[get_shared_report] 👁️ Accessing shared report: {share_token}")
+    
+    try:
+        # Find report by share token
+        for tenant_id, reports in TENANT_REPORTS.items():
+            for report_id, report_data in reports.items():
+                if "shares" in report_data and share_token in report_data["shares"]:
+                    share_info = report_data["shares"][share_token]
+                    
+                    # Check expiry
+                    expiry = datetime.fromisoformat(share_info["expires_at"])
+                    if datetime.now() > expiry:
+                        raise HTTPException(status_code=410, detail="Share link has expired")
+                    
+                    # Increment view count
+                    share_info["views"] += 1
+                    
+                    # Return report
+                    report = report_data["report"]
+                    
+                    if format == "html":
+                        content = report.to_html(include_thinking=True, include_evidence=True)
+                        media_type = "text/html"
+                    elif format == "json":
+                        content = report.to_json()
+                        media_type = "application/json"
+                    elif format == "markdown":
+                        content = report.to_markdown()
+                        media_type = "text/markdown"
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+                    
+                    from fastapi.responses import Response
+                    
+                    return Response(
+                        content=content,
+                        media_type=media_type,
+                        headers={
+                            "X-Report-ID": report_id,
+                            "X-Share-Token": share_token,
+                            "X-Views": str(share_info["views"])
+                        }
+                    )
+        
+        raise HTTPException(status_code=404, detail="Share link not found or invalid")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[get_shared_report] Failed to access shared report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to access shared report: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/reports")
+async def list_reports(tenant_id: str, limit: int = Query(default=10)):
+    """List all generated reports for a tenant"""
+    logger.info(f"[list_reports] 📋 Listing reports for tenant {tenant_id}")
+    
+    try:
+        if tenant_id not in TENANT_REPORTS:
+            return {"reports": []}
+        
+        reports = []
+        for report_id, report_data in list(TENANT_REPORTS[tenant_id].items())[:limit]:
+            report = report_data["report"]
+            reports.append({
+                "report_id": report.report_id,
+                "title": report.title,
+                "report_type": report.report_type,
+                "generated_at": report.generated_at.isoformat(),
+                "query": report_data.get("original_query", ""),
+                "sections_count": len(report.sections),
+                "has_shares": len(report_data.get("shares", {})) > 0
+            })
+        
+        return {"reports": reports}
+    
+    except Exception as e:
+        logger.error(f"[list_reports] Failed to list reports: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list reports: {str(e)}")
+
+
+class HumanReviewRequest(BaseModel):
+    approved: bool
+    feedback: Optional[str] = None
+    corrections: Optional[Dict[str, Any]] = None
+
+
+@app.post("/v1/tenants/{tenant_id}/task-planner/reviews/{review_id}")
+async def submit_taskplanner_review(tenant_id: str, review_id: str, request: HumanReviewRequest):
+    """Submit human-in-the-loop review decision for a task planner pending review.
+
+    The response contains a summary with final_result. The orchestrator can use this
+    to finalize the sub-task or re-enqueue work based on 'approved' flag.
+    """
+    try:
+        from .task_planner import get_task_planner
+
+        planner = get_task_planner()
+        summary = planner.submit_human_review(
+            review_id=review_id,
+            approved=request.approved,
+            feedback=request.feedback,
+            corrections=request.corrections,
+        )
+        if summary.get("status") == "error":
+            raise HTTPException(status_code=404, detail=summary.get("message", "Unknown review id"))
+        # If we have a pending execution for this review, attach the decision for resume flow
+        try:
+            if review_id in PENDING_EXECUTIONS:
+                PENDING_EXECUTIONS[review_id]["review_decision"] = summary
+                logger.info(f"[submit_taskplanner_review] 📌 Stored review decision for resume (review_id={review_id})")
+        except Exception as e:
+            logger.warning(f"[submit_taskplanner_review] Unable to attach review decision to pending execution: {e}")
+        return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[submit_taskplanner_review] Failed to submit human review: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to submit human review: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/task-planner/reviews")
+async def list_taskplanner_pending_reviews(tenant_id: str):
+    """List all pending human reviews for this tenant, enriched with resume context."""
+    try:
+        from .task_planner import get_task_planner
+        planner = get_task_planner()
+        pending = planner.list_pending_reviews()
+
+        enriched = []
+        for item in pending:
+            rid = item.get("review_id")
+            ctx = PENDING_EXECUTIONS.get(rid) if isinstance(rid, str) and rid else None
+            enriched.append({
+                **item,
+                "has_pending_execution": bool(ctx),
+                "awaiting_task_description": ctx.get("awaiting_task_description") if ctx else None,
+                "remaining_tasks_count": len(ctx.get("remaining_tasks", [])) if ctx else 0,
+                "tenant_id": tenant_id,
+            })
+        return {"items": enriched, "count": len(enriched)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[list_taskplanner_pending_reviews] Failed to list pending reviews: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list pending reviews: {str(e)}")
+
+@app.get("/v1/tenants/{tenant_id}/coach/chat/resume/{review_id}/stream")
+async def resume_coach_chat_stream(tenant_id: str, review_id: str):
+    """Resume a previously paused coach stream after human approval via SSE."""
+    try:
+        ctx = PENDING_EXECUTIONS.get(review_id)
+        if not ctx:
+            raise HTTPException(status_code=404, detail="Pending execution not found for this review id")
+        if ctx.get("tenant_id") != tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant mismatch for pending execution")
+
+        # Extract context
+        remaining_tasks = ctx.get("remaining_tasks", [])
+        available_data = ctx.get("available_data", {})
+        business_context = ctx.get("business_context", {})
+        task_results_stream = ctx.get("task_results_stream", {})
+        task_planner = ctx.get("task_planner")
+        run_id = ctx.get("run_id")
+        request_message = ctx.get("request_message", "")
+        business_name = ctx.get("business_name", "your business")
+        conversation_history = ctx.get("conversation_history", [])
+        awaiting_task_id = ctx.get("awaiting_task_id")
+        review_decision = ctx.get("review_decision")
+
+        # Validate required context
+        if task_planner is None:
+            raise HTTPException(status_code=500, detail="Pending execution missing task planner context")
+        if not run_id:
+            # Create a new run log if missing
+            run_id = create_runlog(tenant_id, input_text=f"[resume] {request_message}", persona=None, metadata={"source": "resume_coach_chat_stream"})
+
+        # Coach service
+        coach = get_multi_agent_coach()
+
+        # Build initial executed tasks list for report generation compatibility
+        from .task_planner import SubTask, TaskStatus as PlannerTaskStatus
+        executed_sub_tasks: list[SubTask] = []
+        if review_decision and awaiting_task_id:
+            # Apply final_result to context
+            final_result = review_decision.get("final_result")
+            if isinstance(final_result, dict):
+                try:
+                    business_context.setdefault("metrics", {}).update(final_result)
+                except Exception:
+                    pass
+            # Save into task_results
+            task_results_stream[awaiting_task_id] = final_result
+            # Add as completed subtask for report building
+            executed_sub_tasks.append(SubTask(
+                id=awaiting_task_id,
+                description=ctx.get("awaiting_task_description", awaiting_task_id),
+                status=PlannerTaskStatus.COMPLETED,
+                result=final_result
+            ))
+
+        async def event_generator():
+            try:
+                # Continue executing remaining tasks
+                for task in remaining_tasks:
+                    progress_msg = f"{task.description}\n"
+                    yield f"data: {json.dumps({'delta': progress_msg, 'done': False, 'metadata': {'phase': 'task_execution', 'task_id': task.id}})}\n\n"
+
+                    completed_task = task_planner.execute_task(task, available_data)
+
+                    if completed_task.status.value == "awaiting_human":
+                        logger.info(f"[resume_coach_chat_stream] ⏸ Task {task.id} awaiting human review again")
+                        review_info = completed_task.result or {}
+                        # Store new pending state replacing old entry
+                        try:
+                            _rid2 = review_info.get('review_id')
+                            if _rid2:
+                                # Overwrite store with new state
+                                PENDING_EXECUTIONS[_rid2] = {
+                                    'tenant_id': tenant_id,
+                                    'awaiting_task_id': task.id,
+                                    'awaiting_task_description': task.description,
+                                    'remaining_tasks': remaining_tasks[remaining_tasks.index(task)+1:],
+                                    'available_data': available_data,
+                                    'business_context': business_context,
+                                    'task_results_stream': task_results_stream,
+                                    'task_planner': task_planner,
+                                    'run_id': run_id,
+                                    'request_message': request_message,
+                                    'business_name': business_name,
+                                    'conversation_history': conversation_history,
+                                }
+                                # Remove old review context
+                                PENDING_EXECUTIONS.pop(review_id, None)
+                        except Exception as store_err:
+                            logger.warning(f"[resume_coach_chat_stream] Failed to store subsequent pending execution: {store_err}")
+
+                        yield f"data: {json.dumps({'delta': '⏸ Awaiting your approval\n', 'done': False, 'metadata': {'phase': 'task_execution', 'task_id': task.id, 'task_status': 'awaiting_human', 'review_id': review_info.get('review_id'), 'proposed_result': review_info.get('proposed_result')}})}\n\n"
+                        yield f"data: {json.dumps({'delta': '', 'done': True, 'metadata': {'phase': 'task_execution', 'task_id': task.id, 'task_status': 'awaiting_human'}})}\n\n"
+                        return
+
+                    if completed_task.status.value == "completed":
+                        task_results_stream[task.id] = completed_task.result
+                        if completed_task.result:
+                            try:
+                                business_context.setdefault("metrics", {}).update(completed_task.result)
+                            except Exception:
+                                pass
+                        executed_sub_tasks.append(completed_task)
+                        yield f"data: {json.dumps({'delta': '✓ ', 'done': False, 'metadata': {'phase': 'task_execution', 'task_status': 'completed'}})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'delta': '✗ Failed\n', 'done': False, 'metadata': {'phase': 'task_execution', 'task_status': 'failed'}})}\n\n"
+
+                # Finished Phase 1; clear stored context
+                PENDING_EXECUTIONS.pop(review_id, None)
+
+                # Prepare sub_tasks variable for report generation block
+                sub_tasks = executed_sub_tasks
+                business_context["task_results"] = task_results_stream
+                business_context["sub_tasks_completed"] = [t.id for t in executed_sub_tasks]
+
+                # Report generation (same as main stream)
+                logger.info(f"[resume_coach_chat_stream] 📊 Generating downloadable report...")
+                try:
+                    report_generator = get_report_generator()
+                    from .report_generator import BusinessReport, ReportSection, AgentThought, Evidence
+
+                    report = BusinessReport(
+                        title="Business Analysis Report",
+                        business_name=business_name,
+                        report_type="comprehensive_analysis"
+                    )
+
+                    for task in sub_tasks:
+                        if task.status.value == "completed" and task.result:
+                            result = task.result
+                            agent_thoughts = []
+                            if "agent_thoughts" in result:
+                                for thought_data in result["agent_thoughts"]:
+                                    agent_thoughts.append(AgentThought(
+                                        agent_name=thought_data.get("agent", "Analysis Agent"),
+                                        thought=thought_data.get("thought", ""),
+                                        action=thought_data.get("action", ""),
+                                        observation=thought_data.get("observation", ""),
+                                        data_source=thought_data.get("data_source", "")
+                                    ))
+                            evidence_list = []
+                            if "evidence" in result:
+                                for ev_data in result["evidence"]:
+                                    evidence_list.append(Evidence(
+                                        claim=ev_data.get("claim", ""),
+                                        data_source=ev_data.get("data_source", ""),
+                                        calculation=ev_data.get("calculation", ""),
+                                        raw_value=ev_data.get("value", ""),
+                                        confidence=ev_data.get("confidence", 1.0)
+                                    ))
+                            section = ReportSection(
+                                title=task.description,
+                                content=f"Analysis completed for: {task.description}",
+                                data=result,
+                                insights=[],
+                                recommendations=[],
+                                agent_thoughts=agent_thoughts,
+                                evidence=evidence_list
+                            )
+                            report.add_section(section)
+
+                    report.set_summary(f"Analyzed data for {business_name} across {len(sub_tasks)} dimensions.")
+
+                    if tenant_id not in TENANT_REPORTS:
+                        TENANT_REPORTS[tenant_id] = {}
+                    TENANT_REPORTS[tenant_id][report.report_id] = {
+                        "report": report,
+                        "original_query": request_message,
+                        "created_at": datetime.now().isoformat()
+                    }
+
+                    report_msg = f"\n📊 **Report Generated:** [Download Report](/v1/tenants/{tenant_id}/reports/download?report_id={report.report_id}&format=html) | Report ID: `{report.report_id}`\n\n"
+                    yield f"data: {json.dumps({'delta': report_msg, 'done': False, 'metadata': {'phase': 'report_generated', 'report_id': report.report_id}})}\n\n"
+                except Exception as report_error:
+                    logger.error(f"[resume_coach_chat_stream] ⚠️ Failed to generate report: {report_error}")
+
+                # Separator
+                yield f"data: {json.dumps({'delta': '\n🤖 Analyzing results...\n\n', 'done': False, 'metadata': {'phase': 'analysis'}})}\n\n"
+
+                # Phase 2: Coach analysis
+                async for chunk in coach.stream_response(
+                    tenant_id=tenant_id,
+                    user_message=request_message,
+                    business_context=business_context,
+                    conversation_history=conversation_history
+                ):
+                    try:
+                        if getattr(chunk, "delta", None):
+                            runlog_append_output(tenant_id, run_id, getattr(chunk, "delta"))
+                        meta = getattr(chunk, "metadata", {}) or {}
+                        if isinstance(meta, dict) and meta.get("tool_event"):
+                            runlog_append_event(tenant_id, run_id, meta["tool_event"])
+                        if getattr(chunk, "done", False):
+                            run_url = f"/v1/tenants/{tenant_id}/coach/runs/{run_id}"
+                            runlog_finalize(tenant_id, run_id, metadata={"run_url": run_url})
+                            meta = dict(meta)
+                            meta.setdefault("run_url", run_url)
+                            try:
+                                payload = {"delta": chunk.delta, "done": True, "metadata": meta}
+                                yield f"data: {json.dumps(payload)}\n\n"
+                                continue
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+            except Exception as e:
+                logger.error(f"[resume_coach_chat_stream] ❌ Error resuming stream: {str(e)}", exc_info=True)
+                error_chunk = {"delta": f"\n\nError resuming: {str(e)}", "done": True, "metadata": {"error": str(e)}}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[resume_coach_chat_stream] FATAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to resume execution: {str(e)}")
 
 

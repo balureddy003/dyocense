@@ -422,6 +422,16 @@ function App() {
                                 }
                             />
                             <Route
+                                path="/coach/:chatId"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CoachV4 />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
                                 path="/coach-v3"
                                 element={
                                     <RequireAuth>

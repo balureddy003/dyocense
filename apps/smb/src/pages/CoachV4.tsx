@@ -1,17 +1,20 @@
-import { Badge, Button, Card, Group, HoverCard, Menu, ScrollArea, Stack, Text, Textarea, TextInput } from '@mantine/core'
+import { Badge, Box, Button, Card, Group, HoverCard, Menu, ScrollArea, Stack, Text, Textarea, TextInput } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconChevronDown, IconExternalLink, IconHelp, IconPlayerStop, IconSearch, IconSend, IconSparkles } from '@tabler/icons-react'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import CoachSettings from '../components/CoachSettings'
 import ConversationHistory from '../components/ConversationHistory'
 import DataSourcesIndicator from '../components/DataSourcesIndicator'
 import ErrorState from '../components/ErrorState'
 import EvidencePanel from '../components/EvidencePanel'
+import { HumanReviewPanel } from '../components/HumanReviewPanel'
 import LoadingSkeleton from '../components/LoadingSkeleton'
 import MetricsCard from '../components/MetricsCard'
 import OnboardingTour from '../components/OnboardingTour'
+import { ReportDownloadButtons } from '../components/ReportDownloadButtons'
+import RichMessageContent from '../components/RichMessageContent'
 import { useConnectorsQuery } from '../hooks/useConnectors'
 import { API_BASE, get } from '../lib/api'
 import { Conversation, deleteConversation, generateConversationTitle, loadConversations, saveConversation } from '../lib/conversations'
@@ -49,6 +52,8 @@ export interface Message {
     timestamp: Date
     runUrl?: string
     isStreaming?: boolean
+    reportId?: string
+    pendingReview?: { reviewId: string; proposedResult: any }
     metadata?: {
         intent?: string
         conversation_stage?: string
@@ -60,6 +65,7 @@ export interface Message {
         runCost?: number
         runDuration?: number
         error?: boolean
+        report_id?: string
         rich_data?: {
             type: string
             metrics?: any[]
@@ -81,6 +87,7 @@ export default function CoachV4() {
     const tenantId = useAuthStore((s) => s.tenantId)
     const apiToken = useAuthStore((s) => s.apiToken)
     const navigate = useNavigate()
+    const { chatId } = useParams<{ chatId?: string }>()
     const scrollAreaRef = useRef<HTMLDivElement>(null)
 
     // Debug: Log auth state on mount
@@ -172,7 +179,7 @@ export default function CoachV4() {
     const [conversations, setConversations] = useState<Conversation[]>(() =>
         tenantId ? loadConversations(tenantId) : []
     )
-    const [currentConversationId, setCurrentConversationId] = useState<string | undefined>()
+    const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(chatId)
     const [historyOpen, setHistoryOpen] = useState(false)
 
     const [messages, setMessages] = useState<Message[]>([])
@@ -315,19 +322,52 @@ export default function CoachV4() {
         }
     }
 
-    // Update welcome message when agent changes OR when health/goals/tasks load
+    // Load conversation from URL parameter on mount
     useEffect(() => {
-        const focus = generateTodaysFocus()
-        setMessages([{
-            id: 'hello',
-            role: 'assistant',
-            content: focus.message,
-            timestamp: new Date(),
-            metadata: {
-                focusTitle: focus.title,
-                quickActions: focus.quickActions
+        if (chatId && tenantId) {
+            const allConvs = loadConversations(tenantId)
+            const conversation = allConvs.find(c => c.id === chatId)
+            if (conversation) {
+                setMessages(conversation.messages)
+                setCurrentConversationId(chatId)
+                if (conversation.agent) {
+                    setSelectedAgent(conversation.agent)
+                }
+                return // Don't show welcome message if loading existing chat
             }
-        }])
+        }
+
+        // Only show welcome message if no chat loaded
+        if (!chatId || messages.length === 0) {
+            const focus = generateTodaysFocus()
+            setMessages([{
+                id: 'hello',
+                role: 'assistant',
+                content: focus.message,
+                timestamp: new Date(),
+                metadata: {
+                    focusTitle: focus.title,
+                    quickActions: focus.quickActions
+                }
+            }])
+        }
+    }, [chatId, tenantId])
+
+    // Update welcome message when agent changes OR when health/goals/tasks load (but only if it's the welcome message)
+    useEffect(() => {
+        if (messages.length === 1 && messages[0].id === 'hello') {
+            const focus = generateTodaysFocus()
+            setMessages([{
+                id: 'hello',
+                role: 'assistant',
+                content: focus.message,
+                timestamp: new Date(),
+                metadata: {
+                    focusTitle: focus.title,
+                    quickActions: focus.quickActions
+                }
+            }])
+        }
     }, [selectedAgent, user?.name, healthScore, tasksData, goalsData])
 
     // Save current conversation when messages change
@@ -354,6 +394,8 @@ export default function CoachV4() {
             setConversations(loadConversations(tenantId))
             if (!currentConversationId) {
                 setCurrentConversationId(conversationId)
+                // Update URL with chat ID without triggering a reload
+                navigate(`/coach/${conversationId}`, { replace: true })
             }
         }
     }, [messages, tenantId])
@@ -361,6 +403,8 @@ export default function CoachV4() {
     const handleNewConversation = () => {
         setMessages([])
         setCurrentConversationId(undefined)
+        // Navigate to /coach without chat ID
+        navigate('/coach', { replace: true })
         // Trigger welcome message regeneration
         setTimeout(() => {
             const focus = generateTodaysFocus()
@@ -380,6 +424,8 @@ export default function CoachV4() {
     const handleSelectConversation = (conversation: Conversation) => {
         setMessages(conversation.messages)
         setCurrentConversationId(conversation.id)
+        // Update URL with selected chat ID
+        navigate(`/coach/${conversation.id}`, { replace: true })
         if (conversation.agent) {
             setSelectedAgent(conversation.agent)
         }
@@ -435,7 +481,7 @@ export default function CoachV4() {
                 messagePreview: text.substring(0, 50)
             })
 
-            const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/coach/chat/stream`, {
+            const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/coach/chat/stream/v2`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -470,7 +516,7 @@ export default function CoachV4() {
             const reader = response.body?.getReader()
             const decoder = new TextDecoder()
             let fullContent = ''
-            let lastMetadata = {}
+            let lastMetadata: any = {}
 
             if (reader) {
                 while (true) {
@@ -487,27 +533,57 @@ export default function CoachV4() {
                                 console.log('[CoachV4] SSE data received:', data)
 
                                 if (data.delta) {
-                                    fullContent += data.delta
+                                    const metaPhase = data.metadata?.phase
+                                    const shouldAppendDelta = metaPhase !== 'task_execution'
+                                    if (shouldAppendDelta) {
+                                        fullContent += data.delta
+                                    }
                                     if (data.metadata) {
                                         lastMetadata = data.metadata
                                         console.log('[CoachV4] Metadata received:', data.metadata)
+
+                                        // Extract report_id if present
+                                        if (data.metadata.report_id) {
+                                            console.log('[CoachV4] Report generated:', data.metadata.report_id)
+                                        }
+
+                                        // Human-in-the-loop awaiting event
+                                        if (data.metadata.task_status === 'awaiting_human') {
+                                            const reviewId = data.metadata.review_id
+                                            const proposedResult = data.metadata.proposed_result
+                                            setMessages((prev) => prev.map((msg) =>
+                                                msg.id === assistantMsgId ? {
+                                                    ...msg,
+                                                    pendingReview: reviewId ? { reviewId, proposedResult } : undefined,
+                                                } : msg
+                                            ))
+                                        }
                                     }
                                     // Update message with streamed content
                                     setMessages((prevMessages) =>
                                         prevMessages.map((msg) =>
                                             msg.id === assistantMsgId
-                                                ? { ...msg, content: fullContent, metadata: lastMetadata }
+                                                ? {
+                                                    ...msg,
+                                                    content: fullContent,
+                                                    metadata: lastMetadata,
+                                                    reportId: lastMetadata.report_id || msg.reportId
+                                                }
                                                 : msg
                                         )
                                     )
                                 }
                                 if (data.done) {
                                     console.log('[CoachV4] Stream complete. RunURL:', data.runUrl)
-                                    // Mark as complete
                                     setMessages((prevMessages) =>
                                         prevMessages.map((msg) =>
                                             msg.id === assistantMsgId
-                                                ? { ...msg, isStreaming: false, runUrl: data.runUrl }
+                                                ? {
+                                                    ...msg,
+                                                    isStreaming: false,
+                                                    runUrl: data.runUrl,
+                                                    reportId: lastMetadata.report_id || msg.reportId
+                                                }
                                                 : msg
                                         )
                                     )
@@ -826,21 +902,119 @@ export default function CoachV4() {
                                                             </Text>
                                                         )}
 
-                                                        <Text
-                                                            size="15px"
-                                                            style={{
-                                                                whiteSpace: 'pre-wrap',
-                                                                lineHeight: 1.7,
-                                                                color: '#353740',
-                                                                fontWeight: 400
-                                                            }}
-                                                        >
-                                                            {m.content || (m.isStreaming ? '...' : '')}
-                                                        </Text>
+                                                        <RichMessageContent
+                                                            content={m.content}
+                                                            isStreaming={m.isStreaming}
+                                                        />
+
                                                         {m.isStreaming && !m.content && (
                                                             <Text size="13px" c="#8e8ea0" style={{ fontStyle: 'italic' }}>
                                                                 Thinking...
                                                             </Text>
+                                                        )}
+
+                                                        {/* Awaiting Human Review */}
+                                                        {m.pendingReview && tenantId && (
+                                                            <Box mt={12}>
+                                                                <HumanReviewPanel
+                                                                    tenantId={tenantId}
+                                                                    apiToken={apiToken}
+                                                                    review={{ reviewId: m.pendingReview.reviewId, proposedResult: m.pendingReview.proposedResult }}
+                                                                    onSubmitted={(summary) => {
+                                                                        // Clear pending review and add a small note
+                                                                        setMessages((prev) => prev.map((msg) => msg.id === m.id ? {
+                                                                            ...msg,
+                                                                            pendingReview: undefined,
+                                                                            content: `${msg.content}\n\nReviewer decision: ${summary.status}${summary.feedback ? ` - ${summary.feedback}` : ''}`
+                                                                        } : msg))
+
+                                                                        // If approved, auto-resume the execution stream
+                                                                        if (summary?.status === 'approved' && m.pendingReview?.reviewId && tenantId && apiToken) {
+                                                                            (async () => {
+                                                                                try {
+                                                                                    // Mark message as streaming
+                                                                                    setMessages((prev) => prev.map((msg) => msg.id === m.id ? { ...msg, isStreaming: true } : msg))
+
+                                                                                    const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/coach/chat/resume/${m.pendingReview!.reviewId}/stream`, {
+                                                                                        method: 'GET',
+                                                                                        headers: {
+                                                                                            'Authorization': `Bearer ${apiToken}`,
+                                                                                        },
+                                                                                    })
+                                                                                    if (!response.ok) {
+                                                                                        const errText = await response.text()
+                                                                                        throw new Error(`Resume HTTP ${response.status}: ${errText}`)
+                                                                                    }
+                                                                                    const reader = response.body?.getReader()
+                                                                                    const decoder = new TextDecoder()
+                                                                                    let fullContent = (m.content || '') + `\n\n`
+                                                                                    let lastMetadata: any = m.metadata || {}
+
+                                                                                    if (reader) {
+                                                                                        while (true) {
+                                                                                            const { done, value } = await reader.read()
+                                                                                            if (done) break
+                                                                                            const chunk = decoder.decode(value)
+                                                                                            const lines = chunk.split('\n')
+                                                                                            for (const line of lines) {
+                                                                                                if (line.startsWith('data: ')) {
+                                                                                                    try {
+                                                                                                        const data = JSON.parse(line.slice(6))
+                                                                                                        if (data.delta) {
+                                                                                                            const metaPhase = data.metadata?.phase
+                                                                                                            const shouldAppendDelta = metaPhase !== 'task_execution'
+                                                                                                            if (shouldAppendDelta) {
+                                                                                                                fullContent += data.delta
+                                                                                                            }
+                                                                                                            if (data.metadata) {
+                                                                                                                lastMetadata = data.metadata
+                                                                                                            }
+                                                                                                            setMessages((prev) => prev.map((msg) => msg.id === m.id ? {
+                                                                                                                ...msg,
+                                                                                                                content: fullContent,
+                                                                                                                metadata: lastMetadata,
+                                                                                                                reportId: lastMetadata.report_id || msg.reportId
+                                                                                                            } : msg))
+                                                                                                        }
+                                                                                                        if (data.done) {
+                                                                                                            setMessages((prev) => prev.map((msg) => msg.id === m.id ? {
+                                                                                                                ...msg,
+                                                                                                                isStreaming: false,
+                                                                                                                runUrl: data.runUrl || msg.runUrl,
+                                                                                                                reportId: lastMetadata.report_id || msg.reportId
+                                                                                                            } : msg))
+                                                                                                        }
+                                                                                                    } catch (err) {
+                                                                                                        console.warn('Failed to parse resume SSE data:', err)
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                } catch (err: any) {
+                                                                                    console.error('Resume streaming error:', err)
+                                                                                    setMessages((prev) => prev.map((msg) => msg.id === m.id ? {
+                                                                                        ...msg,
+                                                                                        isStreaming: false,
+                                                                                        content: `${msg.content}\n\n⚠️ Resume failed: ${err?.message || 'Unknown error'}`
+                                                                                    } : msg))
+                                                                                }
+                                                                            })()
+                                                                        }
+                                                                    }}
+                                                                />
+                                                            </Box>
+                                                        )}
+
+                                                        {/* Show download/share buttons if report was generated */}
+                                                        {!m.isStreaming && (m.reportId || m.metadata?.report_id) && tenantId && (
+                                                            <Box mt={12}>
+                                                                <ReportDownloadButtons
+                                                                    reportId={m.reportId || m.metadata?.report_id || ''}
+                                                                    tenantId={tenantId}
+                                                                    reportTitle={m.metadata?.focusTitle || 'Business Analysis Report'}
+                                                                />
+                                                            </Box>
                                                         )}
 
                                                         {/* Quick Action Buttons (first message only) */}
@@ -1185,17 +1359,10 @@ export default function CoachV4() {
                                                     👤
                                                 </div>
                                                 <div style={{ flex: 1, minWidth: 0, paddingTop: 4 }}>
-                                                    <Text
-                                                        size="15px"
-                                                        style={{
-                                                            whiteSpace: 'pre-wrap',
-                                                            lineHeight: 1.7,
-                                                            color: '#353740',
-                                                            fontWeight: 400
-                                                        }}
-                                                    >
-                                                        {m.content}
-                                                    </Text>
+                                                    <RichMessageContent
+                                                        content={m.content}
+                                                        isStreaming={m.isStreaming}
+                                                    />
                                                 </div>
                                             </Group>
                                         )}

@@ -341,7 +341,44 @@ User Question: {user_message}
         business_name = business_context.get("business_name", "your business")
         has_data = business_context.get("has_data_connected", False)
         
-        prompt = f"""You are a friendly AI business coach for {business_name}.
+        # 🎯 Get task type and terminology
+        task_type = business_context.get("task_type", "general")
+        terminology = business_context.get("terminology", {})
+        industry = business_context.get("industry", "retail")
+        
+        # 🎯 Get ONLY relevant metrics and alerts based on task type
+        all_metrics = business_context.get("metrics", {})
+        all_alerts = business_context.get("alerts", {})
+        
+        # Filter metrics/alerts based on task type
+        relevant_metrics = {}
+        relevant_alerts = {}
+        
+        if task_type == "inventory_analysis":
+            # Only include inventory-related metrics
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "inventory" in k.lower() or "stock" in k.lower()}
+            relevant_alerts = {k: v for k, v in all_alerts.items() if "inventory" in k.lower() or "stock" in k.lower()}
+        elif task_type == "revenue_analysis":
+            # Only include revenue-related metrics
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "revenue" in k.lower() or "sales" in k.lower()}
+            relevant_alerts = {k: v for k, v in all_alerts.items() if "revenue" in k.lower() or "sales" in k.lower()}
+        elif task_type == "customer_analysis":
+            # Only include customer-related metrics
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "customer" in k.lower()}
+            relevant_alerts = {k: v for k, v in all_alerts.items() if "customer" in k.lower()}
+        else:
+            # For general queries, include all metrics
+            relevant_metrics = all_metrics
+            relevant_alerts = all_alerts
+        
+        logger.info(f"[_build_specialized_prompt] 📊 Task type: {task_type}")
+        logger.info(f"[_build_specialized_prompt] 📋 Filtered metrics: {list(relevant_metrics.keys())}")
+        logger.info(f"[_build_specialized_prompt] 🚨 Filtered alerts: {list(relevant_alerts.keys())}")
+        
+        # Use industry-specific terminology
+        items_term = terminology.get("items", "products")
+        
+        prompt = f"""You are a friendly AI business coach for {business_name}, a {industry} business.
 
 SPECIALIST AGENT: {agent_type.replace('_', ' ').title()}
 
@@ -410,15 +447,69 @@ Your role: Provide strategic guidance.
 {f"IMPORTANT: Explain that connecting data will enable personalized, data-driven recommendations specific to their business." if not has_data else ""}
 """
         
-        # Add business context with specific insights
-        if has_data:
-            health = business_context.get("health_score", {})
-            data_sources = business_context.get("data_sources", {})
+        # 🎯 Add ONLY relevant business context based on task type
+        data_sources = business_context.get("data_sources", {})
+        
+        if task_type == "inventory_analysis":
+            # Only show inventory data
             prompt += f"""
+
+📦 {items_term.upper()} DATA (Analysis Focus):
+- Total {items_term}: {data_sources.get('inventory', 0)} {items_term}
+"""
+            if relevant_metrics:
+                prompt += f"\nKEY {items_term.upper()} METRICS:\n"
+                for key, value in relevant_metrics.items():
+                    prompt += f"- {key}: {value}\n"
+            
+            if relevant_alerts:
+                prompt += f"\n🚨 {items_term.upper()} ALERTS:\n"
+                for key, alert_list in relevant_alerts.items():
+                    prompt += f"- {key}: {len(alert_list)} alerts\n"
+        
+        elif task_type == "revenue_analysis":
+            # Only show revenue/order data
+            prompt += f"""
+
+💰 REVENUE DATA (Analysis Focus):
+- Total Orders: {data_sources.get('orders', 0)} orders
+"""
+            if relevant_metrics:
+                prompt += "\nKEY REVENUE METRICS:\n"
+                for key, value in relevant_metrics.items():
+                    prompt += f"- {key}: {value}\n"
+            
+            if relevant_alerts:
+                prompt += "\n🚨 REVENUE ALERTS:\n"
+                for key, alert_list in relevant_alerts.items():
+                    prompt += f"- {key}: {len(alert_list)} alerts\n"
+        
+        elif task_type == "customer_analysis":
+            # Only show customer data
+            prompt += f"""
+
+👥 CUSTOMER DATA (Analysis Focus):
+- Total Customers: {data_sources.get('customers', 0)} customers
+"""
+            if relevant_metrics:
+                prompt += "\nKEY CUSTOMER METRICS:\n"
+                for key, value in relevant_metrics.items():
+                    prompt += f"- {key}: {value}\n"
+            
+            if relevant_alerts:
+                prompt += "\n🚨 CUSTOMER ALERTS:\n"
+                for key, alert_list in relevant_alerts.items():
+                    prompt += f"- {key}: {len(alert_list)} alerts\n"
+        
+        else:
+            # General query - show all data
+            health = business_context.get("health_score", {})
+            if has_data:
+                prompt += f"""
 
 ✅ BUSINESS DATA CONNECTED:
 - Orders: {data_sources.get('orders', 0)} orders
-- Inventory: {data_sources.get('inventory', 0)} items
+- {items_term.capitalize()}: {data_sources.get('inventory', 0)} {items_term}
 - Customers: {data_sources.get('customers', 0)} customers
 
 CURRENT BUSINESS HEALTH:
@@ -426,51 +517,65 @@ CURRENT BUSINESS HEALTH:
 - Revenue Health: {health.get('breakdown', {}).get('revenue', 'N/A')}/100
 - Operations Health: {health.get('breakdown', {}).get('operations', 'N/A')}/100
 - Customer Health: {health.get('breakdown', {}).get('customer', 'N/A')}/100
-
-IMPORTANT: Use these specific numbers in your response. For example:
-- If discussing sales: "With {data_sources.get('orders', 0)} orders..."
-- If discussing inventory: "Looking at your {data_sources.get('inventory', 0)} items..."
-- If discussing customers: "Among your {data_sources.get('customers', 0)} customers..."
 """
-        else:
-            data_sources = business_context.get("data_sources", {})
-            health = business_context.get("health_score", {})
-            prompt += f"""
+            else:
+                prompt += f"""
 
 ⚠️ NO REAL DATA CONNECTED (Using Sample Data):
 - Sample Orders: {data_sources.get('orders', 0)} orders
-- Sample Inventory: {data_sources.get('inventory', 0)} items
+- Sample {items_term}: {data_sources.get('inventory', 0)} {items_term}
 - Sample Customers: {data_sources.get('customers', 0)} customers
-
-CURRENT METRICS (from sample data):
-- Overall Health: {health.get('score', 'N/A')}/100
-- Revenue Health: {health.get('breakdown', {}).get('revenue', 'N/A')}/100
-- Operations Health: {health.get('breakdown', {}).get('operations', 'N/A')}/100
 
 TO GET ACCURATE INSIGHTS, connect real data:
 📦 E-commerce: Shopify, WooCommerce, GrandNode
 👥 CRM: Salesforce, HubSpot
 💰 Accounting: QuickBooks, Xero
-
-IMPORTANT: While you can analyze the sample data ({data_sources.get('orders', 0)} orders, {data_sources.get('inventory', 0)} items), 
-ALWAYS mention that connecting real data will provide:
-✨ Real-time business health monitoring
-📊 Accurate {agent_type.replace('_', ' ')} analysis specific to their business
-🎯 Personalized recommendations based on actual patterns
-📈 Reliable trend analysis and forecasting
 """
         
-        prompt += """
+        # 🎯 Add HTML formatting instructions
+        prompt += f"""
 
-RESPONSE GUIDELINES:
-1. Be conversational and friendly (2-4 sentences)
-2. Reference specific insights from the specialist agent
-3. Use simple language, avoid jargon
-4. Provide 2-3 concrete action items
-5. Ask a follow-up question if helpful
+RESPONSE FORMAT (CRITICAL):
+Your response MUST be formatted as rich HTML with proper structure:
+
+1. Use semantic HTML elements:
+   - <h2> for main sections
+   - <h3> for subsections
+   - <p> for paragraphs
+   - <ul> and <li> for lists
+   - <strong> for emphasis
+   - <table> for data presentation
+
+2. For {task_type.replace('_', ' ')} reports, structure as:
+   <div class="analysis-report">
+     <h2>📊 {terminology.get('items', 'Products').capitalize()} Analysis</h2>
+     
+     <h3>Key Findings</h3>
+     <ul>
+       <li><strong>Finding 1:</strong> Description with specific numbers</li>
+       <li><strong>Finding 2:</strong> Description with specific numbers</li>
+     </ul>
+     
+     <h3>Recommendations</h3>
+     <ol>
+       <li><strong>Action 1:</strong> What to do and why</li>
+       <li><strong>Action 2:</strong> What to do and why</li>
+     </ol>
+     
+     <h3>Metrics Summary</h3>
+     <table>
+       <tr><th>Metric</th><th>Value</th></tr>
+       <tr><td>Metric 1</td><td>Value 1</td></tr>
+     </table>
+   </div>
+
+3. Use terminology: "{terminology.get('items', 'products')}" NOT "inventory" or generic terms
+4. Reference specific numbers from the data
+5. Keep tone conversational but professional
 6. Use emojis sparingly: 📊 📈 💡 🎯 ✨
 
-Respond naturally to help them understand and act on the analysis."""
+CRITICAL: Do NOT include metrics or data outside the scope of {task_type}. 
+For example, if this is an inventory analysis, DO NOT mention revenue, orders, or customers."""
         
         return prompt
     
@@ -634,7 +739,10 @@ Respond naturally to help them understand and act on the analysis."""
             
             # Generate response
             try:
-                logger.info(f"🤖 Invoking LLM for {specialized_agent} with prompt preview: {prompt[:200]}...")
+                logger.info(f"🤖 Invoking LLM for {specialized_agent}")
+                logger.info(f"📝 Prompt length: {len(prompt)} chars")
+                logger.info(f"📝 Prompt preview (first 300 chars):\n{prompt[:300]}...")
+                logger.info(f"📝 Prompt preview (last 500 chars):\n...{prompt[-500:]}")
                 response_text = _invoke_llm(prompt)
                 
                 if response_text:
@@ -710,7 +818,10 @@ Respond naturally to help them understand and act on the analysis."""
                 logger.info(f"📄 Standard prompt length: {len(prompt)} chars")
             
             try:
-                logger.info(f"🤖 Invoking LLM with prompt preview: {prompt[:200]}...")
+                logger.info(f"🤖 Invoking LLM (general path)")
+                logger.info(f"📝 Prompt length: {len(prompt)} chars")
+                logger.info(f"📝 Prompt preview (first 300 chars):\n{prompt[:300]}...")
+                logger.info(f"📝 Prompt preview (last 500 chars):\n...{prompt[-500:]}")
                 response_text = _invoke_llm(prompt)
                 
                 if response_text:
@@ -800,46 +911,140 @@ Respond naturally to help them understand and act on the analysis."""
         """Build prompt for general conversation"""
         business_name = context.get("business_name", "your business")
         has_data = context.get("has_data_connected", False)
-        metrics = context.get("metrics", {})
+        
+        # 🎯 Get task type and filter metrics accordingly
+        task_type = context.get("task_type", "general")
+        terminology = context.get("terminology", {})
+        industry = context.get("industry", "retail")
+        
+        all_metrics = context.get("metrics", {})
         data_sources = context.get("data_sources", {})
         
-        prompt = f"""You are a friendly AI business coach for {business_name}.
+        # Filter metrics based on task type
+        if task_type == "inventory_analysis":
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "inventory" in k.lower() or "stock" in k.lower()}
+        elif task_type == "revenue_analysis":
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "revenue" in k.lower() or "sales" in k.lower() or "order" in k.lower()}
+        elif task_type == "customer_analysis":
+            relevant_metrics = {k: v for k, v in all_metrics.items() if "customer" in k.lower()}
+        else:
+            relevant_metrics = all_metrics
+        
+        items_term = terminology.get("items", "products")
+        
+        prompt = f"""You are a friendly AI business coach for {business_name}, a {industry} business.
 
 The user said: "{user_message}"
 
+"""
+        
+        # 🎯 Show only relevant data based on task type
+        if task_type == "inventory_analysis":
+            prompt += f"""
+ANALYSIS FOCUS: {items_term.upper()} / STOCK
+- Total {items_term}: {data_sources.get('inventory', 0)} {items_term}
+
+KEY {items_term.upper()} METRICS:
+"""
+            for key, value in relevant_metrics.items():
+                prompt += f"- {key}: {value}\n"
+            
+            prompt += f"""
+IMPORTANT: Focus ONLY on {items_term} and stock-related insights. 
+DO NOT mention revenue, orders, or customers in your response.
+"""
+        
+        elif task_type == "revenue_analysis":
+            prompt += f"""
+ANALYSIS FOCUS: REVENUE / SALES
+- Total Orders: {data_sources.get('orders', 0)} orders
+
+KEY REVENUE METRICS:
+"""
+            for key, value in relevant_metrics.items():
+                prompt += f"- {key}: {value}\n"
+            
+            prompt += """
+IMPORTANT: Focus ONLY on revenue and sales insights.
+DO NOT mention inventory or stock in your response.
+"""
+        
+        elif task_type == "customer_analysis":
+            prompt += f"""
+ANALYSIS FOCUS: CUSTOMERS
+- Total Customers: {data_sources.get('customers', 0)} customers
+
+KEY CUSTOMER METRICS:
+"""
+            for key, value in relevant_metrics.items():
+                prompt += f"- {key}: {value}\n"
+            
+            prompt += """
+IMPORTANT: Focus ONLY on customer-related insights.
+DO NOT mention inventory or revenue in your response.
+"""
+        
+        else:
+            # General query - show all data
+            prompt += f"""
 BUSINESS DATA AVAILABLE:
 - Orders: {data_sources.get('orders', 0)} records
-- Inventory: {data_sources.get('inventory', 0)} items  
+- {items_term.capitalize()}: {data_sources.get('inventory', 0)} {items_term}
 - Customers: {data_sources.get('customers', 0)} records
 
 KEY METRICS:
-- Revenue (Last 30 Days): ${metrics.get('revenue_last_30_days', 0):,.2f}
-- Orders (Last 30 Days): {metrics.get('orders_last_30_days', 0)}
-- Average Order Value: ${metrics.get('avg_order_value', 0):,.2f}
-- Total Customers: {metrics.get('total_customers', 0)}
-- VIP Customers: {metrics.get('vip_customers', 0)}
-- Repeat Customer Rate: {metrics.get('repeat_customer_rate', 0)}%
-
-IMPORTANT: Use these actual numbers in your response! For example:
-- "Your revenue over the last 30 days is ${metrics.get('revenue_last_30_days', 0):,.2f} from {metrics.get('orders_last_30_days', 0)} orders"
-- "You have {metrics.get('total_customers', 0)} customers with a {metrics.get('repeat_customer_rate', 0)}% repeat rate"
-- "Your average order value is ${metrics.get('avg_order_value', 0):,.2f}"
-
 """
+            for key, value in relevant_metrics.items():
+                prompt += f"- {key}: {value}\n"
         
         if not has_data:
             prompt += """
+
 ⚠️ NOTE: Using sample/test data. Encourage connecting real business data for accurate insights.
 """
         else:
             prompt += """
+
 ✅ Using real connected business data.
 """
         
-        prompt += """
-Respond warmly and helpfully using the specific numbers above. Keep it brief (2-4 sentences). 
-Provide actionable insights based on the metrics.
-Use emojis sparingly: 💡 🎯 ✨ 📊
+        # 🎯 Add HTML formatting instructions
+        prompt += f"""
+
+RESPONSE FORMAT (CRITICAL):
+Your response MUST be formatted as rich HTML with proper structure:
+
+1. Use semantic HTML elements:
+   - <h2> for main sections
+   - <h3> for subsections
+   - <p> for paragraphs
+   - <ul> and <li> for lists
+   - <strong> for emphasis
+   - <table> for structured data
+
+2. Example structure for {task_type.replace('_', ' ')}:
+   <div class="coach-response">
+     <h2>📊 Analysis Summary</h2>
+     <p>Based on your {terminology.get('items', 'products')} data...</p>
+     
+     <h3>Key Insights</h3>
+     <ul>
+       <li><strong>Insight 1:</strong> Description with numbers</li>
+       <li><strong>Insight 2:</strong> Description with numbers</li>
+     </ul>
+     
+     <h3>Recommendations</h3>
+     <ol>
+       <li>Action item with specific guidance</li>
+     </ol>
+   </div>
+
+3. Use terminology: "{items_term}" not generic terms
+4. Reference specific numbers from the metrics
+5. Keep tone warm and conversational
+6. Use emojis sparingly: 💡 🎯 ✨ 📊
+
+CRITICAL: Only discuss data relevant to the user's question about {task_type.replace('_', ' ')}.
 """
         
         return prompt

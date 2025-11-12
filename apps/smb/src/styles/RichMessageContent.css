@@ -1,0 +1,253 @@
+/* Rich Message Content Styles - Coach AI Response Formatting */
+
+.rich-message-content {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.8;
+    color: #353740;
+}
+
+/* Headings */
+.rich-message-content h1,
+.rich-message-content h2,
+.rich-message-content h3,
+.rich-message-content h4 {
+    margin-top: 24px;
+    margin-bottom: 16px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: #1a1b1e;
+}
+
+.rich-message-content h1 {
+    font-size: 24px;
+    border-bottom: 2px solid #e9ecef;
+    padding-bottom: 8px;
+}
+
+.rich-message-content h2 {
+    font-size: 20px;
+    color: #228be6;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.rich-message-content h3 {
+    font-size: 17px;
+    color: #495057;
+}
+
+.rich-message-content h4 {
+    font-size: 15px;
+    color: #495057;
+}
+
+/* First heading has no top margin */
+.rich-message-content h1:first-child,
+.rich-message-content h2:first-child,
+.rich-message-content h3:first-child,
+.rich-message-content h4:first-child {
+    margin-top: 0;
+}
+
+/* Paragraphs */
+.rich-message-content p {
+    margin-bottom: 16px;
+    line-height: 1.8;
+}
+
+.rich-message-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* Lists */
+.rich-message-content ul,
+.rich-message-content ol {
+    margin: 16px 0;
+    padding-left: 28px;
+}
+
+.rich-message-content ul {
+    list-style-type: disc;
+}
+
+.rich-message-content ol {
+    list-style-type: decimal;
+}
+
+.rich-message-content li {
+    margin-bottom: 8px;
+    line-height: 1.7;
+}
+
+.rich-message-content li strong {
+    color: #228be6;
+    font-weight: 600;
+}
+
+/* Nested lists */
+.rich-message-content li>ul,
+.rich-message-content li>ol {
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
+/* Emphasis */
+.rich-message-content strong {
+    font-weight: 600;
+    color: #1a1b1e;
+}
+
+.rich-message-content em {
+    font-style: italic;
+    color: #495057;
+}
+
+/* Tables */
+.rich-message-content table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 20px 0;
+    background-color: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.rich-message-content thead {
+    background: linear-gradient(135deg, #228be6 0%, #1c7ed6 100%);
+    color: white;
+}
+
+.rich-message-content th {
+    padding: 14px 16px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: white;
+}
+
+.rich-message-content tbody tr {
+    border-bottom: 1px solid #e9ecef;
+    transition: background-color 0.15s ease;
+}
+
+.rich-message-content tbody tr:last-child {
+    border-bottom: none;
+}
+
+.rich-message-content tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+.rich-message-content td {
+    padding: 12px 16px;
+    font-size: 14px;
+    color: #495057;
+}
+
+.rich-message-content td:first-child {
+    font-weight: 500;
+    color: #1a1b1e;
+}
+
+/* Alternating row colors */
+.rich-message-content tbody tr:nth-child(even) {
+    background-color: #f8f9fa;
+}
+
+.rich-message-content tbody tr:nth-child(even):hover {
+    background-color: #f1f3f5;
+}
+
+/* Analysis report container */
+.rich-message-content .analysis-report,
+.rich-message-content .coach-response {
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+    border-radius: 12px;
+    padding: 24px;
+    border: 1px solid #e9ecef;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* Dividers */
+.rich-message-content hr {
+    border: none;
+    border-top: 1px solid #e9ecef;
+    margin: 24px 0;
+}
+
+/* Code-like elements */
+.rich-message-content code {
+    background-color: #f8f9fa;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    color: #e03131;
+}
+
+/* Blockquotes */
+.rich-message-content blockquote {
+    border-left: 4px solid #228be6;
+    padding-left: 16px;
+    margin: 16px 0;
+    color: #495057;
+    font-style: italic;
+    background-color: #f8f9fa;
+    padding: 12px 16px;
+    border-radius: 4px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .rich-message-content {
+        font-size: 14px;
+    }
+
+    .rich-message-content h1 {
+        font-size: 20px;
+    }
+
+    .rich-message-content h2 {
+        font-size: 18px;
+    }
+
+    .rich-message-content h3 {
+        font-size: 16px;
+    }
+
+    .rich-message-content table {
+        font-size: 13px;
+    }
+
+    .rich-message-content th,
+    .rich-message-content td {
+        padding: 10px 12px;
+    }
+
+    .rich-message-content .analysis-report,
+    .rich-message-content .coach-response {
+        padding: 16px;
+    }
+}
+
+/* Print styles */
+@media print {
+    .rich-message-content {
+        color: black;
+    }
+
+    .rich-message-content table {
+        box-shadow: none;
+        border: 1px solid #ddd;
+    }
+
+    .rich-message-content thead {
+        background: #f0f0f0 !important;
+        color: black !important;
+    }
+}
