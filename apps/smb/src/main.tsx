@@ -28,6 +28,7 @@ import { Forecasting } from './pages/Forecasting'
 import ForgotPassword from './pages/ForgotPassword'
 import Goals from './pages/Goals'
 import Home from './pages/Home'
+import { Integrations } from './pages/Integrations'
 import LandingPage from './pages/LandingPage'
 import Login from './pages/Login'
 import OAuthCallback from './pages/OAuthCallback'
@@ -521,6 +522,16 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <Forecasting />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/integrations"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Integrations />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }

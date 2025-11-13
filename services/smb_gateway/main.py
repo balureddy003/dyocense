@@ -4048,6 +4048,487 @@ async def run_scenario(
 
 
 # ===================================
+# Integration Hub & API Access Endpoints
+# ===================================
+
+from packages.agent.integrations import (
+    integration_hub,
+    IntegrationType,
+    IntegrationStatus,
+    WebhookEventType
+)
+
+
+@app.post("/v1/tenants/{tenant_id}/integrations")
+async def create_integration(
+    tenant_id: str,
+    integration_type: IntegrationType = Query(..., description="Integration type"),
+    display_name: str = Query(..., description="Display name"),
+    config: Optional[str] = Query(None, description="JSON configuration")
+):
+    """
+    Create a new third-party integration.
+    
+    Phase 4: Integration Hub & API Access - Task 4.6
+    
+    Supported integrations:
+    - quickbooks: QuickBooks Online for accounting data
+    - stripe: Stripe for payment processing
+    - square: Square for POS and inventory
+    - custom_api: Custom API access with keys
+    """
+    config_dict = None
+    if config:
+        import json
+        try:
+            config_dict = json.loads(config)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid config JSON")
+    
+    integration = await integration_hub.create_integration(
+        tenant_id=tenant_id,
+        integration_type=integration_type,
+        display_name=display_name,
+        config=config_dict
+    )
+    
+    return {
+        "integration_id": integration.integration_id,
+        "integration_type": integration.integration_type,
+        "display_name": integration.display_name,
+        "status": integration.status,
+        "created": True
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/integrations")
+async def list_integrations(tenant_id: str):
+    """
+    List all integrations for a tenant.
+    
+    Returns active, pending, and inactive integrations.
+    """
+    integrations = await integration_hub.list_integrations(tenant_id)
+    
+    return {
+        "integrations": [
+            {
+                "integration_id": integration.integration_id,
+                "integration_type": integration.integration_type,
+                "display_name": integration.display_name,
+                "status": integration.status,
+                "connected_at": integration.connected_at.isoformat() if integration.connected_at else None,
+                "last_sync_at": integration.last_sync_at.isoformat() if integration.last_sync_at else None
+            }
+            for integration in integrations
+        ]
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/integrations/{integration_id}")
+async def get_integration(tenant_id: str, integration_id: str):
+    """
+    Get detailed information about an integration.
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    return {
+        "integration_id": integration.integration_id,
+        "integration_type": integration.integration_type,
+        "display_name": integration.display_name,
+        "status": integration.status,
+        "connected_at": integration.connected_at.isoformat() if integration.connected_at else None,
+        "last_sync_at": integration.last_sync_at.isoformat() if integration.last_sync_at else None,
+        "config": integration.config,
+        "metadata": integration.metadata
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/integrations/{integration_id}/oauth/initiate")
+async def initiate_oauth_flow(
+    tenant_id: str,
+    integration_id: str,
+    redirect_uri: str = Query(..., description="OAuth redirect URI")
+):
+    """
+    Initiate OAuth authorization flow.
+    
+    Returns authorization URL for user to complete connection.
+    Supports QuickBooks and Square OAuth flows.
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    try:
+        oauth_data = await integration_hub.initiate_oauth(
+            integration_id=integration_id,
+            redirect_uri=redirect_uri
+        )
+        
+        return oauth_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/tenants/{tenant_id}/integrations/{integration_id}/oauth/complete")
+async def complete_oauth_flow(
+    tenant_id: str,
+    integration_id: str,
+    auth_code: str = Query(..., description="Authorization code from OAuth provider")
+):
+    """
+    Complete OAuth authorization flow.
+    
+    Exchanges authorization code for access tokens and activates integration.
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    try:
+        updated_integration = await integration_hub.complete_oauth(
+            integration_id=integration_id,
+            auth_code=auth_code
+        )
+        
+        return {
+            "integration_id": updated_integration.integration_id,
+            "status": updated_integration.status,
+            "connected_at": updated_integration.connected_at.isoformat(),
+            "message": "Integration connected successfully"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/tenants/{tenant_id}/integrations/{integration_id}/connect")
+async def connect_integration(
+    tenant_id: str,
+    integration_id: str,
+    credentials: str = Query(..., description="JSON with API key or access token")
+):
+    """
+    Connect integration using direct credentials (for Stripe, custom APIs).
+    
+    Example credentials:
+    {"api_key": "sk_test_..."}
+    {"access_token": "sqOatp-..."}
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    import json
+    try:
+        creds_dict = json.loads(credentials)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid credentials JSON")
+    
+    connector = integration_hub.get_connector(integration)
+    
+    # Connect based on integration type
+    if integration.integration_type == IntegrationType.STRIPE:
+        if "api_key" not in creds_dict:
+            raise HTTPException(status_code=400, detail="api_key required for Stripe")
+        updated_integration = await connector.connect(creds_dict["api_key"])
+    elif integration.integration_type == IntegrationType.SQUARE:
+        if "access_token" not in creds_dict:
+            raise HTTPException(status_code=400, detail="access_token required for Square")
+        updated_integration = await connector.connect(creds_dict["access_token"])
+    else:
+        raise HTTPException(status_code=400, detail="Use OAuth flow for this integration")
+    
+    await integration_hub.update_integration(integration_id, {
+        "status": updated_integration.status,
+        "connected_at": updated_integration.connected_at
+    })
+    
+    return {
+        "integration_id": updated_integration.integration_id,
+        "status": updated_integration.status,
+        "message": "Integration connected successfully"
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/integrations/{integration_id}/sync")
+async def sync_integration(
+    tenant_id: str,
+    integration_id: str,
+    entities: Optional[str] = Query(None, description="Comma-separated entities to sync")
+):
+    """
+    Synchronize data from integration.
+    
+    Pulls latest data from connected service:
+    - QuickBooks: customers, invoices, payments
+    - Stripe: customers, payments, subscriptions
+    - Square: customers, orders, inventory
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    entity_list = None
+    if entities:
+        entity_list = [e.strip() for e in entities.split(",")]
+    
+    try:
+        results = await integration_hub.sync_integration_data(
+            integration_id=integration_id,
+            entities=entity_list
+        )
+        
+        return {
+            "integration_id": integration_id,
+            "synced_at": datetime.utcnow().isoformat(),
+            "results": [
+                {
+                    "status": result.status,
+                    "records_processed": result.records_processed,
+                    "records_created": result.records_created,
+                    "records_updated": result.records_updated,
+                    "records_failed": result.records_failed,
+                    "errors": result.errors,
+                    "metadata": result.metadata
+                }
+                for result in results
+            ]
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/v1/tenants/{tenant_id}/integrations/{integration_id}")
+async def delete_integration(tenant_id: str, integration_id: str):
+    """
+    Disconnect and delete an integration.
+    
+    This will also delete all associated webhooks.
+    """
+    integration = await integration_hub.get_integration(integration_id)
+    
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    deleted = await integration_hub.delete_integration(integration_id)
+    
+    if deleted:
+        return {"message": "Integration deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to delete integration")
+
+
+# Webhook Management
+
+@app.post("/v1/tenants/{tenant_id}/webhooks")
+async def create_webhook(
+    tenant_id: str,
+    integration_id: str = Query(..., description="Integration ID"),
+    url: str = Query(..., description="Webhook endpoint URL"),
+    events: str = Query(..., description="Comma-separated webhook events")
+):
+    """
+    Create a webhook endpoint for integration events.
+    
+    Supported events:
+    - invoice.created, invoice.paid
+    - payment.received
+    - customer.created
+    - order.created
+    - product.updated
+    
+    Returns a webhook secret for verifying signatures.
+    """
+    # Verify integration exists and belongs to tenant
+    integration = await integration_hub.get_integration(integration_id)
+    if not integration or integration.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    # Parse events
+    event_list = []
+    for event_str in events.split(","):
+        event_str = event_str.strip()
+        try:
+            event_list.append(WebhookEventType(event_str))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid event type: {event_str}")
+    
+    webhook = await integration_hub.create_webhook(
+        tenant_id=tenant_id,
+        integration_id=integration_id,
+        url=url,
+        events=event_list
+    )
+    
+    return {
+        "webhook_id": webhook.webhook_id,
+        "url": webhook.url,
+        "events": [e.value for e in webhook.events],
+        "secret": webhook.secret,
+        "is_active": webhook.is_active,
+        "message": "Webhook created. Save the secret securely - it won't be shown again."
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/webhooks")
+async def list_webhooks(tenant_id: str):
+    """
+    List all webhooks for a tenant.
+    """
+    webhooks = await integration_hub.list_webhooks(tenant_id)
+    
+    return {
+        "webhooks": [
+            {
+                "webhook_id": webhook.webhook_id,
+                "integration_id": webhook.integration_id,
+                "url": webhook.url,
+                "events": [e.value for e in webhook.events],
+                "is_active": webhook.is_active,
+                "created_at": webhook.created_at.isoformat(),
+                "last_triggered_at": webhook.last_triggered_at.isoformat() if webhook.last_triggered_at else None,
+                "total_deliveries": webhook.total_deliveries,
+                "successful_deliveries": webhook.successful_deliveries,
+                "failed_deliveries": webhook.failed_deliveries
+            }
+            for webhook in webhooks
+        ]
+    }
+
+
+@app.delete("/v1/tenants/{tenant_id}/webhooks/{webhook_id}")
+async def delete_webhook(tenant_id: str, webhook_id: str):
+    """
+    Delete a webhook endpoint.
+    """
+    webhooks = await integration_hub.list_webhooks(tenant_id)
+    webhook = next((w for w in webhooks if w.webhook_id == webhook_id), None)
+    
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    
+    deleted = await integration_hub.delete_webhook(webhook_id)
+    
+    if deleted:
+        return {"message": "Webhook deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to delete webhook")
+
+
+# API Key Management
+
+@app.post("/v1/tenants/{tenant_id}/api-keys")
+async def create_api_key(
+    tenant_id: str,
+    name: str = Query(..., description="API key name"),
+    description: str = Query(..., description="API key description"),
+    scopes: str = Query(..., description="Comma-separated scopes"),
+    expires_in_days: Optional[int] = Query(None, description="Expiration in days")
+):
+    """
+    Create a new API key for programmatic access.
+    
+    Scopes control what the API key can access:
+    - read:metrics - Read metrics and analytics
+    - write:goals - Create and update goals
+    - write:tasks - Create and update tasks
+    - read:reports - Generate and download reports
+    - read:forecasts - Access forecasting data
+    
+    The raw API key is returned only once - save it securely!
+    """
+    scope_list = [s.strip() for s in scopes.split(",")]
+    
+    api_key, raw_key = await integration_hub.create_api_key(
+        tenant_id=tenant_id,
+        name=name,
+        description=description,
+        scopes=scope_list,
+        expires_in_days=expires_in_days
+    )
+    
+    return {
+        "key_id": api_key.key_id,
+        "name": api_key.name,
+        "api_key": raw_key,
+        "scopes": api_key.scopes,
+        "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+        "message": "Save this API key securely. It will not be shown again."
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/api-keys")
+async def list_api_keys(tenant_id: str):
+    """
+    List all API keys for a tenant (keys are masked).
+    """
+    api_keys = await integration_hub.list_api_keys(tenant_id)
+    
+    return {
+        "api_keys": [
+            {
+                "key_id": key.key_id,
+                "name": key.name,
+                "description": key.description,
+                "scopes": key.scopes,
+                "is_active": key.is_active,
+                "created_at": key.created_at.isoformat(),
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+                "total_requests": key.total_requests
+            }
+            for key in api_keys
+        ]
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/api-keys/{key_id}/revoke")
+async def revoke_api_key(tenant_id: str, key_id: str):
+    """
+    Revoke an API key (disables it without deleting).
+    """
+    api_keys = await integration_hub.list_api_keys(tenant_id)
+    api_key = next((k for k in api_keys if k.key_id == key_id), None)
+    
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    revoked = await integration_hub.revoke_api_key(key_id)
+    
+    if revoked:
+        return {"message": "API key revoked successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to revoke API key")
+
+
+@app.delete("/v1/tenants/{tenant_id}/api-keys/{key_id}")
+async def delete_api_key(tenant_id: str, key_id: str):
+    """
+    Delete an API key permanently.
+    """
+    api_keys = await integration_hub.list_api_keys(tenant_id)
+    api_key = next((k for k in api_keys if k.key_id == key_id), None)
+    
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    deleted = await integration_hub.delete_api_key(key_id)
+    
+    if deleted:
+        return {"message": "API key deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to delete API key")
+
+
+# ===================================
 # Decision Ledger Endpoints
 # ===================================
 
