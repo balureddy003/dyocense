@@ -966,6 +966,292 @@ async def get_metrics_snapshot(tenant_id: str):
 
 
 # ===================================
+# Phase 3: Business Classification & Industry Metrics
+# ===================================
+
+from packages.agent.business_classifier import (
+    create_business_classifier,
+    classify_and_store,
+    ClassificationResult,
+)
+from packages.agent.industry_metrics import (
+    create_metric_calculator,
+    Metric,
+)
+
+
+class BusinessTypeResponse(BaseModel):
+    """Response for business type classification"""
+    business_type: str
+    confidence: str
+    confidence_score: float
+    reasoning: List[str]
+    alternative_types: List[Dict[str, Any]]
+    classified_at: str
+    
+    
+@app.get("/v1/tenants/{tenant_id}/business-type", response_model=BusinessTypeResponse)
+async def get_business_type(tenant_id: str):
+    """
+    Get current business type classification for tenant.
+    
+    Returns cached classification from tenant metadata if available.
+    Use POST endpoint to force reclassification.
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Get tenant metadata
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                # Extract classification from metadata
+                metadata = dict(result).get("metadata", {})
+                classification = metadata.get("business_classification")
+                
+                if not classification:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Business type not classified yet. Use POST endpoint to classify."
+                    )
+                
+                return BusinessTypeResponse(**classification)
+        finally:
+            conn.close()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching business type for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/tenants/{tenant_id}/business-type/classify", response_model=BusinessTypeResponse)
+async def classify_business_type(tenant_id: str, force_refresh: bool = False):
+    """
+    Classify or reclassify tenant's business type.
+    
+    Uses multi-signal analysis:
+    - Text signals (business name, industry, description)
+    - Transaction patterns (frequency, amounts, repeat customers)
+    - Inventory characteristics (SKU count, turnover)
+    - Expense patterns (category distribution, COGS %)
+    
+    Args:
+        force_refresh: Force reclassification even if cached result exists
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Check if already classified and not forcing refresh
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                metadata = dict(result).get("metadata", {})
+                existing_classification = metadata.get("business_classification")
+                
+                if existing_classification and not force_refresh:
+                    return BusinessTypeResponse(**existing_classification)
+        finally:
+            conn.close()
+        
+        # Fetch tenant data for classification
+        tenant_data = {
+            "tenant_id": tenant_id,
+            "business_name": metadata.get("business_name", ""),
+            "industry": metadata.get("industry", ""),
+            "description": metadata.get("description", ""),
+        }
+        
+        # Fetch transaction data from connector
+        connector_data = await _fetch_connector_data(tenant_id)
+        transaction_data = connector_data.get("transactions", {})
+        
+        # Perform classification
+        backend = get_backend()
+        result = await classify_and_store(
+            tenant_id=tenant_id,
+            tenant_data=tenant_data,
+            transaction_data=transaction_data,
+            persistence_backend=backend,
+        )
+        
+        # Return result
+        return BusinessTypeResponse(
+            business_type=result.business_type.value,
+            confidence=result.confidence.value,
+            confidence_score=result.confidence_score,
+            reasoning=result.reasoning,
+            alternative_types=[
+                {"type": t.value, "score": s}
+                for t, s in result.alternative_types
+            ],
+            classified_at=datetime.utcnow().isoformat(),
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error classifying business type for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IndustryMetricsResponse(BaseModel):
+    """Response for industry-specific metrics"""
+    business_type: str
+    metrics: List[Dict[str, Any]]
+    calculated_at: str
+    period_days: int
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/industry", response_model=IndustryMetricsResponse)
+async def get_industry_metrics(
+    tenant_id: str,
+    period_days: int = Query(default=30, ge=1, le=365),
+):
+    """
+    Get industry-specific metrics for tenant's dashboard.
+    
+    Returns metrics relevant to the tenant's business type:
+    - Restaurant: Food cost %, labor cost %, prime cost %, avg check, daily covers
+    - Retail: Inventory turnover, sell-through rate, GMROI, avg basket, conversion
+    - Services: Utilization rate, realization rate, avg hourly rate, project margin
+    - Contractor: Job completion %, material cost %, labor efficiency, change orders
+    
+    Args:
+        period_days: Number of days to analyze (default: 30)
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Get business type from tenant metadata
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                metadata = dict(result).get("metadata", {})
+                classification = metadata.get("business_classification")
+                
+                if not classification:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Business type not classified. Call /business-type/classify first."
+                    )
+                
+                business_type = classification.get("business_type")
+        finally:
+            conn.close()
+        
+        # Fetch connector data
+        connector_data = await _fetch_connector_data(tenant_id)
+        
+        # Prepare tenant data for metrics calculation
+        tenant_data = {
+            "revenue": connector_data.get("total_revenue", 0),
+            "cogs": connector_data.get("total_cogs", 0),
+            "expenses": connector_data.get("expenses", {}),
+            "transactions": connector_data.get("transaction_count", 0),
+            "total_covers": connector_data.get("customer_count", 0),
+            "avg_inventory_value": connector_data.get("avg_inventory_value", 0),
+            "inventory_value": connector_data.get("current_inventory_value", 0),
+        }
+        
+        # Calculate industry-specific metrics
+        calculator = create_metric_calculator(business_type)
+        metrics = await calculator.calculate_metrics(tenant_data, period_days)
+        
+        # Convert Metric objects to dicts
+        metrics_data = [
+            {
+                "id": m.id,
+                "name": m.name,
+                "value": m.value,
+                "formatted_value": m.formatted_value,
+                "unit": m.unit,
+                "category": m.category.value,
+                "trend": m.trend,
+                "trend_value": m.trend_value,
+                "benchmark": m.benchmark,
+                "status": m.status,
+                "tooltip": m.tooltip,
+            }
+            for m in metrics
+        ]
+        
+        return IndustryMetricsResponse(
+            business_type=business_type,
+            metrics=metrics_data,
+            calculated_at=datetime.utcnow().isoformat(),
+            period_days=period_days,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating industry metrics for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================================
 # Business Profile & Onboarding Endpoints
 # ===================================
 
