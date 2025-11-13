@@ -30,6 +30,7 @@ import LandingPage from './pages/LandingPage'
 import Login from './pages/Login'
 import OAuthCallback from './pages/OAuthCallback'
 import Planner from './pages/Planner'
+import { Reports } from './pages/Reports'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
 import Tools from './pages/Tools'
@@ -488,6 +489,16 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <AdvancedAnalytics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/reports"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Reports />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }

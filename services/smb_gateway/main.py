@@ -3158,6 +3158,391 @@ async def export_analytics_csv(
 
 
 # ===================================
+# Report Generation Endpoints
+# ===================================
+
+from packages.agent.reports import (
+    create_report_generator,
+    ReportTemplate,
+    ReportFormat as AgentReportFormat,
+    ReportFrequency,
+    ReportConfig,
+    ReportSchedule
+)
+
+
+@app.post("/v1/tenants/{tenant_id}/reports/generate")
+async def generate_report(
+    tenant_id: str,
+    template: ReportTemplate = Query(..., description="Report template"),
+    title: str = Query(..., description="Report title"),
+    metrics: str = Query(..., description="Comma-separated metric names"),
+    start_date: str = Query(..., description="Start date (ISO format)"),
+    end_date: str = Query(..., description="End date (ISO format)"),
+    format: AgentReportFormat = Query(AgentReportFormat.HTML, description="Output format"),
+    include_charts: bool = Query(True, description="Include charts"),
+    include_insights: bool = Query(True, description="Include AI insights"),
+    include_comparisons: bool = Query(True, description="Include period comparisons"),
+):
+    """
+    Generate a report on-demand.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Generates comprehensive business reports with metrics, insights, and visualizations.
+    Supports HTML, PDF, and Markdown formats.
+    """
+    generator = create_report_generator()
+    
+    # Parse dates
+    start = datetime.fromisoformat(start_date)
+    end = datetime.fromisoformat(end_date)
+    
+    # Parse metrics
+    metric_list = [m.strip() for m in metrics.split(",")]
+    
+    # Create config
+    config = ReportConfig(
+        metrics=metric_list,
+        start_date=start,
+        end_date=end,
+        include_charts=include_charts,
+        include_insights=include_insights,
+        include_comparisons=include_comparisons
+    )
+    
+    # Generate report
+    report = await generator.generate_report(
+        tenant_id=tenant_id,
+        template=template,
+        title=title,
+        config=config,
+        format=format,
+        generated_by="user"
+    )
+    
+    return {
+        "id": report.id,
+        "title": report.title,
+        "template": report.template,
+        "format": report.format,
+        "file_size": report.file_size,
+        "generated_at": report.generated_at.isoformat(),
+        "content": report.content,
+        "metadata": report.metadata
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/reports")
+async def list_generated_reports(
+    tenant_id: str,
+    limit: int = Query(50, ge=1, le=200, description="Max reports to return")
+):
+    """
+    List all generated reports for a tenant.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Returns list of reports sorted by generation date (newest first).
+    """
+    generator = create_report_generator()
+    
+    reports = await generator.list_reports(tenant_id=tenant_id, limit=limit)
+    
+    return {
+        "tenant_id": tenant_id,
+        "count": len(reports),
+        "reports": reports
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/reports/{report_id}")
+async def get_report(
+    tenant_id: str,
+    report_id: str
+):
+    """
+    Get a specific report by ID.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Returns full report content including HTML/PDF/Markdown.
+    """
+    generator = create_report_generator()
+    
+    report = await generator.get_report(tenant_id=tenant_id, report_id=report_id)
+    
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    return {
+        "id": report.id,
+        "title": report.title,
+        "template": report.template,
+        "format": report.format,
+        "file_size": report.file_size,
+        "generated_at": report.generated_at.isoformat(),
+        "generated_by": report.generated_by,
+        "content": report.content,
+        "metadata": report.metadata
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/reports/{report_id}/share")
+async def create_report_share_link(
+    tenant_id: str,
+    report_id: str,
+    expires_in_days: int = Query(7, ge=1, le=90, description="Days until link expires"),
+    password: Optional[str] = Query(None, description="Optional password protection")
+):
+    """
+    Create a shareable public link for a report.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Returns a secure token that can be used to access the report publicly.
+    Link expires after specified number of days.
+    """
+    generator = create_report_generator()
+    
+    shareable = await generator.create_shareable_link(
+        tenant_id=tenant_id,
+        report_id=report_id,
+        expires_in_days=expires_in_days,
+        password=password
+    )
+    
+    return {
+        "share_token": shareable.share_token,
+        "share_url": f"/api/v1/public/reports/{shareable.share_token}",
+        "expires_at": shareable.expires_at.isoformat(),
+        "password_protected": shareable.password_hash is not None
+    }
+
+
+@app.delete("/v1/tenants/{tenant_id}/reports/share/{share_token}")
+async def revoke_share_link(
+    tenant_id: str,
+    share_token: str
+):
+    """
+    Revoke a shareable report link.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Immediately invalidates the share link.
+    """
+    generator = create_report_generator()
+    
+    success = await generator.revoke_share_link(
+        tenant_id=tenant_id,
+        share_token=share_token
+    )
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    
+    return {"message": "Share link revoked successfully"}
+
+
+@app.get("/v1/public/reports/{share_token}")
+async def access_shared_report(
+    share_token: str,
+    password: Optional[str] = Query(None, description="Password if required")
+):
+    """
+    Access a shared report via public link.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Public endpoint that does not require authentication.
+    Validates token, expiration, and optional password.
+    """
+    generator = create_report_generator()
+    
+    result = await generator.get_shared_report(
+        share_token=share_token,
+        password=password
+    )
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Report not found or expired")
+    
+    if "error" in result:
+        if result["error"] == "password_required":
+            raise HTTPException(status_code=401, detail="Password required")
+        elif result["error"] == "invalid_password":
+            raise HTTPException(status_code=401, detail="Invalid password")
+    
+    return result
+
+
+@app.post("/v1/tenants/{tenant_id}/reports/schedules")
+async def create_report_schedule(
+    tenant_id: str,
+    template: ReportTemplate = Query(..., description="Report template"),
+    title: str = Query(..., description="Report title"),
+    metrics: str = Query(..., description="Comma-separated metric names"),
+    frequency: ReportFrequency = Query(..., description="Schedule frequency"),
+    time: str = Query("09:00", description="Time to run (HH:MM)"),
+    recipients: str = Query(..., description="Comma-separated email addresses"),
+    day_of_week: Optional[int] = Query(None, ge=0, le=6, description="Day of week (0=Mon, 6=Sun)"),
+    day_of_month: Optional[int] = Query(None, ge=1, le=31, description="Day of month (1-31)"),
+    enabled: bool = Query(True, description="Enable schedule"),
+):
+    """
+    Create a scheduled report.
+    
+    Phase 4: Report Generation - Task 4.2
+    
+    Automatically generates and emails reports on a recurring schedule.
+    """
+    generator = create_report_generator()
+    
+    # Parse recipients
+    recipient_list = [e.strip() for e in recipients.split(",")]
+    
+    # Parse metrics
+    metric_list = [m.strip() for m in metrics.split(",")]
+    
+    # Create schedule config
+    # For scheduled reports, use rolling date ranges
+    now = datetime.utcnow()
+    if frequency == ReportFrequency.DAILY:
+        start = now - timedelta(days=1)
+        end = now
+    elif frequency == ReportFrequency.WEEKLY:
+        start = now - timedelta(days=7)
+        end = now
+    elif frequency == ReportFrequency.MONTHLY:
+        start = now - timedelta(days=30)
+        end = now
+    else:
+        start = now - timedelta(days=7)
+        end = now
+    
+    config = ReportConfig(
+        metrics=metric_list,
+        start_date=start,
+        end_date=end,
+        include_charts=True,
+        include_insights=True,
+        include_comparisons=True
+    )
+    
+    # Create schedule
+    schedule = ReportSchedule(
+        id=None,
+        tenant_id=tenant_id,
+        template=template,
+        title=title,
+        config=config,
+        frequency=frequency,
+        time=time,
+        recipients=recipient_list,
+        day_of_week=day_of_week,
+        day_of_month=day_of_month,
+        enabled=enabled
+    )
+    
+    created_schedule = await generator.create_schedule(
+        tenant_id=tenant_id,
+        schedule=schedule
+    )
+    
+    return {
+        "id": created_schedule.id,
+        "title": created_schedule.title,
+        "template": created_schedule.template,
+        "frequency": created_schedule.frequency,
+        "recipients": created_schedule.recipients,
+        "enabled": created_schedule.enabled,
+        "next_run": created_schedule.next_run.isoformat() if created_schedule.next_run else None
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/reports/schedules")
+async def list_report_schedules(tenant_id: str):
+    """
+    List all scheduled reports for a tenant.
+    
+    Phase 4: Report Generation - Task 4.2
+    """
+    generator = create_report_generator()
+    
+    schedules = await generator.list_schedules(tenant_id=tenant_id)
+    
+    return {
+        "tenant_id": tenant_id,
+        "count": len(schedules),
+        "schedules": schedules
+    }
+
+
+@app.put("/v1/tenants/{tenant_id}/reports/schedules/{schedule_id}")
+async def update_report_schedule(
+    tenant_id: str,
+    schedule_id: str,
+    enabled: Optional[bool] = Query(None, description="Enable/disable schedule"),
+    time: Optional[str] = Query(None, description="Time to run (HH:MM)"),
+    recipients: Optional[str] = Query(None, description="Comma-separated email addresses"),
+):
+    """
+    Update an existing report schedule.
+    
+    Phase 4: Report Generation - Task 4.2
+    """
+    generator = create_report_generator()
+    
+    updates = {}
+    if enabled is not None:
+        updates["enabled"] = enabled
+    if time is not None:
+        updates["time"] = time
+    if recipients is not None:
+        updates["recipients"] = [e.strip() for e in recipients.split(",")]
+    
+    schedule = await generator.update_schedule(
+        tenant_id=tenant_id,
+        schedule_id=schedule_id,
+        updates=updates
+    )
+    
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    return {
+        "id": schedule.id,
+        "title": schedule.title,
+        "enabled": schedule.enabled,
+        "next_run": schedule.next_run.isoformat() if schedule.next_run else None
+    }
+
+
+@app.delete("/v1/tenants/{tenant_id}/reports/schedules/{schedule_id}")
+async def delete_report_schedule(
+    tenant_id: str,
+    schedule_id: str
+):
+    """
+    Delete a report schedule.
+    
+    Phase 4: Report Generation - Task 4.2
+    """
+    generator = create_report_generator()
+    
+    success = await generator.delete_schedule(
+        tenant_id=tenant_id,
+        schedule_id=schedule_id
+    )
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    return {"message": "Schedule deleted successfully"}
+
+
+# ===================================
 # Decision Ledger Endpoints
 # ===================================
 

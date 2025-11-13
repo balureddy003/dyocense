@@ -43,14 +43,14 @@ export function AdvancedAnalytics() {
         queryKey: ['analytics-trend', tenantId, selectedMetric, startDate, endDate, granularity],
         queryFn: async () => {
             if (!startDate || !endDate) return null;
-            
+
             const params = new URLSearchParams({
                 metric: selectedMetric,
                 start_date: startDate.toISOString(),
                 end_date: endDate.toISOString(),
                 granularity: granularity,
             });
-            
+
             return get(`/v1/tenants/${tenantId}/analytics/trends?${params}`, apiToken);
         },
         enabled: !!tenantId && !!apiToken && !!startDate && !!endDate,
@@ -61,14 +61,14 @@ export function AdvancedAnalytics() {
         queryKey: ['analytics-comparison', tenantId, selectedMetric, startDate, endDate, comparisonType],
         queryFn: async () => {
             if (!startDate || !endDate) return null;
-            
+
             const params = new URLSearchParams({
                 metric: selectedMetric,
                 current_start: startDate.toISOString(),
                 current_end: endDate.toISOString(),
                 comparison_type: comparisonType,
             });
-            
+
             return get(`/v1/tenants/${tenantId}/analytics/compare?${params}`, apiToken);
         },
         enabled: !!tenantId && !!apiToken && !!startDate && !!endDate,
@@ -88,18 +88,18 @@ export function AdvancedAnalytics() {
     // Export to CSV
     const handleExportCSV = async () => {
         if (!startDate || !endDate) return;
-        
+
         const params = new URLSearchParams({
             metrics: metrics.map(m => m.value).join(','),
             start_date: startDate.toISOString(),
             end_date: endDate.toISOString(),
         });
-        
+
         const url = `/v1/tenants/${tenantId}/analytics/export/csv?${params}`;
         // Trigger download
         const apiUrl = (import.meta as any).env?.VITE_API_URL || '';
         window.open(`${apiUrl}${url}`, '_blank');
-    };    const getTrendIcon = (direction: string) => {
+    }; const getTrendIcon = (direction: string) => {
         if (direction === 'up') return <IconTrendingUp size={20} color="green" />;
         if (direction === 'down') return <IconTrendingDown size={20} color="red" />;
         return <IconMinus size={20} color="gray" />;
