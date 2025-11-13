@@ -13,6 +13,7 @@
 Created complete React component library for Coach V6:
 
 #### **HealthScoreHeader.tsx** (196 lines)
+
 - Hero component with gradient background based on score
 - Displays health score (0-100), trend, and change amount
 - Shows critical alerts (needs attention) and positive signals (doing well)
@@ -21,6 +22,7 @@ Created complete React component library for Coach V6:
 - Action buttons: "View Report" and "Ask Coach"
 
 #### **ProactiveCoachCard.tsx** (167 lines)
+
 - AI-generated recommendation display
 - Priority-based styling (critical → red, important → yellow, suggestion → blue)
 - Reasoning explanation section
@@ -30,6 +32,7 @@ Created complete React component library for Coach V6:
 - Action tracking (completed state)
 
 #### **MetricsGrid.tsx** (145 lines)
+
 - 4-metric snapshot grid (responsive)
 - Inline SVG sparklines (trend visualization)
 - Trend indicators (up/down/stable arrows)
@@ -38,6 +41,7 @@ Created complete React component library for Coach V6:
 - Click-through to detailed reports
 
 #### **GoalsColumn.tsx** (166 lines)
+
 - Active goals display with progress bars
 - Status badges (on track / at risk / off track / completed)
 - Due date display with smart formatting ("due today", "due in 3 days", "overdue")
@@ -46,6 +50,7 @@ Created complete React component library for Coach V6:
 - "Create Goal" action button
 
 #### **TasksColumn.tsx** (175 lines)
+
 - Today's prioritized tasks
 - Checkboxes for completion toggle
 - Priority badges (urgent / high / medium / low)
@@ -55,6 +60,7 @@ Created complete React component library for Coach V6:
 - Due time display
 
 #### **types.ts** (242 lines)
+
 - Complete TypeScript type definitions
 - 14+ interfaces covering entire data model:
   - HealthScore (with weighted components)
@@ -68,10 +74,12 @@ Created complete React component library for Coach V6:
   - State Management Types
 
 #### **index.ts** (11 lines)
+
 - Barrel export for easy importing
 - Single import point for all Coach V6 components
 
 #### **README.md** (289 lines)
+
 - Complete component documentation
 - Design principles and philosophy
 - Usage examples
@@ -82,6 +90,7 @@ Created complete React component library for Coach V6:
 ### 2. Main Page Implementation
 
 #### **CoachV6.tsx** (377 lines)
+
 - Full page layout with three-column grid
 - Mock data for all components (realistic SMB scenarios)
 - Event handlers for all interactions
@@ -98,23 +107,27 @@ Created complete React component library for Coach V6:
 ## Design Decisions
 
 ### 1. Paradigm Shift
+
 **From**: "Chat-first AI assistant" (ChatGPT model)  
 **To**: "Fitness dashboard for business" (Whoop/Peloton model)
 
 **Why**: SMB owners need quick decisions under pressure, not lengthy conversations. They're familiar with fitness tracking apps and the mental model translates well to business health.
 
 ### 2. Component-First Architecture
+
 - Isolated, reusable components
 - Type-safe with comprehensive interfaces
 - Props-based communication (not context)
 - Easy to test and iterate
 
 ### 3. Mock Data Strategy
+
 - Realistic scenarios (cash flow issues, overdue invoices, revenue goals)
 - All components functional with mock data
 - Backend integration is drop-in replacement (no component changes needed)
 
 ### 4. Strict Design System
+
 - 4px/8px/12px/16px/20px/24px spacing grid
 - No inconsistent spacing (unlike CoachV5)
 - Touch-friendly targets (44px minimum)
@@ -169,6 +182,7 @@ Created complete React component library for Coach V6:
 ### 1. API Endpoints to Create
 
 #### Health Score Endpoint
+
 ```typescript
 GET /v1/tenants/{tenant_id}/health-score/trend
 
@@ -190,6 +204,7 @@ Response: {
 ```
 
 #### Coach Recommendations Endpoint
+
 ```typescript
 GET /v1/tenants/{tenant_id}/coach/recommendations
 
@@ -201,6 +216,7 @@ Response: {
 ```
 
 #### Dismiss Recommendation Endpoint
+
 ```typescript
 POST /v1/tenants/{tenant_id}/coach/recommendations/{rec_id}/dismiss
 
@@ -211,6 +227,7 @@ Response: {
 ```
 
 #### Metrics Snapshot Endpoint
+
 ```typescript
 GET /v1/tenants/{tenant_id}/metrics/snapshot
 
@@ -222,6 +239,7 @@ Response: {
 ```
 
 #### Goals Endpoint
+
 ```typescript
 GET /v1/tenants/{tenant_id}/goals
 
@@ -231,6 +249,7 @@ Response: {
 ```
 
 #### Tasks Endpoint
+
 ```typescript
 GET /v1/tenants/{tenant_id}/tasks/today
 
@@ -252,6 +271,7 @@ Create `packages/agent/coach_templates.py` with 20+ templates:
 - **Growth**: `hiring_recommendation`, `expansion_opportunity`, `market_opportunity`
 
 Each template includes:
+
 - Priority calculation logic
 - Reasoning generation
 - Recommended actions (with button text)
@@ -310,16 +330,19 @@ Total: ~1,768 lines of code
 This implementation supports **Week 1-2 Validation Sprint**:
 
 ### Designer Track
+
 - Use CoachV6.tsx as reference for Figma mockups
 - Component specs in README.md
 - Design system documented
 
 ### PM Track
+
 - User testing with mock data (fully functional)
 - Can demo all interactions
 - Realistic scenarios
 
 ### Engineering Track
+
 - Foundation complete
 - Backend APIs can be built in parallel
 - No frontend changes needed after API integration
@@ -329,11 +352,13 @@ This implementation supports **Week 1-2 Validation Sprint**:
 ## Success Metrics (Validation)
 
 ### Primary Goals
+
 - ✅ **70%+ preference** for V6 over V5
 - ✅ **85%+ comprehension** of health score concept
 - ✅ **60%+ willing to pay** $150-250/mo (vs. current $75/mo)
 
 ### Secondary Goals
+
 - **< 5 seconds** to understand current business status
 - **< 3 clicks** to take action on recommendation
 - **100% mobile responsive** (Phase 1)
@@ -343,6 +368,7 @@ This implementation supports **Week 1-2 Validation Sprint**:
 ## Go/No-Go Decision Points
 
 ### End of Week 2 (Validation Sprint)
+
 **If validation succeeds (70%+ preference):**
 → Proceed with Phase 1 implementation ($217.5k investment)
 
@@ -367,6 +393,7 @@ This implementation supports **Week 1-2 Validation Sprint**:
 ## Risk Mitigation
 
 ### Technical Risks
+
 - ✅ **Component complexity**: Mitigated with clear separation of concerns
 - ✅ **State management**: Local state sufficient for now, Zustand ready if needed
 - ✅ **Type safety**: Comprehensive interfaces prevent runtime errors
@@ -374,6 +401,7 @@ This implementation supports **Week 1-2 Validation Sprint**:
 - ⚠️ **Performance**: Health score calculation may be slow (use Redis caching)
 
 ### Product Risks
+
 - ✅ **User comprehension**: Validated through user testing (Week 1-2)
 - ⚠️ **Recommendation quality**: Depends on GPT-4 prompt engineering
 - ⚠️ **Data accuracy**: Health score only as good as connected data sources
@@ -395,17 +423,20 @@ This implementation supports **Week 1-2 Validation Sprint**:
 ## How to Test
 
 1. **Checkout branch**:
+
    ```bash
    git checkout feature/coach-v6-fitness-dashboard
    ```
 
 2. **Run development server**:
+
    ```bash
    cd apps/smb
    npm run dev
    ```
 
 3. **Navigate to**:
+
    ```
    http://localhost:5173/coach/v6
    ```

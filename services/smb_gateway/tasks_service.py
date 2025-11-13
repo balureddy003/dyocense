@@ -368,11 +368,21 @@ class TasksService:
         
         return False
     
-    def generate_tasks_from_goal(self, tenant_id: str, goal_data: Dict[str, Any]) -> List[Task]:
+    def generate_tasks_from_goal(
+        self, 
+        tenant_id: str, 
+        goal_data: Dict[str, Any],
+        max_tasks: Optional[int] = None,
+    ) -> List[Task]:
         """
         AI-powered task generation from a goal
         
         For now, uses rule-based logic. In production, this would call an LLM.
+        
+        Args:
+            tenant_id: Tenant identifier
+            goal_data: Goal information dictionary
+            max_tasks: Optional cap on number of tasks to generate (for pacing)
         """
         generated_tasks = []
         goal_id = goal_data.get('id')
@@ -440,6 +450,10 @@ class TasksService:
                     'priority': TaskPriority.MEDIUM,
                 },
             ]
+        
+        # Apply pacing cap if provided (based on metabolism/capacity)
+        if max_tasks is not None and max_tasks > 0:
+            task_templates = task_templates[:max_tasks]
         
         # Create tasks from templates
         for i, template in enumerate(task_templates):

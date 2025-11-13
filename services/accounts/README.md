@@ -12,6 +12,9 @@ Manages Dyocense tenant registrations, subscription plans, and project catalogue
 - `GET /v1/projects` – list projects for the authenticated tenant.
 - `POST /v1/users/register` – create a password-based user inside a tenant (requires the tenant API token).
 - `POST /v1/users/login` – exchange tenant ID, email, and password for a short-lived JWT.
+- `POST /v1/auth/login-password` – SMB-friendly password login (email + password) that issues a JWT for the first matching tenant.
+- `POST /v1/auth/request-password-reset` – send a reset link to the user’s email (if an account exists).
+- `POST /v1/auth/reset-password` – set a new password using the reset token from the email.
 - `GET /v1/users/me` – fetch the authenticated user's profile.
 - `GET /v1/users/api-tokens` – list user-scoped API tokens.
 - `POST /v1/users/api-tokens` – mint a new API token for the current user (the secret is returned once).

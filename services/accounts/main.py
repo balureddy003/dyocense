@@ -29,6 +29,7 @@ from packages.accounts.repository import (
     get_user_by_email,
     count_users_for_tenant,
     find_tenants_for_email,
+    update_user_password,
     AuthenticationError,
     JWT_TTL_SECONDS,
     create_verification_token,
@@ -390,6 +391,12 @@ class UserLoginRequest(BaseModel):
     password: str
 
 
+class PasswordLoginRequest(BaseModel):
+    """Lean password login for SMB clients (no tenant ID required)."""
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+
+
 class UserLoginResponse(BaseModel):
     token: str
     user_id: str
@@ -468,6 +475,17 @@ class EmailLoginResponse(BaseModel):
     token: str | None = Field(default=None, description="Verification token (dev mode only)")
     message: str = "Login link sent. Check your inbox."
     email: str
+
+
+class PasswordResetRequest(BaseModel):
+    """Request page to send a password reset link."""
+    email: EmailStr
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    """Reset password using token received by email."""
+    token: str
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class VerifyResponse(BaseModel):
@@ -1213,6 +1231,105 @@ def email_login(payload: EmailLoginRequest) -> EmailLoginResponse:
         email=payload.email,
         message=f"Dev mode: Use this token to verify: {token}"
     )
+
+
+@app.post("/v1/auth/login-password", response_model=UserLoginResponse, tags=["auth"])
+def pb_login(payload: PasswordLoginRequest) -> UserLoginResponse:
+    """Password-based login that picks the first tenant for an email."""
+    logger.info(f"Password login attempt for email={payload.email}")
+    tenant_ids = find_tenants_for_email(payload.email)
+    if not tenant_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found for that email. Please sign up first."
+        )
+
+    auth_error: Exception | None = None
+    for tenant_id in tenant_ids:
+        try:
+            user = authenticate_user(tenant_id, payload.email, payload.password)
+            token = issue_jwt(user)
+            return UserLoginResponse(
+                token=token,
+                user_id=user.user_id,
+                tenant_id=user.tenant_id,
+                expires_in=JWT_TTL_SECONDS,
+            )
+        except AuthenticationError as exc:
+            auth_error = exc
+            continue
+
+    logger.warning("Password login failed for %s", payload.email)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect email or password."
+    ) from auth_error
+
+
+@app.post("/v1/auth/request-password-reset", response_model=dict, tags=["auth"])
+def request_password_reset(payload: PasswordResetRequest) -> dict:
+    """Send a password reset link if an account exists."""
+    logger.info("Password reset requested for %s", payload.email)
+    tenant_ids = find_tenants_for_email(payload.email)
+    if not tenant_ids:
+        return {"message": "If an account exists, you’ll receive reset instructions shortly."}
+
+    tenant_id = tenant_ids[0]
+    user = get_user_by_email(tenant_id, payload.email)
+    tenant = get_tenant(tenant_id)
+    if not user or not tenant:
+        return {"message": "If an account exists, you’ll receive reset instructions shortly."}
+
+    ttl_hours = int(os.getenv("PASSWORD_RESET_TTL_HOURS", "4"))
+    token = create_verification_token(
+        email=payload.email,
+        full_name=user.full_name or user.email,
+        business_name=tenant.name,
+        metadata={
+            "purpose": "password_reset",
+            "tenant_id": tenant_id,
+            "user_id": user.user_id,
+        },
+        ttl_hours=ttl_hours,
+    )
+
+    reset_url = f"{os.getenv('APP_BASE_URL', 'http://localhost:5173')}/forgot-password?token={token}"
+    subject = "Reset your Dyocense password"
+    message = (
+        f"Hi {user.full_name or 'there'},\n\n"
+        "A request was received to reset your Dyocense password. "
+        f"Click the link below to choose a new password:\n\n{reset_url}\n\n"
+        "If you didn’t request this, you can safely ignore this email."
+    )
+    try:
+        mailer.send(payload.email, subject, message)
+    except Exception as exc:
+        logger.warning("Password reset email failed: %s", exc)
+
+    return {"message": "If an account exists, you’ll receive reset instructions shortly."}
+
+
+@app.post("/v1/auth/reset-password", response_model=dict, tags=["auth"])
+def reset_password(payload: PasswordResetConfirmRequest) -> dict:
+    """Finalize password reset using the emailed token."""
+    token_data = verify_and_consume_token(payload.token)
+    if not token_data or token_data.get("metadata", {}).get("purpose") != "password_reset":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token.")
+
+    metadata = token_data.get("metadata") or {}
+    user_id = metadata.get("user_id")
+    tenant_id = metadata.get("tenant_id")
+    user = None
+    if user_id:
+        user = get_user(user_id)
+    if not user and tenant_id:
+        user = get_user_by_email(tenant_id, token_data.get("email", ""))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found.")
+
+    update_user_password(user.user_id, payload.password)
+    logger.info("Password reset completed for user %s", user.user_id)
+    return {"message": "Password has been reset successfully."}
 
 
 @app.post("/v1/auth/verify", response_model=VerifyResponse, tags=["auth"])

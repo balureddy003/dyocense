@@ -301,6 +301,35 @@ export async function getUserTenants(email: string): Promise<TenantOption[]> {
   return response.tenants;
 }
 
+// --- Phase 3 analytics + security helpers ---
+
+export async function getTaskSignals(tenantId: string): Promise<{ tenant_id: string; signals: any }> {
+  return fetchJSON<{ tenant_id: string; signals: any }>(`/v1/tenants/${encodeURIComponent(tenantId)}/analytics/task-signals`);
+}
+
+export async function detectSeasonality(
+  tenantId: string,
+  metric: "revenue" | "health_score" = "revenue",
+  freqHint?: "H" | "D" | "W"
+): Promise<any> {
+  const params = new URLSearchParams({ metric });
+  if (freqHint) params.set("freq_hint", freqHint);
+  const qs = params.toString();
+  return fetchJSON<any>(`/v1/tenants/${encodeURIComponent(tenantId)}/analytics/detect-seasonality${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+  });
+}
+
+export async function listSigningKeys(tenantId: string): Promise<{
+  tenant_id: string;
+  enable_asymmetric: boolean;
+  default_signature_mode: string;
+  has_active_key: boolean;
+  items: any[];
+}> {
+  return fetchJSON(`/v1/tenants/${encodeURIComponent(tenantId)}/security/keys`);
+}
+
 export async function registerUser(payload: UserRegistrationPayload): Promise<UserProfile> {
   return fetchJSON<UserProfile>("/v1/users/register", {
     method: "POST",

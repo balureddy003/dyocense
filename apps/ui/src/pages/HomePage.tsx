@@ -10,6 +10,8 @@ import { PlanNameModal } from "../components/PlanNameModal";
 import { PlanSelector, SavedPlan } from "../components/PlanSelector";
 import { PlanVersionsSidebar } from "../components/PlanVersionsSidebar";
 import { RecommendedPlaybooks } from "../components/RecommendedPlaybooks";
+import SeasonalityInsightsPanel from "../components/SeasonalityInsightsPanel";
+import TaskSignalsPanel from "../components/TaskSignalsPanel";
 import { TopNav } from "../components/TopNav";
 import { TrialBanner } from "../components/TrialBanner";
 import { VersionComparisonModal } from "../components/VersionComparisonModal";
@@ -755,6 +757,12 @@ export const HomePage = () => {
           showFullscreenButton={true}
           onCollapseChange={setRightPanelCollapsed}
         >
+          {profile?.tenant_id && (
+            <div className="mb-4 space-y-4">
+              <SeasonalityInsightsPanel tenantId={profile.tenant_id} />
+              <TaskSignalsPanel tenantId={profile.tenant_id} />
+            </div>
+          )}
           <MetricsPanel
             quickWins={generatedPlan?.quickWins}
             tenantName={profile?.name}

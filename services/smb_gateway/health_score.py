@@ -1,11 +1,42 @@
 """
 Health Score Service for SMB Gateway
 
-Calculates business health score from connector data (orders, inventory, customers)
+Calculates business health score from connector data (orders, inventory, customers).
+
+Phase-1 enhancements (minimal risk, no heavy deps):
+- Data Quality Index (freshness/completeness/consistency) to flag reliability of inputs
+- Optional Confidence Interval (ci_low/ci_high) for overall score when adaptive mode enabled
+- Weighting adapts to available components while preserving existing defaults
+
+Notes on proven OSS usage:
+- Keeps core logic stdlib-only for portability; future phases can plug in `river` (ADWIN) or `statsmodels`
+    for drift/seasonality under a feature flag without breaking this API.
 """
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
+import os
+
+# Optional drift detection (river)
+try:
+    from river.drift import ADWIN  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    ADWIN = None  # noqa: N816
+
+# Module-level detectors (persist across requests)
+_DRIFT_DETECTORS: Dict[str, Any] = {}
+
+def _get_detector(name: str):
+    if ADWIN is None:
+        return None
+    det = _DRIFT_DETECTORS.get(name)
+    if det is None:
+        try:
+            det = ADWIN()
+            _DRIFT_DETECTORS[name] = det
+        except Exception:
+            return None
+    return det
 
 
 class HealthScoreBreakdown(BaseModel):
@@ -36,6 +67,11 @@ class HealthScoreResponse(BaseModel):
     breakdown: HealthScoreBreakdown
     last_updated: datetime
     period_days: int = Field(default=30, description="Period for calculation")
+    # Optional adaptive extensions (filled when ENABLE_ADAPTIVE_HEALTH=true)
+    ci_low: Optional[float] = Field(default=None, description="Lower bound of 95% confidence interval for overall score")
+    ci_high: Optional[float] = Field(default=None, description="Upper bound of 95% confidence interval for overall score")
+    quality_score: Optional[float] = Field(default=None, description="Connector/data quality index (0-1)")
+    drift_flags: Optional[Dict[str, bool]] = Field(default=None, description="ADWIN drift detection flags per component when adaptive mode and river available")
 
 
 class HealthScoreCalculator:
@@ -43,6 +79,8 @@ class HealthScoreCalculator:
     
     def __init__(self, connector_data: Dict[str, Any]):
         self.connector_data = connector_data
+        # Feature flag for emitting CI and using quality score
+        self.enable_adaptive = os.getenv("ENABLE_ADAPTIVE_HEALTH", "false").lower() == "true"
         
     def calculate_revenue_health(self) -> Optional[int]:
         """
@@ -191,14 +229,20 @@ class HealthScoreCalculator:
         if customer_score is not None:
             customer_source = metadata.get('customers_source', f'{len(customers)} customers' if not is_sample else 'Sample data')
         
-        # Collect available scores and their weights
+        # Collect available scores and their weights (adaptive to availability)
+        weights_default = {
+            "revenue": 0.4,
+            "operations": 0.3,
+            "customer": 0.3,
+        }
+
         scores_and_weights = []
         if revenue_score is not None:
-            scores_and_weights.append((revenue_score, 0.4))
+            scores_and_weights.append((revenue_score, weights_default["revenue"]))
         if operations_score is not None:
-            scores_and_weights.append((operations_score, 0.3))
+            scores_and_weights.append((operations_score, weights_default["operations"]))
         if customer_score is not None:
-            scores_and_weights.append((customer_score, 0.3))
+            scores_and_weights.append((customer_score, weights_default["customer"]))
         
         # Calculate weighted average only from available scores
         if scores_and_weights:
@@ -214,7 +258,40 @@ class HealthScoreCalculator:
         # TODO: Store historical scores for accurate trend calculation
         # For now, estimate based on revenue growth
         trend = self._calculate_trend(orders)
-        
+
+        # Compute data quality index (0-1) based on freshness/completeness/consistency
+        quality_idx = self._compute_quality_index(orders, inventory, customers)
+
+        # Optionally compute a simple CI around the overall score, scaled by quality
+        ci_low, ci_high = (None, None)
+        if self.enable_adaptive:
+            # Base CI width from component variability proxy
+            component_vals = [v for v in [revenue_score, operations_score, customer_score] if v is not None]
+            if component_vals:
+                # Higher quality -> narrower CI; minimum width of 4 points, max 20
+                base_width = 20 * (1.0 - quality_idx)
+                base_width = max(4.0, min(20.0, base_width))
+                half_width = base_width / 2.0
+                ci_low = max(0.0, float(overall_score) - half_width)
+                ci_high = min(100.0, float(overall_score) + half_width)
+
+        # Optional drift detection using ADWIN (if available and adaptive enabled)
+        drift_flags: Optional[Dict[str, bool]] = None
+        if self.enable_adaptive and ADWIN is not None:
+            drift_flags = {}
+            for name, s in ("revenue", revenue_score), ("operations", operations_score), ("customer", customer_score):
+                if s is None:
+                    continue
+                det = _get_detector(name)
+                if det is not None:
+                    try:
+                        det.update(float(s))
+                        drift_flags[name] = bool(getattr(det, "drift_detected", False))
+                    except Exception:
+                        pass
+            if drift_flags == {}:
+                drift_flags = None
+
         return HealthScoreResponse(
             score=overall_score,
             trend=trend,
@@ -234,7 +311,11 @@ class HealthScoreCalculator:
                 is_sample_data=is_sample,
             ),
             last_updated=datetime.now(),
-            period_days=30
+            period_days=30,
+            ci_low=ci_low,
+            ci_high=ci_high,
+            quality_score=round(quality_idx, 3) if quality_idx is not None else None,
+            drift_flags=drift_flags,
         )
     
     def _calculate_trend(self, orders: list) -> float:
@@ -284,3 +365,57 @@ class HealthScoreCalculator:
             return datetime.strptime(date_str, '%Y-%m-%d')
         except:
             return datetime.min
+
+    # ------------------------
+    # Internal helpers (Phase-1)
+    # ------------------------
+    def _compute_quality_index(self, orders: list, inventory: list, customers: list) -> float:
+        """
+        Compute a lightweight data quality index in [0,1].
+
+        Components:
+        - Freshness: recency of latest record across sources (0-1)
+        - Completeness: presence of each core source (orders, inventory, customers) weighted by counts (0-1)
+        - Consistency: simple anomaly proxy (e.g., share of negative/zero amounts, stock status anomalies) (0-1)
+
+        This avoids heavy dependencies and provides a useful reliability signal to drive UI and CI width.
+        """
+        # Freshness (days since latest record capped at 30)
+        def latest_ts(items, key):
+            ts_list = []
+            for it in items:
+                dt = self._parse_date(it.get(key)) if it.get(key) else None
+                if dt and dt != datetime.min:
+                    ts_list.append(dt)
+            return max(ts_list) if ts_list else None
+
+        now = datetime.now()
+        latest_candidates = [
+            latest_ts(orders, "created_at"),
+            latest_ts(inventory, "updated_at"),
+            latest_ts(customers, "last_order_date"),
+        ]
+        latest = max([d for d in latest_candidates if d is not None], default=None)
+        if latest is None:
+            freshness = 0.0
+        else:
+            days = max(0.0, (now - latest).days)
+            freshness = max(0.0, 1.0 - min(days, 30.0) / 30.0)
+
+        # Completeness: fraction of sources present, weighted by basic sufficiency of records
+        present = [(len(orders) > 0), (len(inventory) > 0), (len(customers) > 0)]
+        presence = sum(1 for p in present if p) / 3.0
+        sufficiency = min(1.0, (len(orders) / 50.0 + len(inventory) / 50.0 + len(customers) / 50.0) / 3.0)
+        completeness = 0.7 * presence + 0.3 * sufficiency
+
+        # Consistency: penalize obvious anomalies
+        neg_orders = sum(1 for o in orders if o.get("total_amount", 0) < 0)
+        zero_amounts = sum(1 for o in orders if o.get("total_amount", 0) == 0)
+        out_of_stock = sum(1 for i in inventory if i.get("status") == "out_of_stock")
+        total = max(1, len(orders) + len(inventory))
+        anomaly_rate = min(1.0, (neg_orders + zero_amounts * 0.5 + out_of_stock * 0.1) / total)
+        consistency = max(0.0, 1.0 - anomaly_rate)
+
+        # Aggregate
+        quality = max(0.0, min(1.0, 0.45 * freshness + 0.35 * completeness + 0.20 * consistency))
+        return quality

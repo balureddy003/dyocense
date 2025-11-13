@@ -1,4 +1,4 @@
-import { Container, Stack } from '@mantine/core';
+import { Container, Stack, Text as MantineText, Loader, Center } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type {
     Alert,
@@ -16,6 +16,7 @@ import {
     ProactiveCoachCard,
     TasksColumn,
 } from '../components/coach-v6';
+import * as api from '../lib/api';
 
 /**
  * Coach V6 - Fitness Dashboard Paradigm
@@ -31,8 +32,9 @@ import {
  */
 export default function CoachV6() {
     const [loading, setLoading] = useState(true);
-    const [healthScore, setHealthScore] = useState(78);
-    const [previousScore, setPreviousScore] = useState(75);
+    const [error, setError] = useState<string | null>(null);
+    const [healthScore, setHealthScore] = useState(0);
+    const [previousScore, setPreviousScore] = useState(0);
     const [alerts, setAlerts] = useState<Alert[]>([]);
     const [signals, setSignals] = useState<Signal[]>([]);
     const [recommendations, setRecommendations] = useState<CoachRecommendation[]>([]);
@@ -40,24 +42,72 @@ export default function CoachV6() {
     const [goals, setGoals] = useState<GoalWithProgress[]>([]);
     const [tasks, setTasks] = useState<TaskWithPriority[]>([]);
 
-    // TODO: Fetch data from API
+    // Get tenant and token from localStorage
+    const tenantId = localStorage.getItem('tenantId') || 'tenant-demo';
+    const token = localStorage.getItem('token') || undefined;
+
     useEffect(() => {
         const fetchData = async () => {
             setLoading(true);
+            setError(null);
             try {
-                // Mock data for now - replace with actual API calls
-                // GET /v1/tenants/{tenant_id}/health-score/trend
-                // GET /v1/tenants/{tenant_id}/coach/recommendations
-                // GET /v1/tenants/{tenant_id}/metrics/snapshot
-                // GET /v1/tenants/{tenant_id}/goals
-                // GET /v1/tenants/{tenant_id}/tasks/today
+                // Fetch all data in parallel
+                const [
+                    healthScoreData,
+                    recommendationsData,
+                    alertsData,
+                    signalsData,
+                    metricsData,
+                    goalsData,
+                    tasksData,
+                ] = await Promise.all([
+                    api.getHealthScore(tenantId, token),
+                    api.getCoachRecommendations(tenantId, token),
+                    api.getHealthAlerts(tenantId, token),
+                    api.getHealthSignals(tenantId, token),
+                    api.getMetricsSnapshot(tenantId, token),
+                    api.getGoals(tenantId, token),
+                    api.getTasks(tenantId, token),
+                ]);
 
-                // Mock health score
-                setHealthScore(78);
-                setPreviousScore(75);
+                // Set health score
+                setHealthScore(healthScoreData.score);
+                setPreviousScore(healthScoreData.score - Math.round(healthScoreData.trend));
 
-                // Mock alerts
-                setAlerts([
+                // Set API data
+                setAlerts(alertsData);
+                setSignals(signalsData);
+                setRecommendations(recommendationsData.map((rec: any) => ({
+                    ...rec,
+                    createdAt: new Date(rec.createdAt),
+                    generatedAt: new Date(rec.generatedAt),
+                    actions: rec.actions.map((action: any) => ({
+                        ...action,
+                        onClick: async () => console.log('Action:', action.label),
+                    })),
+                })));
+                setMetrics(metricsData);
+                
+                // Transform goals data
+                setGoals(goalsData.map((goal: any) => ({
+                    ...goal,
+                    targetValue: goal.target,
+                    currentValue: goal.current,
+                    status: goal.status || 'on_track',
+                    dueDate: goal.deadline ? new Date(goal.deadline) : undefined,
+                })));
+                
+                // Transform tasks data
+                setTasks(tasksData.map((task: any) => ({
+                    ...task,
+                    completed: task.status === 'completed',
+                    isOverdue: task.due_date && new Date(task.due_date) < new Date(),
+                    dueDate: task.due_date ? new Date(task.due_date) : undefined,
+                })));
+
+                // FALLBACK: If no data, use mock data for demo
+                if (alertsData.length === 0) {
+                    setAlerts([
                     {
                         id: '1',
                         type: 'critical',
@@ -299,15 +349,17 @@ export default function CoachV6() {
                         completed: true,
                     },
                 ]);
+                }
             } catch (error) {
                 console.error('Error fetching coach data:', error);
+                setError(error instanceof Error ? error.message : 'Failed to load data');
             } finally {
                 setLoading(false);
             }
         };
 
         fetchData();
-    }, []);
+    }, [tenantId, token]);
 
     const handleViewReport = () => {
         console.log('Navigate to health score report');
@@ -354,6 +406,35 @@ export default function CoachV6() {
             )
         );
     };
+
+    // Show loading state
+    if (loading) {
+        return (
+            <Container size="xl" py="md">
+                <Center style={{ minHeight: '400px' }}>
+                    <Stack align="center" gap="md">
+                        <Loader size="lg" />
+                        <MantineText c="dimmed">Loading your business health dashboard...</MantineText>
+                    </Stack>
+                </Center>
+            </Container>
+        );
+    }
+
+    // Show error state
+    if (error) {
+        return (
+            <Container size="xl" py="md">
+                <Center style={{ minHeight: '400px' }}>
+                    <Stack align="center" gap="md">
+                        <MantineText size="lg" fw={600} c="red">Error Loading Dashboard</MantineText>
+                        <MantineText c="dimmed">{error}</MantineText>
+                        <MantineText size="sm" c="dimmed">Make sure the backend is running on port 8001</MantineText>
+                    </Stack>
+                </Center>
+            </Container>
+        );
+    }
 
     return (
         <Container size="xl" py="md">

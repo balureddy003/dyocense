@@ -19,6 +19,13 @@ from packages.kernel_common.persistence_v2 import get_backend
 logger = configure_logging("smb-gateway")
 
 from .health_score import HealthScoreCalculator, HealthScoreResponse
+from .recommendations_service import (
+    get_recommendations_service,
+    CoachRecommendation,
+    Alert,
+    Signal,
+    MetricSnapshot,
+)
 from .goals_service import (
     get_goals_service,
     CreateGoalRequest,
@@ -82,6 +89,26 @@ from .settings_service import (
     AppearanceSettings,
     IntegrationSettings,
 )
+from .decision_ledger_pg import (
+    append_entry as ledger_append_entry,
+    get_chain as ledger_get_chain,
+    verify_entries as ledger_verify_entries,
+    get_integrity_summary as ledger_get_integrity_summary,
+)
+from .metabolism import compute_metabolism, MetabolismSnapshot
+from .micro_seasonality import detect_micro_seasonality, ENABLE_MICRO_SEASONALITY
+from .signing_keys import (
+    ENABLE_ASYMMETRIC_SIGNING,
+    DEFAULT_SIGNATURE_MODE,
+    tenant_has_signing_key,
+    get_active_signing_key,
+)
+from .signing_keys.key_manager import (
+    list_tenant_keys,
+    register_public_key,
+    set_key_status,
+    rotate_signing_key,
+)
 
 # Load shared schemas
 plan_schema = json.loads(resources.files("packages.contracts.schemas").joinpath("plan.schema.json").read_text(encoding="utf-8"))
@@ -137,12 +164,316 @@ app = FastAPI(
 )
 
 
+# ===================================
+# Decision Ledger Models
+# ===================================
+
+class LedgerCommitRequest(BaseModel):
+    action_type: str = Field(..., description="Type of action or decision, e.g., 'goal_created', 'plan_generated'")
+    source: str = Field(..., description="Origin of the decision, e.g., 'coach', 'planner', 'user'")
+    pre_state: Optional[Dict[str, Any]] = Field(default=None, description="State snapshot before the action")
+    post_state: Optional[Dict[str, Any]] = Field(default=None, description="State snapshot after the action")
+    delta_vector: Optional[Dict[str, Any]] = Field(default=None, description="Compact change vector for quick diffs")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional context (e.g., confidence, params)")
+
+
+class MetabolismPreviewResponse(BaseModel):
+    energy_capacity: int
+    fatigue: float
+    recovery_rate: float
+    workload_index: float
+    projected_weekly_capacity: int
+    risks: List[str]
+    basis: Dict[str, Any]
+
+
+# ===================================
+# Security / Signing Keys Models (Phase 3)
+# ===================================
+
+class KeyRegisterRequest(BaseModel):
+    algorithm: str = Field(default="ed25519", description="Algorithm label, e.g., 'ed25519'")
+    public_key_pem: str = Field(..., description="Public key in PEM format")
+    set_active: bool = Field(default=True, description="Make this key active and expire previous active")
+
+
+class KeyStatusRequest(BaseModel):
+    status: str = Field(..., description="New status: active | expired | revoked")
+
+
+class KeyRotateRequest(BaseModel):
+    public_key_pem: str = Field(..., description="New public key (PEM)")
+
+
+# ===================================
+# Internal helpers
+# ===================================
+
+def _ledger_safe_append(
+    tenant_id: str,
+    action_type: str,
+    source: str,
+    pre_state: Optional[Dict[str, Any]] = None,
+    post_state: Optional[Dict[str, Any]] = None,
+    delta_vector: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Append to ledger without breaking request flows on error."""
+    try:
+        ledger_append_entry(
+            tenant_id=tenant_id,
+            action_type=action_type,
+            source=source,
+            pre_state=pre_state,
+            post_state=post_state,
+            delta_vector=delta_vector,
+            metadata=metadata,
+        )
+    except Exception as e:
+        logger.warning(f"[ledger] append failed for {action_type}: {e}")
+
+
+def _get_health_score_trend(tenant_id: str, lookback_days: int = 14) -> Dict[str, Any]:
+    """Retrieve recent health score trend from ledger for adaptive coaching.
+    
+    Returns:
+        Dict with keys: current_score, previous_score, delta, trend_direction, history_points
+    """
+    try:
+        chain = ledger_get_chain(tenant_id, limit=200)
+        health_entries = [
+            e for e in chain 
+            if e.get("action_type") == "health_score_recorded"
+        ]
+        
+        if not health_entries:
+            return {"current_score": None, "trend_direction": "unknown", "history_points": 0}
+        
+        # Most recent is first (DESC order from get_chain)
+        latest = health_entries[0]
+        latest_meta = latest.get("metadata") or {}
+        latest_hs = latest_meta.get("health_score") or {}
+        current_score = latest_hs.get("score")
+        
+        # Find previous score
+        previous_score = None
+        if len(health_entries) > 1:
+            prev_meta = health_entries[1].get("metadata") or {}
+            prev_hs = prev_meta.get("health_score") or {}
+            previous_score = prev_hs.get("score")
+        
+        # Compute delta and direction
+        delta = None
+        trend_direction = "stable"
+        if current_score is not None and previous_score is not None:
+            delta = current_score - previous_score
+            if delta > 5:
+                trend_direction = "improving"
+            elif delta < -5:
+                trend_direction = "declining"
+        
+        return {
+            "current_score": current_score,
+            "previous_score": previous_score,
+            "delta": delta,
+            "trend_direction": trend_direction,
+            "history_points": len(health_entries),
+            "latest_entry_ts": latest.get("ts"),
+        }
+    except Exception as e:
+        logger.warning(f"[_get_health_score_trend] Failed to retrieve trend: {e}")
+        return {"current_score": None, "trend_direction": "unknown", "history_points": 0}
+
+
+def _compute_task_signals(tenant_id: str) -> Dict[str, Any]:
+    """Compute task completion deltas and adherence scores for adaptive coaching.
+    
+    Signals:
+    - recent_completed: tasks completed in last 7 days
+    - previous_completed: tasks completed in the 7 days before that
+    - completion_delta: recent - previous
+    - adherence_on_time_pct: % of completed tasks in last 30 days finished on/before due_date
+    - on_time_count / late_count: counts in last 30 days
+    - overdue_open_count: open tasks past due today
+    """
+    try:
+        from datetime import datetime, timedelta
+        tasks_service = get_tasks_service()
+        # Get all tasks (exclude starter tasks)
+        all_tasks = [t for t in tasks_service.get_tasks(tenant_id) if not getattr(t, "is_starter_task", False)]
+        if not all_tasks:
+            return {
+                "recent_completed": 0,
+                "previous_completed": 0,
+                "completion_delta": 0,
+                "adherence_on_time_pct": None,
+                "on_time_count": 0,
+                "late_count": 0,
+                "overdue_open_count": 0,
+                "window_days": 7,
+            }
+
+        now = datetime.now()
+        seven_ago = now - timedelta(days=7)
+        fourteen_ago = now - timedelta(days=14)
+        thirty_ago = now - timedelta(days=30)
+
+        # Completion deltas
+        recent_completed = 0
+        previous_completed = 0
+        for t in all_tasks:
+            ca = getattr(t, "completed_at", None)
+            if ca:
+                if ca >= seven_ago:
+                    recent_completed += 1
+                elif fourteen_ago <= ca < seven_ago:
+                    previous_completed += 1
+
+        completion_delta = recent_completed - previous_completed
+
+        # Adherence: completed in last 30 days on/before due_date
+        on_time = 0
+        late = 0
+        for t in all_tasks:
+            ca = getattr(t, "completed_at", None)
+            dd = getattr(t, "due_date", None)
+            if not ca or ca < thirty_ago:
+                continue
+            if dd:
+                try:
+                    # Due date stored as YYYY-MM-DD
+                    due_dt = datetime.fromisoformat(dd).date()
+                    if ca.date() <= due_dt:
+                        on_time += 1
+                    else:
+                        late += 1
+                except Exception:
+                    # If due_date unparsable, treat as unknown; skip adherence counting
+                    pass
+
+        adherence_on_time_pct = None
+        total_checked = on_time + late
+        if total_checked > 0:
+            adherence_on_time_pct = round(on_time / total_checked * 100.0, 1)
+
+        # Overdue open tasks
+        overdue_open = 0
+        today = now.date()
+        for t in all_tasks:
+            if getattr(t, "status", None) != TaskStatus.COMPLETED:
+                dd2 = getattr(t, "due_date", None)
+                if dd2:
+                    try:
+                        if datetime.fromisoformat(dd2).date() < today:
+                            overdue_open += 1
+                    except Exception:
+                        pass
+
+        return {
+            "recent_completed": recent_completed,
+            "previous_completed": previous_completed,
+            "completion_delta": completion_delta,
+            "adherence_on_time_pct": adherence_on_time_pct,
+            "on_time_count": on_time,
+            "late_count": late,
+            "overdue_open_count": overdue_open,
+            "window_days": 7,
+        }
+    except Exception as e:
+        logger.warning(f"[_compute_task_signals] Failed: {e}")
+        return {
+            "recent_completed": 0,
+            "previous_completed": 0,
+            "completion_delta": 0,
+            "adherence_on_time_pct": None,
+            "on_time_count": 0,
+            "late_count": 0,
+            "overdue_open_count": 0,
+            "window_days": 7,
+            "reason": "error",
+        }
+
+
 def _store_plan(tenant_id: str, plan: Dict) -> None:
     TENANT_PLANS.setdefault(tenant_id, [])
     existing = TENANT_PLANS[tenant_id]
     # Keep latest at front
     existing.insert(0, plan)
     TENANT_PLANS[tenant_id] = existing[:10]
+
+
+# ===================================
+# Security / Signing Keys Endpoints (Phase 3)
+# ===================================
+
+@app.get("/v1/tenants/{tenant_id}/security/keys")
+def list_signing_keys(tenant_id: str):
+    """List signing keys for a tenant (metadata only)."""
+    try:
+        items = list_tenant_keys(tenant_id)
+        return {
+            "tenant_id": tenant_id,
+            "enable_asymmetric": ENABLE_ASYMMETRIC_SIGNING,
+            "default_signature_mode": DEFAULT_SIGNATURE_MODE,
+            "has_active_key": tenant_has_signing_key(tenant_id),
+            "items": items,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list keys: {e}")
+
+
+@app.post("/v1/tenants/{tenant_id}/security/keys")
+def register_signing_key(tenant_id: str, body: KeyRegisterRequest):
+    """Register a public key for tenant; optionally set as active."""
+    if not ENABLE_ASYMMETRIC_SIGNING:
+        raise HTTPException(status_code=400, detail="Asymmetric signing disabled by environment")
+    try:
+        key_id = register_public_key(
+            tenant_id=tenant_id,
+            algorithm=body.algorithm,
+            public_key_pem=body.public_key_pem,
+            set_active=body.set_active,
+        )
+        return {"tenant_id": tenant_id, "key_id": key_id, "status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to register key: {e}")
+
+
+@app.post("/v1/tenants/{tenant_id}/security/keys/{key_id}/activate")
+def activate_signing_key(tenant_id: str, key_id: str):
+    if not ENABLE_ASYMMETRIC_SIGNING:
+        raise HTTPException(status_code=400, detail="Asymmetric signing disabled by environment")
+    try:
+        ok = set_key_status(tenant_id, key_id, "active")
+        if not ok:
+            raise RuntimeError("Invalid status or DB error")
+        return {"tenant_id": tenant_id, "key_id": key_id, "status": "active"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to activate key: {e}")
+
+
+@app.post("/v1/tenants/{tenant_id}/security/keys/{key_id}/revoke")
+def revoke_signing_key(tenant_id: str, key_id: str):
+    if not ENABLE_ASYMMETRIC_SIGNING:
+        raise HTTPException(status_code=400, detail="Asymmetric signing disabled by environment")
+    try:
+        ok = set_key_status(tenant_id, key_id, "revoked")
+        if not ok:
+            raise RuntimeError("Invalid status or DB error")
+        return {"tenant_id": tenant_id, "key_id": key_id, "status": "revoked"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to revoke key: {e}")
+
+
+@app.post("/v1/tenants/{tenant_id}/security/rotate")
+def rotate_tenant_signing_key(tenant_id: str, body: KeyRotateRequest):
+    if not ENABLE_ASYMMETRIC_SIGNING:
+        raise HTTPException(status_code=400, detail="Asymmetric signing disabled by environment")
+    try:
+        key_id = rotate_signing_key(tenant_id, body.public_key_pem)
+        return {"tenant_id": tenant_id, "key_id": key_id, "status": "rotated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to rotate key: {e}")
 
 
 @app.post("/v1/onboarding/{tenant_id}")
@@ -440,6 +771,86 @@ async def _fetch_connector_data(tenant_id: str) -> Dict:
 
 
 # ===================================
+# Coach V6 - Fitness Dashboard Endpoints
+# ===================================
+
+@app.get("/v1/tenants/{tenant_id}/coach/recommendations", response_model=List[CoachRecommendation])
+async def get_coach_recommendations(tenant_id: str):
+    """
+    Get AI-generated proactive recommendations for Coach V6.
+    
+    Returns recommendations based on:
+    - Current health score and components
+    - Business data patterns
+    - Historical performance
+    """
+    # Fetch health score and connector data
+    connector_data = await _fetch_connector_data(tenant_id)
+    calculator = HealthScoreCalculator(connector_data)
+    health_response = calculator.calculate_overall_health()
+    
+    # Generate recommendations
+    recommendations_service = get_recommendations_service(tenant_id)
+    recommendations = await recommendations_service.generate_recommendations(
+        health_score=health_response.score,
+        health_breakdown=health_response.breakdown.model_dump(),
+        connector_data=connector_data,
+    )
+    
+    return recommendations
+
+
+@app.post("/v1/tenants/{tenant_id}/coach/recommendations/{rec_id}/dismiss")
+async def dismiss_recommendation(tenant_id: str, rec_id: str):
+    """Dismiss a coach recommendation"""
+    # TODO: Store dismissal in database
+    return {"success": True, "dismissed_at": datetime.now()}
+
+
+@app.get("/v1/tenants/{tenant_id}/health-score/alerts", response_model=List[Alert])
+async def get_health_alerts(tenant_id: str):
+    """Get critical alerts for health score header"""
+    connector_data = await _fetch_connector_data(tenant_id)
+    calculator = HealthScoreCalculator(connector_data)
+    health_response = calculator.calculate_overall_health()
+    
+    recommendations_service = get_recommendations_service(tenant_id)
+    alerts = await recommendations_service.get_alerts(
+        health_score=health_response.score,
+        health_breakdown=health_response.breakdown.model_dump(),
+    )
+    
+    return alerts
+
+
+@app.get("/v1/tenants/{tenant_id}/health-score/signals", response_model=List[Signal])
+async def get_health_signals(tenant_id: str):
+    """Get positive signals for health score header"""
+    connector_data = await _fetch_connector_data(tenant_id)
+    calculator = HealthScoreCalculator(connector_data)
+    health_response = calculator.calculate_overall_health()
+    
+    recommendations_service = get_recommendations_service(tenant_id)
+    signals = await recommendations_service.get_signals(
+        health_score=health_response.score,
+        health_breakdown=health_response.breakdown.model_dump(),
+    )
+    
+    return signals
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/snapshot", response_model=List[MetricSnapshot])
+async def get_metrics_snapshot(tenant_id: str):
+    """Get key business metrics snapshot for Coach V6 metrics grid"""
+    connector_data = await _fetch_connector_data(tenant_id)
+    
+    recommendations_service = get_recommendations_service(tenant_id)
+    metrics = await recommendations_service.get_metrics_snapshot(connector_data)
+    
+    return metrics
+
+
+# ===================================
 # Business Profile & Onboarding Endpoints
 # ===================================
 
@@ -636,6 +1047,24 @@ async def create_goal(tenant_id: str, request: CreateGoalRequest):
     
     try:
         goal = goals_service.create_goal(tenant_id, request)
+        # Log to decision ledger (safe)
+        try:
+            _ledger_safe_append(
+                tenant_id=tenant_id,
+                action_type="goal_created",
+                source="goals_service",
+                delta_vector={
+                    "goal_id": goal.id,
+                    "category": goal.category,
+                    "target": goal.target,
+                },
+                metadata={
+                    "title": goal.title,
+                    "status": goal.status.value,
+                },
+            )
+        except Exception:
+            pass
         return goal
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -669,7 +1098,24 @@ async def update_goal(tenant_id: str, goal_id: str, request: UpdateGoalRequest):
     
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
-    
+    # Log to ledger (safe)
+    try:
+        _ledger_safe_append(
+            tenant_id=tenant_id,
+            action_type="goal_updated",
+            source="goals_service",
+            delta_vector={
+                "goal_id": goal_id,
+                "status": goal.status.value,
+            },
+            metadata={
+                "title": goal.title,
+                "category": goal.category,
+                "target": goal.target,
+            },
+        )
+    except Exception:
+        pass
     return goal
 
 
@@ -681,7 +1127,16 @@ async def delete_goal(tenant_id: str, goal_id: str):
     
     if not success:
         raise HTTPException(status_code=404, detail="Goal not found")
-    
+    # Log deletion
+    try:
+        _ledger_safe_append(
+            tenant_id=tenant_id,
+            action_type="goal_deleted",
+            source="goals_service",
+            delta_vector={"goal_id": goal_id},
+        )
+    except Exception:
+        pass
     return {"message": "Goal deleted successfully"}
 
 
@@ -713,6 +1168,30 @@ async def create_task(tenant_id: str, request: CreateTaskRequest):
     
     try:
         task = tasks_service.create_task(tenant_id, request)
+        try:
+            horizon_val = None
+            try:
+                hv = getattr(request, "horizon", None)
+                horizon_val = hv.value if hv is not None and hasattr(hv, "value") else None
+            except Exception:
+                horizon_val = None
+            _ledger_safe_append(
+                tenant_id=tenant_id,
+                action_type="task_created",
+                source="tasks_service",
+                delta_vector={
+                    "task_id": task.id,
+                    "goal_id": getattr(request, "goal_id", None),
+                    "horizon": horizon_val,
+                },
+                metadata={
+                    "title": task.title,
+                    "status": task.status.value,
+                    "created_at": task.created_at.isoformat() if getattr(task, "created_at", None) else None,
+                },
+            )
+        except Exception:
+            pass
         return task
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -753,6 +1232,21 @@ async def update_task(tenant_id: str, task_id: str, request: UpdateTaskRequest):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    try:
+        _ledger_safe_append(
+            tenant_id=tenant_id,
+            action_type="task_updated",
+            source="tasks_service",
+            delta_vector={
+                "task_id": task_id,
+                "status": task.status.value if task else None,
+            },
+            metadata={
+                "title": getattr(task, "title", None),
+            },
+        )
+    except Exception:
+        pass
     return task
 
 
@@ -770,7 +1264,7 @@ async def delete_task(tenant_id: str, task_id: str):
 
 @app.post("/v1/tenants/{tenant_id}/goals/{goal_id}/generate-tasks")
 async def generate_tasks_from_goal(tenant_id: str, goal_id: str):
-    """Generate AI-powered tasks from a goal"""
+    """Generate AI-powered tasks from a goal with pacing based on metabolism"""
     tasks_service = get_tasks_service()
     goals_service = get_goals_service()
     
@@ -779,10 +1273,48 @@ async def generate_tasks_from_goal(tenant_id: str, goal_id: str):
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     
-    # Generate tasks
-    goal_data = goal.dict()
-    generated_tasks = tasks_service.generate_tasks_from_goal(tenant_id, goal_data)
+    # Compute metabolism to determine capacity for new tasks
+    max_tasks = None
+    try:
+        connector_data = await _fetch_connector_data(tenant_id)
+        calculator = HealthScoreCalculator(connector_data)
+        health_score = calculator.calculate_overall_health()
+        goals = goals_service.get_goals(tenant_id, status=GoalStatus.ACTIVE)
+        tasks = tasks_service.get_tasks(tenant_id, status=TaskStatus.TODO)
+        
+        metabolism_snap = compute_metabolism(
+            health_score=health_score.model_dump(),
+            goals=[g.dict() for g in goals],
+            tasks=[t.dict() for t in tasks],
+        )
+        
+        # Use projected capacity to pace task generation
+        # Reserve ~50% of capacity for existing tasks; allocate rest to new generation
+        existing_task_count = len(tasks)
+        available_slots = max(1, metabolism_snap.projected_weekly_capacity - existing_task_count)
+        max_tasks = min(5, available_slots)  # Cap at 5 tasks per goal, or available capacity
+        
+        logger.info(f"[generate_tasks] Metabolism pacing: capacity={metabolism_snap.projected_weekly_capacity}, existing={existing_task_count}, max_new={max_tasks}")
+    except Exception as e:
+        logger.warning(f"[generate_tasks] Failed to compute metabolism pacing: {e}; proceeding without cap")
     
+    # Generate tasks with optional cap
+    goal_data = goal.dict()
+    generated_tasks = tasks_service.generate_tasks_from_goal(tenant_id, goal_data, max_tasks=max_tasks)
+    
+    try:
+        _ledger_safe_append(
+            tenant_id=tenant_id,
+            action_type="tasks_generated_from_goal",
+            source="tasks_service",
+            delta_vector={
+                "goal_id": goal_id,
+                "tasks_generated": len(generated_tasks),
+                "task_ids": [t.id for t in generated_tasks],
+            },
+        )
+    except Exception:
+        pass
     return {
         "message": f"Generated {len(generated_tasks)} tasks for goal",
         "tasks": generated_tasks
@@ -890,6 +1422,30 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
         repeat_customers = [c for c in customers if c.get("total_orders", 0) > 1]
         repeat_rate = (len(repeat_customers) / len(customers) * 100) if customers else 0
         
+        # Compute metabolism snapshot for pacing
+        try:
+            from .metabolism import compute_metabolism
+            metabolism_snap = compute_metabolism(
+                health_score=health_score.model_dump(),
+                goals=[g.dict() for g in goals],
+                tasks=[t.dict() for t in tasks],
+            )
+            metabolism_dict = {
+                "energy_capacity": metabolism_snap.energy_capacity,
+                "fatigue": metabolism_snap.fatigue,
+                "recovery_rate": metabolism_snap.recovery_rate,
+                "workload_index": metabolism_snap.workload_index,
+                "projected_weekly_capacity": metabolism_snap.projected_weekly_capacity,
+                "risks": metabolism_snap.risks,
+            }
+        except Exception:
+            metabolism_dict = None
+        
+        # Get health score trend for adaptive coaching (Phase 2)
+        health_trend = _get_health_score_trend(tenant_id, lookback_days=14)
+        # Get task signals for adaptive coaching (Phase 3 functional)
+        task_signals = _compute_task_signals(tenant_id)
+
         # Build context with ACTUAL data
         business_context = {
             "business_name": business_name,
@@ -922,6 +1478,7 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
                 "low_stock_products": [i.get("product_name") for i in low_stock_items[:3]],
                 "out_of_stock_products": [i.get("product_name") for i in out_of_stock_items[:3]],
             },
+            "metabolism": metabolism_dict,
             "health_score": {
                 "score": health_score.score,
                 "trend": health_score.trend,
@@ -929,18 +1486,63 @@ async def coach_chat(tenant_id: str, request: ChatRequest):
                     "revenue": health_score.breakdown.revenue,
                     "operations": health_score.breakdown.operations,
                     "customer": health_score.breakdown.customer,
-                }
+                },
+                "trend_analysis": health_trend,  # Phase 2: historical context
             },
+            "task_signals": task_signals,
             "goals": [g.dict() for g in goals],
             "tasks": [t.dict() for t in tasks],
         }
         
         # Generate response
         response = await coach_service.chat(tenant_id, request, business_context)
+        
+        # Record coach interaction in decision ledger (Phase 2)
+        try:
+            _ledger_safe_append(
+                tenant_id=tenant_id,
+                action_type="coach_interaction",
+                source="coach",
+                pre_state={
+                    "user_message": request.message[:200],  # truncate for storage
+                    "persona": getattr(request, 'persona_id', None),
+                    "health_score": health_score.score,
+                    "energy_capacity": metabolism_dict.get("energy_capacity") if metabolism_dict else None,
+                },
+                post_state={
+                    "coach_response_preview": response.message[:200],  # truncate
+                    "evidence_provided": len(response.evidence) if response.evidence else 0,
+                },
+                delta_vector={
+                    "interaction_type": "chat",
+                    "has_evidence": bool(getattr(response, 'evidence', None)),
+                    "has_recommendations": bool(getattr(response, 'suggestions', None)),
+                    "task_completion_delta": task_signals.get("completion_delta"),
+                    "adherence_on_time_pct": task_signals.get("adherence_on_time_pct"),
+                },
+                metadata={
+                    "timestamp": datetime.now().isoformat(),
+                    "context_keys": list(business_context.keys()),
+                    "task_signals": task_signals,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"[coach_chat] Failed to log interaction to ledger: {e}")
+        
         return response
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Coach error: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/analytics/task-signals")
+async def get_task_signals(tenant_id: str):
+    """Expose computed task signals for UI/analytics (read-only)."""
+    try:
+        signals = _compute_task_signals(tenant_id)
+        return {"tenant_id": tenant_id, "signals": signals}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute task signals: {e}")
 
 
 @app.get("/v1/coach/personas")
@@ -1622,6 +2224,175 @@ async def get_category_breakdown(
     return breakdown
 
 
+# ===================================
+# Decision Ledger Endpoints
+# ===================================
+
+@app.post("/v1/tenants/{tenant_id}/ledger/commit")
+async def ledger_commit(tenant_id: str, request: LedgerCommitRequest):
+    """
+    Append an entry to the tenant's decision ledger (Phase-1).
+
+    Stores an append-only record with hash chaining and HMAC signature (if SECRET_KEY set).
+    Intended for provenance of coach/planner actions and user approvals.
+    """
+    try:
+        parent_hash = None
+        # Optionally fetch latest entry to chain from
+        try:
+            chain = ledger_get_chain(tenant_id, limit=1)
+            if chain:
+                parent_hash = chain[0].get("id")  # lightweight: chain by id for phase-1
+        except Exception:
+            parent_hash = None
+
+        entry = ledger_append_entry(
+            tenant_id=tenant_id,
+            action_type=request.action_type,
+            source=request.source,
+            pre_state=request.pre_state,
+            post_state=request.post_state,
+            delta_vector=request.delta_vector,
+            parent_hash=parent_hash,
+            metadata=request.metadata,
+        )
+        return {"success": True, "entry": entry}
+    except Exception as e:
+        logger.error(f"[ledger_commit] Failed to append ledger entry: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to commit ledger entry: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/ledger/chain")
+async def ledger_chain(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Fetch recent decision ledger entries for a tenant."""
+    try:
+        items = ledger_get_chain(tenant_id, limit=limit)
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        logger.error(f"[ledger_chain] Failed to fetch ledger: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch ledger: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/ledger/verify")
+async def ledger_verify(tenant_id: str, limit: int = Query(200, ge=10, le=1000)):
+    """Admin-only: verify HMAC signatures and basic parent linkage for ledger entries.
+
+    Controlled by env ADMIN_ENABLE_LEDGER_VERIFY. Returns 404 when disabled.
+    """
+    if not os.getenv("ADMIN_ENABLE_LEDGER_VERIFY"):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        report = ledger_verify_entries(tenant_id, limit=limit)
+        return report
+    except Exception as e:
+        logger.error(f"[ledger_verify] Verification failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
+
+
+@app.get("/v1/tenants/{tenant_id}/ledger/integrity")
+async def ledger_integrity_summary(tenant_id: str):
+    """Get lightweight ledger integrity summary for monitoring (Phase 2).
+    
+    Returns stats without full entry details for efficient health checks.
+    Useful for periodic automated verification and dashboards.
+    """
+    try:
+        summary = ledger_get_integrity_summary(tenant_id)
+        return summary
+    except Exception as e:
+        logger.error(f"[ledger_integrity] Failed to get summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get integrity summary: {str(e)}")
+
+
+# ===================================
+# Goal Metabolism (Phase-1) Endpoints
+# ===================================
+
+@app.get("/v1/tenants/{tenant_id}/metabolism/preview", response_model=MetabolismPreviewResponse)
+async def get_metabolism_preview(tenant_id: str):
+    """
+    Compute a Phase-1 metabolism snapshot for pacing goals and tasks.
+
+    Uses current health score, active goals, and TODO tasks to estimate
+    energy capacity, fatigue, recovery, and projected weekly capacity.
+    """
+    goals_service = get_goals_service()
+    tasks_service = get_tasks_service()
+
+    # Current health
+    connector_data = await _fetch_connector_data(tenant_id)
+    calculator = HealthScoreCalculator(connector_data)
+    hs = calculator.calculate_overall_health()
+
+    # Current workload
+    goals = [g.dict() for g in goals_service.get_goals(tenant_id)]
+    tasks = [t.dict() for t in tasks_service.get_tasks(tenant_id)]
+
+    snap = compute_metabolism(health_score=hs.model_dump(), goals=goals, tasks=tasks)
+
+    return MetabolismPreviewResponse(
+        energy_capacity=snap.energy_capacity,
+        fatigue=snap.fatigue,
+        recovery_rate=snap.recovery_rate,
+        workload_index=snap.workload_index,
+        projected_weekly_capacity=snap.projected_weekly_capacity,
+        risks=snap.risks,
+        basis=snap.basis,
+    )
+
+
+@app.post("/v1/tenants/{tenant_id}/analytics/detect-seasonality")
+async def detect_seasonality_patterns(
+    tenant_id: str,
+    metric: str = Query("revenue", description="Metric to analyze (revenue, orders, etc.)"),
+    freq_hint: Optional[str] = Query(None, description="Frequency hint: H=hourly, D=daily, W=weekly"),
+):
+    """Detect micro-seasonal patterns in business metrics (Phase 3).
+    
+    Feature-flagged via ENABLE_MICRO_SEASONALITY.
+    Requires statsmodels package installed.
+    """
+    if not ENABLE_MICRO_SEASONALITY:
+        return {
+            "enabled": False,
+            "message": "Micro-seasonality detection disabled. Set ENABLE_MICRO_SEASONALITY=1 to enable."
+        }
+    
+    try:
+        analytics_service = get_analytics_service()
+        
+        # Get historical data based on metric
+        if metric == "revenue":
+            # Get health score history (revenue component)
+            history = analytics_service.get_health_score_history(tenant_id, days=90)
+            values = [h.revenue for h in history if h.revenue is not None]
+        elif metric == "health_score":
+            history = analytics_service.get_health_score_history(tenant_id, days=90)
+            values = [h.score for h in history if h.score is not None]
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported metric: {metric}")
+        
+        if not values:
+            return {
+                "enabled": True,
+                "has_micro_seasonality": False,
+                "reason": "No historical data available",
+                "metric": metric,
+            }
+        
+        # Detect patterns
+        result = detect_micro_seasonality(values, freq_hint=freq_hint)
+        result["enabled"] = True
+        result["metric"] = metric
+        result["data_points"] = len(values)
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"[detect_seasonality] Failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Seasonality detection failed: {str(e)}")
+
+
 @app.post("/v1/tenants/{tenant_id}/analytics/record-health-score")
 async def record_health_score_analytics(tenant_id: str):
     """Record current health score for historical tracking"""
@@ -1642,6 +2413,43 @@ async def record_health_score_analytics(tenant_id: str):
             'customer': float(health_score.breakdown.customer if health_score.breakdown.customer is not None else 0.0),
         }
     )
+    
+    # Append to decision ledger with delta vs last recorded score
+    try:
+        previous_score = None
+        try:
+            chain = ledger_get_chain(tenant_id, limit=100)
+            for e in chain:
+                if (e.get("action_type") == "health_score_recorded"):
+                    prev_meta = e.get("metadata") or {}
+                    prev_hs = prev_meta.get("health_score") or {}
+                    previous_score = prev_hs.get("score")
+                    if previous_score is not None:
+                        break
+        except Exception:
+            previous_score = None
+
+        delta_vector = {"current": int(health_score.score), "previous": int(previous_score) if previous_score is not None else None}
+        metadata = {
+            "health_score": {
+                "score": int(health_score.score),
+                "revenue": int(health_score.breakdown.revenue) if health_score.breakdown.revenue is not None else None,
+                "operations": int(health_score.breakdown.operations) if health_score.breakdown.operations is not None else None,
+                "customer": int(health_score.breakdown.customer) if health_score.breakdown.customer is not None else None,
+                "trend": health_score.trend,
+                "quality_score": health_score.quality_score,
+                "ci": {"low": health_score.ci_low, "high": health_score.ci_high},
+            }
+        }
+        _ledger_safe_append(
+            tenant_id=tenant_id,
+            action_type="health_score_recorded",
+            source="analytics_service",
+            delta_vector=delta_vector,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
     
     return {
         "message": "Health score recorded",

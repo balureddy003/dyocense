@@ -15,12 +15,14 @@ import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
 import Coach from './pages/Coach'
 import CoachV3 from './pages/CoachV3'
-import CoachV4 from './pages/CoachV4'
+import CoachV5 from './pages/CoachV5'
+import CoachV6 from './pages/CoachV6'
 import ConnectorMarketplace from './pages/ConnectorMarketplace'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
 import Executor from './pages/Executor'
+import ForgotPassword from './pages/ForgotPassword'
 import Goals from './pages/Goals'
 import Home from './pages/Home'
 import LandingPage from './pages/LandingPage'
@@ -278,6 +280,14 @@ function App() {
                                 }
                             />
                             <Route
+                                path="/forgot-password"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <ForgotPassword />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
                                 path="/verify"
                                 element={
                                     <PublicLayout showNav={false}>
@@ -416,7 +426,7 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV4 />
+                                            <CoachV5 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
@@ -426,7 +436,17 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV4 />
+                                            <CoachV5 />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/coach-v6"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CoachV6 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
