@@ -2,12 +2,34 @@
 Coach Recommendations Service for Coach V6
 
 Generates proactive AI recommendations based on business health data.
+Uses template system and GPT-4 for natural language generation.
 """
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
 import random
+import sys
+import os
+
+# Add packages directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../packages"))
+
+try:
+    from agent.coach_templates import (
+        get_triggered_templates,
+        RecommendationTemplate,
+        TemplateTrigger,
+        RecommendationCategory,
+    )
+    from agent.gpt4_recommendations import (
+        GPT4RecommendationGenerator,
+        RecommendationEnricher,
+    )
+    TEMPLATES_AVAILABLE = True
+except ImportError:
+    print("Warning: Coach templates not available. Using simplified recommendations.")
+    TEMPLATES_AVAILABLE = False
 
 
 class RecommendationPriority(str, Enum):
@@ -89,9 +111,18 @@ class MetricSnapshot(BaseModel):
 class CoachRecommendationsService:
     """Service for generating coach recommendations"""
     
-    def __init__(self, tenant_id: str, persistence_backend=None):
+    def __init__(self, tenant_id: str, persistence_backend=None, use_gpt4: bool = False):
         self.tenant_id = tenant_id
         self.backend = persistence_backend
+        self.use_gpt4 = use_gpt4
+        
+        # Initialize GPT-4 if available and requested
+        if TEMPLATES_AVAILABLE and use_gpt4:
+            self.gpt4_generator = GPT4RecommendationGenerator()
+            self.enricher = RecommendationEnricher(self.gpt4_generator)
+        else:
+            self.gpt4_generator = None
+            self.enricher = None
     
     async def generate_recommendations(
         self,
@@ -102,9 +133,186 @@ class CoachRecommendationsService:
         """
         Generate AI recommendations based on health score and data.
         
-        This is a simplified implementation. Full version would use GPT-4
-        with templates for different scenarios.
+        Uses template system and optional GPT-4 enhancement.
         """
+        if TEMPLATES_AVAILABLE:
+            return await self._generate_from_templates(
+                health_score,
+                health_breakdown,
+                connector_data,
+            )
+        else:
+            # Fallback to simplified logic
+            return await self._generate_simplified(
+                health_score,
+                health_breakdown,
+                connector_data,
+            )
+    
+    async def _generate_from_templates(
+        self,
+        health_score: int,
+        health_breakdown: Dict[str, Any],
+        connector_data: Dict[str, Any],
+    ) -> List[CoachRecommendation]:
+        """Generate recommendations using template system"""
+        recommendations = []
+        
+        # Prepare analysis data for template matching
+        analysis_data = self._prepare_analysis_data(
+            health_score,
+            health_breakdown,
+            connector_data,
+        )
+        
+        # Get triggered templates
+        triggered = get_triggered_templates(analysis_data)
+        
+        # Generate recommendations from templates (max 3-4 per request)
+        for template in triggered[:4]:
+            rec = self._build_recommendation_from_template(
+                template,
+                analysis_data,
+            )
+            
+            # Optionally enrich with GPT-4
+            if self.enricher:
+                business_context = {
+                    "tenant_id": self.tenant_id,
+                    "health_score": health_score,
+                    "industry": connector_data.get("industry", "SMB"),
+                }
+                rec_dict = rec.dict()
+                enriched = self.enricher.enrich_recommendation(
+                    rec_dict,
+                    business_context,
+                )
+                # Update with enriched content
+                rec.title = enriched.get("title", rec.title)
+                rec.description = enriched.get("description", rec.description)
+                rec.reasoning = enriched.get("reasoning", rec.reasoning)
+            
+            recommendations.append(rec)
+        
+        return recommendations
+    
+    def _prepare_analysis_data(
+        self,
+        health_score: int,
+        health_breakdown: Dict[str, Any],
+        connector_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Prepare data for template matching"""
+        # This would normally extract from real connector data
+        # For now, use mock data that matches template requirements
+        return {
+            # Cash flow metrics
+            "days_until_negative": 18 if health_score < 60 else 60,
+            "cash_balance": connector_data.get("cash_balance", 18450),
+            "burn_rate": connector_data.get("burn_rate", 1200),
+            "min_safe_balance": 15000,
+            "outstanding_receivables": 12450,
+            "overdue_count": 3 if health_score < 70 else 0,
+            "overdue_amount": 12450 if health_score < 70 else 0,
+            "overdue_days_avg": 35 if health_score < 70 else 0,
+            
+            # Inventory metrics
+            "aging_items_count": 18 if health_breakdown.get("operations", 100) < 70 else 5,
+            "aging_days": 95 if health_breakdown.get("operations", 100) < 70 else 45,
+            "capital_tied": 8500,
+            "turnover_ratio": 2.3,
+            "target_turnover": 4.0,
+            "at_risk_items_count": 0,
+            "slow_moving_count": 8,
+            
+            # Revenue metrics
+            "revenue_change_percent": -12 if health_breakdown.get("revenue", 100) < 70 else 8,
+            "current_revenue": 45200,
+            "previous_revenue": 51400,
+            "aov_change_percent": -5 if health_breakdown.get("revenue", 100) < 75 else 3,
+            "seasonal_uplift_potential": 25,
+            
+            # Profitability metrics
+            "current_margin": 38 if health_breakdown.get("profitability", 100) < 70 else 42,
+            "previous_margin": 42,
+            "margin_change": -4 if health_breakdown.get("profitability", 100) < 70 else 0,
+            "cost_increase_percent": 12,
+            
+            # Operations metrics
+            "overdue_tasks": 15 if health_breakdown.get("operations", 100) < 70 else 3,
+            "completion_rate": 65 if health_breakdown.get("operations", 100) < 70 else 85,
+            "target_completion": 90,
+            "capacity_utilization": 92 if health_breakdown.get("operations", 100) < 75 else 75,
+            
+            # Growth metrics
+            "growth_readiness_score": 78 if health_score > 75 else 45,
+            "product_opportunity_score": 65 if health_score > 70 else 30,
+            
+            # Severity scores for prioritization
+            "severity_score": 8 if health_score < 60 else (5 if health_score < 75 else 2),
+            "days_until_critical": 18 if health_score < 60 else 45,
+        }
+    
+    def _build_recommendation_from_template(
+        self,
+        template: "RecommendationTemplate",
+        data: Dict[str, Any],
+    ) -> CoachRecommendation:
+        """Build recommendation from template"""
+        rec_id = f"rec_{random.randint(1000, 9999)}"
+        priority = template.get_priority(data)
+        
+        # Format text with data
+        title = template.format_template(template.title_template, data)
+        description = template.format_template(template.description_template, data)
+        reasoning = template.format_template(template.reasoning_template, data)
+        
+        # Format actions
+        actions = []
+        for i, action_template in enumerate(template.actions):
+            action = RecommendationAction(
+                id=f"{rec_id}_action_{i}",
+                label=template.format_template(action_template["label"], data),
+                description=template.format_template(
+                    action_template.get("description", ""),
+                    data,
+                ),
+                buttonText=template.format_template(
+                    action_template.get("buttonText", "Take Action"),
+                    data,
+                ),
+                variant=action_template.get("variant", "primary"),
+                completed=False,
+            )
+            actions.append(action)
+        
+        # Calculate expiration (7 days for critical, 14 for important, 30 for suggestions)
+        expires_days = {"critical": 7, "important": 14, "suggestion": 30}
+        expires_at = datetime.now() + timedelta(days=expires_days.get(priority, 14))
+        
+        return CoachRecommendation(
+            id=rec_id,
+            priority=RecommendationPriority(priority),
+            title=title,
+            description=description,
+            reasoning=reasoning,
+            actions=actions,
+            dismissible=True,
+            dismissed=False,
+            expiresAt=expires_at,
+            metadata={
+                "template_trigger": template.trigger.value,
+                "category": template.category.value,
+            },
+        )
+    
+    async def _generate_simplified(
+        self,
+        health_score: int,
+        health_breakdown: Dict[str, Any],
+        connector_data: Dict[str, Any],
+    ) -> List[CoachRecommendation]:
+        """Generate simplified recommendations (fallback)"""
         recommendations = []
         
         # Critical: Cash flow issues
@@ -146,6 +354,7 @@ class CoachRecommendationsService:
             ],
             dismissible=True,
             dismissed=False,
+            expiresAt=datetime.now() + timedelta(days=7),
         )
     
     def _create_inventory_recommendation(self, data: Dict[str, Any]) -> CoachRecommendation:
@@ -166,6 +375,7 @@ class CoachRecommendationsService:
             ],
             dismissible=True,
             dismissed=False,
+            expiresAt=datetime.now() + timedelta(days=14),
         )
     
     def _create_growth_recommendation(self, data: Dict[str, Any]) -> CoachRecommendation:
@@ -186,6 +396,7 @@ class CoachRecommendationsService:
             ],
             dismissible=True,
             dismissed=False,
+            expiresAt=datetime.now() + timedelta(days=30),
         )
     
     async def get_alerts(self, health_score: int, health_breakdown: Dict[str, Any]) -> List[Alert]:
