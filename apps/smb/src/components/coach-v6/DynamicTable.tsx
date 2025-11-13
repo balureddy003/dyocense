@@ -4,7 +4,7 @@
  * Renders data tables based on widget configuration
  */
 
-import { Card, Stack, Text, Table as MantineTable } from '@mantine/core';
+import { Card, Stack, Text } from '@mantine/core';
 import type { DashboardWidget } from './IndustryDashboard';
 
 interface DynamicTableProps {

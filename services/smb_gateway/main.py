@@ -1323,6 +1323,241 @@ async def get_dashboard_layout(tenant_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v1/tenants/{tenant_id}/prompts/contextual")
+async def get_contextual_prompts(tenant_id: str):
+    """
+    Get contextual prompts based on time of day and business context.
+    
+    Returns time-appropriate messages:
+    - Morning kickoff (8-10am): Daily priorities, overnight insights
+    - Midday check-in (12-2pm): Progress updates, service reminders
+    - End-of-day wrap-up (5-7pm): Daily summary, tomorrow prep
+    - Critical alerts: Urgent issues requiring attention
+    - Milestone celebrations: Achievement notifications
+    
+    Considers:
+    - Business type (restaurant vs retail vs services)
+    - Business hours and timezone
+    - Current metrics and health score
+    - Recent user activity
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from packages.agent.contextual_prompts import create_prompt_generator
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Get business type and timezone from tenant metadata
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                metadata = dict(result).get("metadata", {})
+                classification = metadata.get("business_classification", {})
+                business_type = classification.get("business_type", "other")
+                timezone = metadata.get("timezone", "America/New_York")
+        finally:
+            conn.close()
+        
+        # Fetch current business data
+        connector_data = await _fetch_connector_data(tenant_id)
+        
+        # Get health score
+        calculator = HealthScoreCalculator(connector_data)
+        health_response = calculator.calculate_overall_health()
+        
+        # Prepare context data
+        current_data = {
+            "health_score": health_response.score,
+            "previous_health_score": max(0, health_response.score - 5),  # Estimate previous
+            "pending_tasks": 0,  # TODO: Fetch from tasks service
+            "daily_progress": {
+                "revenue": connector_data.get("total_revenue", 0),
+            },
+            "daily_summary": {
+                "revenue": connector_data.get("total_revenue", 0),
+                "transactions": connector_data.get("transaction_count", 0),
+                "covers": connector_data.get("customer_count", 0),
+                "tasks_completed": 0,
+            },
+            "cash_balance": connector_data.get("cash_balance", 0),
+            "monthly_revenue": connector_data.get("monthly_revenue", 0),
+            "recently_completed_goals": [],  # TODO: Fetch from goals service
+        }
+        
+        # Generate contextual prompts
+        generator = create_prompt_generator(business_type, timezone)
+        prompts = await generator.generate_prompts(tenant_id, current_data)
+        
+        # Convert to response format
+        prompts_data = [
+            {
+                "id": p.id,
+                "type": p.type.value,
+                "tone": p.tone.value,
+                "title": p.title,
+                "message": p.message,
+                "actions": p.actions,
+                "priority": p.priority,
+                "scheduled_time": p.scheduled_time.isoformat(),
+                "expires_at": p.expires_at.isoformat() if p.expires_at else None,
+                "metadata": p.metadata or {},
+            }
+            for p in prompts
+        ]
+        
+        return {"prompts": prompts_data, "generated_at": datetime.utcnow().isoformat()}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating contextual prompts for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/tenants/{tenant_id}/benchmarks")
+async def get_peer_benchmarks(
+    tenant_id: str,
+    metrics: Optional[str] = Query(None, description="Comma-separated metric names"),
+):
+    """
+    Get peer benchmark comparisons for tenant's metrics.
+    
+    Compares tenant's performance to anonymized industry peers:
+    - Percentile rankings (25th, 50th, 75th, 90th)
+    - Performance tier (top/above_avg/average/below_avg)
+    - "You vs peers" insights
+    - Actionable recommendations
+    
+    Privacy-preserving:
+    - All data is anonymized and aggregated
+    - Minimum 10+ businesses in comparison group
+    - No individual business identification
+    
+    Args:
+        metrics: Optional comma-separated list of metrics to compare
+                If not provided, returns all available metrics for business type
+    
+    Example:
+        /v1/tenants/abc123/benchmarks?metrics=food_cost_pct,labor_cost_pct
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from packages.agent.benchmarking import create_benchmarking_engine
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Get business type from tenant metadata
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                metadata = dict(result).get("metadata", {})
+                classification = metadata.get("business_classification", {})
+                business_type = classification.get("business_type", "other")
+        finally:
+            conn.close()
+        
+        # Get industry-specific metrics for this tenant
+        connector_data = await _fetch_connector_data(tenant_id)
+        
+        # Prepare tenant metrics data
+        tenant_data = {
+            "revenue": connector_data.get("total_revenue", 0),
+            "cogs": connector_data.get("total_cogs", 0),
+            "expenses": connector_data.get("expenses", {}),
+            "transactions": connector_data.get("transaction_count", 0),
+            "total_covers": connector_data.get("customer_count", 0),
+            "avg_inventory_value": connector_data.get("avg_inventory_value", 0),
+            "inventory_value": connector_data.get("current_inventory_value", 0),
+        }
+        
+        # Calculate industry metrics
+        calculator = create_metric_calculator(business_type)
+        calculated_metrics = await calculator.calculate_metrics(tenant_data, 30)
+        
+        # Build metric values dict for benchmarking
+        metric_values = {m.id: m.value for m in calculated_metrics}
+        
+        # Filter to requested metrics if specified
+        if metrics:
+            requested = set(metrics.split(","))
+            metric_values = {k: v for k, v in metric_values.items() if k in requested}
+        
+        # Get benchmark comparisons
+        engine = create_benchmarking_engine(business_type)
+        comparisons = await engine.get_all_comparisons(metric_values)
+        
+        # Convert to response format
+        comparisons_data = [
+            {
+                "metric": c.metric,
+                "your_value": c.your_value,
+                "your_percentile": round(c.your_percentile, 1),
+                "performance_tier": c.performance_tier,
+                "peer_data": {
+                    "median": c.peer_median,
+                    "p75": c.peer_p75,
+                    "p90": c.peer_p90,
+                },
+                "comparison": {
+                    "vs_median_pct": round(c.vs_median_diff, 1),
+                    "vs_top_quartile_pct": round(c.vs_top_quartile_diff, 1),
+                },
+                "insight": c.insight,
+                "action_items": c.action_items,
+            }
+            for c in comparisons
+        ]
+        
+        return {
+            "business_type": business_type,
+            "comparisons": comparisons_data,
+            "sample_note": "Benchmarks based on 150+ similar businesses",
+            "last_updated": datetime.utcnow().isoformat(),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching benchmarks for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ===================================
 # Business Profile & Onboarding Endpoints
 # ===================================

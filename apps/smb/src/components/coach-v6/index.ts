@@ -5,14 +5,14 @@
  * Export all components and types for easy importing
  */
 
+export { DynamicChart } from './DynamicChart';
+export { DynamicMetricCard } from './DynamicMetricCard';
+export { DynamicTable } from './DynamicTable';
 export { GoalsColumn } from './GoalsColumn';
 export { HealthScoreHeader } from './HealthScoreHeader';
+export { IndustryDashboard } from './IndustryDashboard';
 export { MetricsGrid } from './MetricsGrid';
 export { ProactiveCoachCard } from './ProactiveCoachCard';
 export { TasksColumn } from './TasksColumn';
-export { IndustryDashboard } from './IndustryDashboard';
-export { DynamicMetricCard } from './DynamicMetricCard';
-export { DynamicChart } from './DynamicChart';
-export { DynamicTable } from './DynamicTable';
 export * from './types';
 

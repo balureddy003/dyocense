@@ -9,11 +9,11 @@
  * - Responsive 12-column grid layout
  */
 
-import { useEffect, useState } from 'react';
-import { SimpleGrid, Stack, Text, Loader, Center, Alert } from '@mantine/core';
+import { Alert, Center, Loader, SimpleGrid, Stack, Text } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
-import { DynamicMetricCard } from './DynamicMetricCard';
+import { useEffect, useState } from 'react';
 import { DynamicChart } from './DynamicChart';
+import { DynamicMetricCard } from './DynamicMetricCard';
 import { DynamicTable } from './DynamicTable';
 
 export interface DashboardWidget {

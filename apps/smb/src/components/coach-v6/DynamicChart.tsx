@@ -7,8 +7,7 @@
  * - Gauge charts
  */
 
-import { useState } from 'react';
-import { Card, Stack, Text, Center } from '@mantine/core';
+import { Card, Center, Stack, Text } from '@mantine/core';
 import type { DashboardWidget } from './IndustryDashboard';
 
 interface DynamicChartProps {

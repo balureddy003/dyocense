@@ -9,23 +9,23 @@
  * - Tooltip with description
  */
 
-import { useEffect, useState } from 'react';
 import {
+    Badge,
     Card,
     Group,
+    RingProgress,
     Stack,
     Text,
-    RingProgress,
     Tooltip,
-    Badge,
     useMantineTheme,
 } from '@mantine/core';
 import {
-    IconArrowUp,
     IconArrowDown,
-    IconMinus,
+    IconArrowUp,
     IconInfoCircle,
+    IconMinus,
 } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
 import type { DashboardWidget } from './IndustryDashboard';
 
 interface MetricData {
@@ -77,7 +77,7 @@ export function DynamicMetricCard({ widget, tenantId, token }: DynamicMetricCard
             }
 
             const data = await response.json();
-            
+
             // Find the metric matching this widget's metric_id
             const matchedMetric = data.metrics.find(
                 (m: MetricData) => m.id === widget.metric_id
@@ -163,11 +163,11 @@ export function DynamicMetricCard({ widget, tenantId, token }: DynamicMetricCard
             radius="md"
             h="100%"
             style={{
-                borderColor: metric.status === 'critical' 
-                    ? theme.colors.red[3] 
+                borderColor: metric.status === 'critical'
+                    ? theme.colors.red[3]
                     : metric.status === 'warning'
-                    ? theme.colors.yellow[3]
-                    : undefined,
+                        ? theme.colors.yellow[3]
+                        : undefined,
                 borderWidth: metric.status ? 2 : 1,
             }}
         >
