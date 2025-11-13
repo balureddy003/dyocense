@@ -7,7 +7,7 @@ import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import jsonschema
@@ -109,6 +109,7 @@ from .signing_keys.key_manager import (
     set_key_status,
     rotate_signing_key,
 )
+from .websocket_manager import manager as websocket_manager, start_heartbeat_task
 
 # Load shared schemas
 plan_schema = json.loads(resources.files("packages.contracts.schemas").joinpath("plan.schema.json").read_text(encoding="utf-8"))
@@ -162,6 +163,18 @@ app = FastAPI(
     version="0.1.0",
     description="Stubbed onboarding + plan endpoints consumed by the SMB UI.",
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize background tasks when the application starts.
+    
+    - Start WebSocket heartbeat task for connection health
+    """
+    import asyncio
+    asyncio.create_task(start_heartbeat_task())
+    logger.info("WebSocket heartbeat task started")
 
 
 # ===================================
@@ -573,6 +586,66 @@ async def get_health_score(tenant_id: str):
     health_score = calculator.calculate_overall_health()
     
     return health_score
+
+
+@app.websocket("/v1/tenants/{tenant_id}/ws")
+async def websocket_endpoint(websocket: WebSocket, tenant_id: str):
+    """
+    WebSocket endpoint for real-time Coach V6 updates.
+    
+    Supports:
+    - Health score updates
+    - New recommendations
+    - Task completion notifications
+    - Goal progress updates
+    
+    Client should connect on page load and maintain connection.
+    Server sends heartbeat every 30 seconds to detect dead connections.
+    
+    Message format:
+    {
+        "type": "health_score_update" | "new_recommendation" | "task_completed" | "goal_progress_update",
+        "tenant_id": str,
+        "timestamp": ISO datetime,
+        "data": {...}
+    }
+    """
+    await websocket_manager.connect(websocket, tenant_id)
+    
+    try:
+        while True:
+            # Listen for client messages (ping/pong, subscription updates, etc.)
+            data = await websocket.receive_text()
+            
+            # Parse message
+            try:
+                message = json.loads(data)
+                message_type = message.get("type")
+                
+                # Handle client -> server messages
+                if message_type == "ping":
+                    # Respond to ping with pong
+                    await websocket_manager.send_personal_message(websocket, {
+                        "type": "pong",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    })
+                elif message_type == "subscribe":
+                    # Future: Handle subscription to specific update types
+                    await websocket_manager.send_personal_message(websocket, {
+                        "type": "subscription_ack",
+                        "subscriptions": message.get("subscriptions", []),
+                    })
+                else:
+                    logger.warning(f"Unknown WebSocket message type: {message_type}")
+            
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON received from WebSocket: {data}")
+            except Exception as e:
+                logger.error(f"Error processing WebSocket message: {e}")
+    
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(websocket)
+        logger.info(f"WebSocket disconnected for tenant {tenant_id}")
 
 
 async def _fetch_connector_data(tenant_id: str) -> Dict:
