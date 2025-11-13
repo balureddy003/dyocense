@@ -1,7 +1,9 @@
+import { ActionIcon, Badge, Button, Card, Divider, Group, Stack, Text, ThemeIcon } from '@mantine/core';
+import { IconAlertCircle, IconArrowRight, IconBulb, IconChartBar, IconCheck, IconClipboardList, IconInfoCircle, IconMessageCircle, IconSparkles, IconThumbUp, IconX } from '@tabler/icons-react';
 import { useState } from 'react';
-import { ActionIcon, Badge, Button, Card, Group, Stack, Text, ThemeIcon } from '@mantine/core';
-import { IconAlertCircle, IconArrowRight, IconBulb, IconCheck, IconInfoCircle, IconSparkles, IconX, IconClipboardList, IconChartBar, IconMessageCircle } from '@tabler/icons-react';
+import * as api from '../../lib/api';
 import { CreateActionPlanModal, ShowDetailsModal, TellMeMoreModal } from '../action-flows';
+import { FeedbackModal } from '../feedback';
 import type { ProactiveCoachCardProps } from './types';
 
 /**
@@ -22,6 +24,21 @@ export function ProactiveCoachCard({
     const [showActionPlan, setShowActionPlan] = useState(false);
     const [showDetails, setShowDetails] = useState(false);
     const [showChat, setShowChat] = useState(false);
+    const [showFeedback, setShowFeedback] = useState(false);
+
+    // Get tenant info for API calls
+    const tenantId = localStorage.getItem('tenantId') || 'tenant-demo';
+    const token = localStorage.getItem('token') || undefined;
+
+    // Handle feedback submission
+    const handleFeedbackSubmit = async (feedback: api.RecommendationFeedback) => {
+        try {
+            await api.submitRecommendationFeedback(tenantId, id, feedback, token);
+            console.log('Feedback submitted successfully');
+        } catch (error) {
+            console.error('Failed to submit feedback:', error);
+        }
+    };
 
     // Priority styling
     const getPriorityColor = () => {
@@ -198,6 +215,21 @@ export function ProactiveCoachCard({
                         Tell Me More
                     </Button>
                 </Group>
+
+                <Divider my="sm" />
+
+                {/* Feedback Button */}
+                <Group gap="xs">
+                    <Button
+                        size="xs"
+                        variant="light"
+                        color="gray"
+                        leftSection={<IconThumbUp size={14} />}
+                        onClick={() => setShowFeedback(true)}
+                    >
+                        Give Feedback
+                    </Button>
+                </Group>
             </Stack>
 
             {/* Action Flow Modals */}
@@ -211,17 +243,28 @@ export function ProactiveCoachCard({
                     setShowActionPlan(false);
                 }}
             />
-            
+
             <ShowDetailsModal
                 opened={showDetails}
                 onClose={() => setShowDetails(false)}
                 recommendation={recommendation}
             />
-            
+
             <TellMeMoreModal
                 opened={showChat}
                 onClose={() => setShowChat(false)}
                 recommendation={recommendation}
+            />
+
+            <FeedbackModal
+                opened={showFeedback}
+                onClose={() => setShowFeedback(false)}
+                recommendationId={id}
+                recommendationTitle={title}
+                onSubmit={(feedback) => {
+                    handleFeedbackSubmit(feedback);
+                    setShowFeedback(false);
+                }}
             />
         </Card>
     );

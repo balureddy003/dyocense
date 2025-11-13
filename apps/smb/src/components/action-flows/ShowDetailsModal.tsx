@@ -9,25 +9,24 @@
  */
 
 import {
-    Modal,
-    Stack,
-    Text,
-    Card,
-    Group,
     Badge,
+    Card,
     Divider,
     Grid,
+    Group,
+    Modal,
     Progress,
+    Stack,
     Table,
+    Text,
 } from '@mantine/core';
 import {
-    IconTrendingUp,
-    IconTrendingDown,
-    IconMinus,
     IconAlertTriangle,
     IconInfoCircle,
+    IconTrendingDown,
+    IconTrendingUp
 } from '@tabler/icons-react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CoachRecommendation } from '../coach-v6/types';
 
 interface ShowDetailsModalProps {
@@ -51,7 +50,7 @@ function generateMockData(recommendationId: string) {
         { date: '11/5', value: 29000, target: 50000 },
         { date: '11/12', value: 28000, target: 50000 },
     ];
-    
+
     // Breakdown data
     const breakdownData = [
         { category: 'Payables', amount: 12000, dueIn: 7 },
@@ -59,7 +58,7 @@ function generateMockData(recommendationId: string) {
         { category: 'Operating Costs', amount: 5500, dueIn: 3 },
         { category: 'Inventory Purchase', amount: 3200, dueIn: 10 },
     ];
-    
+
     // Key metrics
     const metrics = {
         cashBalance: 28000,
@@ -69,7 +68,7 @@ function generateMockData(recommendationId: string) {
         overdueInvoices: 3,
         overdueAmount: 12450,
     };
-    
+
     return { trendData, breakdownData, metrics };
 }
 
@@ -79,10 +78,10 @@ export function ShowDetailsModal({
     recommendation,
 }: ShowDetailsModalProps) {
     if (!recommendation) return null;
-    
+
     // Generate mock data for visualization
     const { trendData, breakdownData, metrics } = generateMockData(recommendation.id);
-    
+
     return (
         <Modal
             opened={opened}
@@ -98,7 +97,7 @@ export function ShowDetailsModal({
                         <Text size="lg" fw={600}>{recommendation.title}</Text>
                         <Badge size="lg" color={
                             recommendation.priority === 'critical' ? 'red' :
-                            recommendation.priority === 'important' ? 'orange' : 'blue'
+                                recommendation.priority === 'important' ? 'orange' : 'blue'
                         }>
                             {recommendation.priority}
                         </Badge>
@@ -115,7 +114,7 @@ export function ShowDetailsModal({
                         </>
                     )}
                 </Card>
-                
+
                 {/* Key Metrics Grid */}
                 <div>
                     <Text size="md" fw={600} mb="md">Key Metrics</Text>
@@ -158,7 +157,7 @@ export function ShowDetailsModal({
                         </Grid.Col>
                     </Grid>
                 </div>
-                
+
                 {/* Historical Trend Chart */}
                 <div>
                     <Text size="md" fw={600} mb="md">Cash Flow Trend (Last 7 Weeks)</Text>
@@ -191,7 +190,7 @@ export function ShowDetailsModal({
                         </Text>
                     </Card>
                 </div>
-                
+
                 {/* Breakdown Table */}
                 <div>
                     <Text size="md" fw={600} mb="md">Cash Flow Breakdown (Next 14 Days)</Text>
@@ -245,7 +244,7 @@ export function ShowDetailsModal({
                         </Table>
                     </Card>
                 </div>
-                
+
                 {/* Actions Summary */}
                 <Card withBorder padding="md" style={{ backgroundColor: 'var(--mantine-color-gray-0)' }}>
                     <Text size="sm" fw={600} mb="xs">Recommended Actions</Text>

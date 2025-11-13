@@ -378,6 +378,21 @@ export async function dismissRecommendation(tenantId: string, recId: string, tok
     return post(`/v1/tenants/${tenantId}/coach/recommendations/${recId}/dismiss`, {}, token)
 }
 
+export interface RecommendationFeedback {
+    helpful: boolean
+    reason?: string
+    comment?: string
+}
+
+export async function submitRecommendationFeedback(
+    tenantId: string,
+    recId: string,
+    feedback: RecommendationFeedback,
+    token?: string
+): Promise<{ success: boolean; feedback_id: string }> {
+    return post(`/v1/tenants/${tenantId}/coach/recommendations/${recId}/feedback`, feedback, token)
+}
+
 export async function getHealthAlerts(tenantId: string, token?: string): Promise<Alert[]> {
     return get(`/v1/tenants/${tenantId}/health-score/alerts`, token)
 }

@@ -8,21 +8,21 @@
  * - Follow-up questions
  */
 
-import { useState, useRef, useEffect } from 'react';
 import {
-    Modal,
-    Stack,
-    TextInput,
+    ActionIcon,
+    Badge,
     Button,
     Card,
-    Text,
     Group,
-    Badge,
-    ScrollArea,
-    ActionIcon,
     Loader,
+    Modal,
+    ScrollArea,
+    Stack,
+    Text,
+    TextInput,
 } from '@mantine/core';
 import { IconSend, IconSparkles, IconUser } from '@tabler/icons-react';
+import { useEffect, useRef, useState } from 'react';
 import type { CoachRecommendation } from '../coach-v6/types';
 
 interface TellMeMoreModalProps {
@@ -48,12 +48,12 @@ function getQuickQuestions(recommendation: CoachRecommendation): string[] {
         'What are the potential risks if I ignore this?',
         'Can you explain the data behind this recommendation?',
     ];
-    
+
     // Customize based on priority
     if (recommendation.priority === 'critical') {
         baseQuestions.unshift('What happens if I delay action?');
     }
-    
+
     return baseQuestions;
 }
 
@@ -80,10 +80,10 @@ Ask me anything about this situation, and I'll provide detailed guidance based o
 async function generateAIResponse(userMessage: string, recommendation: CoachRecommendation): Promise<string> {
     // Simulate API delay
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     // Simple mock responses based on keywords
     const lowerMessage = userMessage.toLowerCase();
-    
+
     if (lowerMessage.includes('first') || lowerMessage.includes('start')) {
         return `Great question! Here's what I recommend doing first:
 
@@ -95,21 +95,21 @@ async function generateAIResponse(userMessage: string, recommendation: CoachReco
 
 The most important thing is to start with the highest-impact action first, which is why I suggested "${recommendation.actions[0]?.label || 'taking action'}" as your primary next step.`;
     }
-    
+
     if (lowerMessage.includes('urgent') || lowerMessage.includes('quickly')) {
-        const urgencyLevel = recommendation.priority === 'critical' ? 'Very High' : 
-                            recommendation.priority === 'important' ? 'Moderate' : 'Low';
+        const urgencyLevel = recommendation.priority === 'critical' ? 'Very High' :
+            recommendation.priority === 'important' ? 'Moderate' : 'Low';
         return `The urgency level for this recommendation is **${urgencyLevel}**.
 
-${recommendation.priority === 'critical' ? 
-'This requires immediate attention - ideally within the next 24-48 hours. Delaying could lead to serious consequences for your business operations.' :
-recommendation.priority === 'important' ?
-'This should be addressed within the next week. While not an emergency, taking action soon will prevent the situation from escalating.' :
-'This can be scheduled for the next 2-4 weeks. It\'s a good opportunity for improvement but not time-critical.'}
+${recommendation.priority === 'critical' ?
+                'This requires immediate attention - ideally within the next 24-48 hours. Delaying could lead to serious consequences for your business operations.' :
+                recommendation.priority === 'important' ?
+                    'This should be addressed within the next week. While not an emergency, taking action soon will prevent the situation from escalating.' :
+                    'This can be scheduled for the next 2-4 weeks. It\'s a good opportunity for improvement but not time-critical.'}
 
 Would you like help creating an action plan to address this?`;
     }
-    
+
     if (lowerMessage.includes('risk') || lowerMessage.includes('ignore') || lowerMessage.includes('delay')) {
         return `If this recommendation isn't addressed, here are the potential risks:
 
@@ -130,7 +130,7 @@ Would you like help creating an action plan to address this?`;
 
 The good news is that acting now gives you the best outcome. Should I walk you through the specific steps?`;
     }
-    
+
     if (lowerMessage.includes('data') || lowerMessage.includes('numbers') || lowerMessage.includes('metrics')) {
         return `This recommendation is based on analysis of your business data:
 
@@ -147,7 +147,7 @@ The good news is that acting now gives you the best outcome. Should I walk you t
 
 Would you like to see a detailed breakdown of the specific metrics? I can show you charts and historical comparisons.`;
     }
-    
+
     // Default response
     return `That's an interesting question. Based on the recommendation "${recommendation.title}", here's what I can tell you:
 
@@ -170,21 +170,21 @@ export function TellMeMoreModal({
     const [isLoading, setIsLoading] = useState(false);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const viewport = useRef<HTMLDivElement>(null);
-    
+
     // Initialize chat when modal opens
     useEffect(() => {
         if (opened && recommendation && messages.length === 0) {
             setMessages([generateInitialMessage(recommendation)]);
         }
     }, [opened, recommendation]);
-    
+
     // Auto-scroll to bottom on new messages
     useEffect(() => {
         if (viewport.current) {
             viewport.current.scrollTo({ top: viewport.current.scrollHeight, behavior: 'smooth' });
         }
     }, [messages]);
-    
+
     // Reset on close
     const handleClose = () => {
         setMessages([]);
@@ -192,22 +192,22 @@ export function TellMeMoreModal({
         setIsLoading(false);
         onClose();
     };
-    
+
     // Send user message
     const handleSendMessage = async () => {
         if (!inputValue.trim() || !recommendation || isLoading) return;
-        
+
         const userMessage: ChatMessage = {
             id: `user-${Date.now()}`,
             role: 'user',
             content: inputValue,
             timestamp: new Date(),
         };
-        
+
         setMessages(prev => [...prev, userMessage]);
         setInputValue('');
         setIsLoading(true);
-        
+
         try {
             const aiResponse = await generateAIResponse(inputValue, recommendation);
             const assistantMessage: ChatMessage = {
@@ -223,16 +223,16 @@ export function TellMeMoreModal({
             setIsLoading(false);
         }
     };
-    
+
     // Send quick question
     const handleQuickQuestion = (question: string) => {
         setInputValue(question);
     };
-    
+
     if (!recommendation) return null;
-    
+
     const quickQuestions = getQuickQuestions(recommendation);
-    
+
     return (
         <Modal
             opened={opened}
@@ -253,13 +253,13 @@ export function TellMeMoreModal({
                         <Text size="sm" fw={600} lineClamp={1}>{recommendation.title}</Text>
                         <Badge size="sm" color={
                             recommendation.priority === 'critical' ? 'red' :
-                            recommendation.priority === 'important' ? 'orange' : 'blue'
+                                recommendation.priority === 'important' ? 'orange' : 'blue'
                         }>
                             {recommendation.priority}
                         </Badge>
                     </Group>
                 </Card>
-                
+
                 {/* Chat Messages */}
                 <ScrollArea
                     style={{ flex: 1 }}
@@ -293,7 +293,7 @@ export function TellMeMoreModal({
                                 </Text>
                             </Card>
                         ))}
-                        
+
                         {isLoading && (
                             <Card padding="md" style={{ backgroundColor: 'var(--mantine-color-gray-0)', maxWidth: '85%' }}>
                                 <Group gap="xs">
@@ -304,7 +304,7 @@ export function TellMeMoreModal({
                         )}
                     </Stack>
                 </ScrollArea>
-                
+
                 {/* Quick Questions (show only if no messages yet) */}
                 {messages.length === 1 && (
                     <Stack gap="xs">
@@ -323,7 +323,7 @@ export function TellMeMoreModal({
                         </Group>
                     </Stack>
                 )}
-                
+
                 {/* Input */}
                 <Group gap="xs">
                     <TextInput

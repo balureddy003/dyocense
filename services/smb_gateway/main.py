@@ -880,6 +880,48 @@ async def dismiss_recommendation(tenant_id: str, rec_id: str):
     return {"success": True, "dismissed_at": datetime.now()}
 
 
+class RecommendationFeedback(BaseModel):
+    """Feedback for a recommendation"""
+    helpful: bool = Field(..., description="Whether the recommendation was helpful")
+    reason: Optional[str] = Field(None, description="Reason for dismissal if not helpful")
+    comment: Optional[str] = Field(None, description="Optional free-form comment")
+
+
+@app.post("/v1/tenants/{tenant_id}/coach/recommendations/{rec_id}/feedback")
+async def submit_recommendation_feedback(
+    tenant_id: str,
+    rec_id: str,
+    feedback: RecommendationFeedback
+):
+    """
+    Submit feedback for a recommendation.
+    
+    Used for ML training to improve recommendation quality.
+    Stores feedback in PostgreSQL for analytics.
+    """
+    # TODO: Store in database with schema:
+    # CREATE TABLE recommendation_feedback (
+    #     id SERIAL PRIMARY KEY,
+    #     tenant_id VARCHAR(255) NOT NULL,
+    #     recommendation_id VARCHAR(255) NOT NULL,
+    #     helpful BOOLEAN NOT NULL,
+    #     reason VARCHAR(255),
+    #     comment TEXT,
+    #     created_at TIMESTAMP DEFAULT NOW()
+    # );
+    
+    logger.info(
+        f"Feedback received for recommendation {rec_id} (tenant: {tenant_id}): "
+        f"helpful={feedback.helpful}, reason={feedback.reason}"
+    )
+    
+    return {
+        "success": True,
+        "feedback_id": f"fb-{uuid.uuid4().hex[:8]}",
+        "submitted_at": datetime.now().isoformat(),
+    }
+
+
 @app.get("/v1/tenants/{tenant_id}/health-score/alerts", response_model=List[Alert])
 async def get_health_alerts(tenant_id: str):
     """Get critical alerts for health score header"""

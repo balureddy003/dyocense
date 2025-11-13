@@ -8,23 +8,22 @@
  * 4. Confirm and create
  */
 
-import { useState } from 'react';
 import {
-    Modal,
+    Badge,
     Button,
-    Stepper,
+    Card,
     Group,
-    TextInput,
-    Textarea,
+    Modal,
+    NumberInput,
     Select,
     Stack,
+    Stepper,
     Text,
-    Card,
-    Badge,
-    Checkbox,
-    NumberInput,
+    TextInput,
+    Textarea
 } from '@mantine/core';
 import { IconCheck, IconX } from '@tabler/icons-react';
+import { useState } from 'react';
 import type { CoachRecommendation } from '../coach-v6/types';
 
 interface CreateActionPlanModalProps {
@@ -62,7 +61,7 @@ export function CreateActionPlanModal({
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const [newTaskAssignee, setNewTaskAssignee] = useState('');
     const [newTaskHours, setNewTaskHours] = useState(1);
-    
+
     // Reset form when modal closes
     const handleClose = () => {
         setActive(0);
@@ -76,7 +75,7 @@ export function CreateActionPlanModal({
         setNewTaskHours(1);
         onClose();
     };
-    
+
     // Initialize form with recommendation data
     const initializeFromRecommendation = () => {
         if (recommendation) {
@@ -84,11 +83,11 @@ export function CreateActionPlanModal({
             setPlanDescription(recommendation.description);
             setPriority(
                 recommendation.priority === 'critical' ? 'high' :
-                recommendation.priority === 'important' ? 'medium' : 'low'
+                    recommendation.priority === 'important' ? 'medium' : 'low'
             );
         }
     };
-    
+
     // Add task to list
     const handleAddTask = () => {
         if (newTaskTitle.trim()) {
@@ -102,16 +101,16 @@ export function CreateActionPlanModal({
             setNewTaskHours(1);
         }
     };
-    
+
     // Remove task from list
     const handleRemoveTask = (index: number) => {
         setTasks(tasks.filter((_, i) => i !== index));
     };
-    
+
     // Submit action plan
     const handleSubmit = () => {
         if (!recommendation) return;
-        
+
         const plan: ActionPlan = {
             recommendationId: recommendation.id,
             title: planTitle,
@@ -120,27 +119,27 @@ export function CreateActionPlanModal({
             dueDate,
             tasks,
         };
-        
+
         onSubmit(plan);
         handleClose();
     };
-    
+
     const nextStep = () => {
         if (active === 0 && !planTitle.trim()) {
             return; // Require title
         }
         setActive((current) => (current < 3 ? current + 1 : current));
     };
-    
+
     const prevStep = () => setActive((current) => (current > 0 ? current - 1 : current));
-    
+
     if (!recommendation) return null;
-    
+
     // Initialize on first step
     if (active === 0 && !planTitle && opened) {
         initializeFromRecommendation();
     }
-    
+
     return (
         <Modal
             opened={opened}
@@ -159,14 +158,14 @@ export function CreateActionPlanModal({
                                     <Text fw={600} size="sm">Original Recommendation</Text>
                                     <Badge color={
                                         recommendation.priority === 'critical' ? 'red' :
-                                        recommendation.priority === 'important' ? 'orange' : 'blue'
+                                            recommendation.priority === 'important' ? 'orange' : 'blue'
                                     }>
                                         {recommendation.priority}
                                     </Badge>
                                 </Group>
                                 <Text size="sm" c="dimmed">{recommendation.description}</Text>
                             </Card>
-                            
+
                             <TextInput
                                 label="Action Plan Title"
                                 placeholder="Enter a descriptive title"
@@ -174,7 +173,7 @@ export function CreateActionPlanModal({
                                 onChange={(e) => setPlanTitle(e.currentTarget.value)}
                                 required
                             />
-                            
+
                             <Textarea
                                 label="Description"
                                 placeholder="Describe the action plan and expected outcomes"
@@ -184,7 +183,7 @@ export function CreateActionPlanModal({
                             />
                         </Stack>
                     </Stepper.Step>
-                    
+
                     {/* Step 2: Timeline & Priority */}
                     <Stepper.Step label="Timeline" description="Set deadline and priority">
                         <Stack gap="md" mt="md">
@@ -199,7 +198,7 @@ export function CreateActionPlanModal({
                                     { value: 'low', label: 'Low - Nice to have' },
                                 ]}
                             />
-                            
+
                             <TextInput
                                 label="Due Date"
                                 type="date"
@@ -207,13 +206,13 @@ export function CreateActionPlanModal({
                                 onChange={(e) => setDueDate(e.currentTarget.value)}
                                 min={new Date().toISOString().split('T')[0]}
                             />
-                            
+
                             <Text size="sm" c="dimmed">
                                 Estimated total effort: {tasks.reduce((sum, t) => sum + t.estimatedHours, 0)} hours
                             </Text>
                         </Stack>
                     </Stepper.Step>
-                    
+
                     {/* Step 3: Tasks */}
                     <Stepper.Step label="Tasks" description="Break down into tasks">
                         <Stack gap="md" mt="md">
@@ -243,7 +242,7 @@ export function CreateActionPlanModal({
                                 />
                                 <Button onClick={handleAddTask}>Add</Button>
                             </Group>
-                            
+
                             {tasks.length === 0 ? (
                                 <Text size="sm" c="dimmed" ta="center" py="xl">
                                     No tasks added yet. Add at least one task to continue.
@@ -274,12 +273,12 @@ export function CreateActionPlanModal({
                             )}
                         </Stack>
                     </Stepper.Step>
-                    
+
                     {/* Step 4: Confirm */}
                     <Stepper.Completed>
                         <Stack gap="md" mt="md">
                             <Text size="lg" fw={600}>Review & Confirm</Text>
-                            
+
                             <Card withBorder padding="md">
                                 <Stack gap="xs">
                                     <Group justify="space-between">
@@ -309,19 +308,19 @@ export function CreateActionPlanModal({
                         </Stack>
                     </Stepper.Completed>
                 </Stepper>
-                
+
                 <Group justify="space-between" mt="xl">
                     <Button variant="subtle" onClick={handleClose} leftSection={<IconX size={16} />}>
                         Cancel
                     </Button>
-                    
+
                     <Group gap="sm">
                         {active > 0 && active < 3 && (
                             <Button variant="default" onClick={prevStep}>
                                 Back
                             </Button>
                         )}
-                        
+
                         {active < 3 ? (
                             <Button
                                 onClick={nextStep}
