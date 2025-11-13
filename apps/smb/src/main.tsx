@@ -11,6 +11,7 @@ import { BusinessContextProvider } from './contexts/BusinessContext'
 import PlatformLayout from './layouts/PlatformLayout'
 import PublicLayout from './layouts/PublicLayout'
 import { Achievements } from './pages/Achievements'
+import { AdvancedAnalytics } from './pages/AdvancedAnalytics'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
 import Coach from './pages/Coach'
@@ -477,6 +478,16 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <Analytics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/advanced-analytics"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <AdvancedAnalytics />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }

@@ -2933,6 +2933,231 @@ async def get_category_breakdown(
 
 
 # ===================================
+# Phase 4: Advanced Analytics Endpoints
+# ===================================
+
+from packages.agent.analytics import (
+    create_analytics_engine,
+    TimeGranularity,
+    ComparisonPeriod,
+    TrendData,
+    MetricComparison,
+    Anomaly,
+)
+
+
+@app.get("/v1/tenants/{tenant_id}/analytics/trends")
+async def get_metric_trend(
+    tenant_id: str,
+    metric: str = Query(..., description="Metric name (e.g., revenue, health_score)"),
+    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
+    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    granularity: TimeGranularity = Query(TimeGranularity.DAILY, description="Time granularity"),
+):
+    """
+    Get historical trend for a metric with moving averages and forecasting.
+    
+    Phase 4: Advanced Analytics - Historical Trend Analysis
+    """
+    engine = create_analytics_engine()
+    
+    # Default to last 30 days if dates not provided
+    if not end_date:
+        end = datetime.now()
+    else:
+        end = datetime.fromisoformat(end_date)
+    
+    if not start_date:
+        start = end - timedelta(days=30)
+    else:
+        start = datetime.fromisoformat(start_date)
+    
+    trend_data = await engine.get_historical_trend(
+        tenant_id=tenant_id,
+        metric_name=metric,
+        start_date=start,
+        end_date=end,
+        granularity=granularity
+    )
+    
+    return {
+        "metric_name": trend_data.metric_name,
+        "data_points": trend_data.data_points,
+        "trend_direction": trend_data.trend_direction,
+        "change_percentage": trend_data.change_percentage,
+        "moving_average_7d": trend_data.moving_average_7d,
+        "moving_average_30d": trend_data.moving_average_30d,
+        "seasonality_detected": trend_data.seasonality_detected,
+        "forecast_next_period": trend_data.forecast_next_period,
+        "metadata": trend_data.metadata,
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/analytics/compare")
+async def compare_metric_periods(
+    tenant_id: str,
+    metric: str = Query(..., description="Metric name"),
+    current_start: str = Query(..., description="Current period start (ISO format)"),
+    current_end: str = Query(..., description="Current period end (ISO format)"),
+    comparison_type: ComparisonPeriod = Query(
+        ComparisonPeriod.PREVIOUS_PERIOD,
+        description="Comparison type: previous_period, previous_year, or average"
+    ),
+):
+    """
+    Compare metric across two time periods.
+    
+    Phase 4: Advanced Analytics - Period Comparison
+    
+    Examples:
+    - This week vs last week
+    - This month vs same month last year
+    - Current vs 90-day average
+    """
+    engine = create_analytics_engine()
+    
+    start = datetime.fromisoformat(current_start)
+    end = datetime.fromisoformat(current_end)
+    
+    comparison = await engine.compare_periods(
+        tenant_id=tenant_id,
+        metric_name=metric,
+        current_start=start,
+        current_end=end,
+        comparison_type=comparison_type
+    )
+    
+    return {
+        "metric_name": comparison.metric_name,
+        "current_period": comparison.current_period,
+        "comparison_period": comparison.comparison_period,
+        "absolute_change": comparison.absolute_change,
+        "percentage_change": comparison.percentage_change,
+        "is_improvement": comparison.is_improvement,
+        "context": comparison.context,
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/analytics/anomalies")
+async def detect_metric_anomalies(
+    tenant_id: str,
+    metric: str = Query(..., description="Metric name"),
+    threshold: float = Query(2.0, ge=1.0, le=4.0, description="Z-score threshold"),
+):
+    """
+    Detect anomalies in metric time series.
+    
+    Phase 4: Advanced Analytics - Anomaly Detection
+    
+    Uses Z-score method to flag unusual spikes or drops.
+    Threshold is number of standard deviations from mean.
+    """
+    engine = create_analytics_engine()
+    
+    anomalies = await engine.detect_anomalies(
+        tenant_id=tenant_id,
+        metric_name=metric,
+        threshold=threshold
+    )
+    
+    return {
+        "metric_name": metric,
+        "anomalies_count": len(anomalies),
+        "anomalies": [
+            {
+                "detected_at": a.detected_at.isoformat(),
+                "value": a.value,
+                "expected_value": a.expected_value,
+                "deviation_pct": a.deviation_pct,
+                "severity": a.severity,
+                "explanation": a.explanation,
+                "confidence": a.confidence,
+            }
+            for a in anomalies
+        ]
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/analytics/cohort")
+async def get_cohort_metrics(
+    tenant_id: str,
+    cohort_type: str = Query(..., description="Cohort type (e.g., business_type)"),
+    cohort_value: str = Query(..., description="Cohort value (e.g., restaurant)"),
+    metrics: str = Query(..., description="Comma-separated metric names"),
+    period_days: int = Query(30, ge=1, le=365, description="Period in days"),
+):
+    """
+    Calculate metrics for a specific cohort.
+    
+    Phase 4: Advanced Analytics - Cohort Analysis
+    
+    Useful for:
+    - Business type specific analysis
+    - Location-based analysis
+    - Customer segment analysis
+    """
+    engine = create_analytics_engine()
+    
+    cohort_definition = {cohort_type: cohort_value}
+    metric_list = [m.strip() for m in metrics.split(",")]
+    
+    results = await engine.calculate_cohort_metrics(
+        tenant_id=tenant_id,
+        cohort_definition=cohort_definition,
+        metrics=metric_list,
+        period_days=period_days
+    )
+    
+    return results
+
+
+@app.post("/v1/tenants/{tenant_id}/analytics/export/csv")
+async def export_analytics_csv(
+    tenant_id: str,
+    metrics: str = Query(..., description="Comma-separated metric names"),
+    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
+    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+):
+    """
+    Export analytics data to CSV format.
+    
+    Phase 4: Advanced Analytics - Data Export
+    
+    Returns CSV file with all selected metrics over the date range.
+    """
+    engine = create_analytics_engine()
+    
+    # Default to last 90 days
+    if not end_date:
+        end = datetime.now()
+    else:
+        end = datetime.fromisoformat(end_date)
+    
+    if not start_date:
+        start = end - timedelta(days=90)
+    else:
+        start = datetime.fromisoformat(start_date)
+    
+    metric_list = [m.strip() for m in metrics.split(",")]
+    
+    csv_data = await engine.export_to_csv(
+        tenant_id=tenant_id,
+        metrics=metric_list,
+        start_date=start,
+        end_date=end
+    )
+    
+    # Return as downloadable file
+    return StreamingResponse(
+        iter([csv_data]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=analytics_{tenant_id}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
+        }
+    )
+
+
+# ===================================
 # Decision Ledger Endpoints
 # ===================================
 
