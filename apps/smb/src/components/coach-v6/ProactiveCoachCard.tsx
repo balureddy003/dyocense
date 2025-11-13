@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { ActionIcon, Badge, Button, Card, Group, Stack, Text, ThemeIcon } from '@mantine/core';
-import { IconAlertCircle, IconArrowRight, IconBulb, IconCheck, IconInfoCircle, IconSparkles, IconX } from '@tabler/icons-react';
+import { IconAlertCircle, IconArrowRight, IconBulb, IconCheck, IconInfoCircle, IconSparkles, IconX, IconClipboardList, IconChartBar, IconMessageCircle } from '@tabler/icons-react';
+import { CreateActionPlanModal, ShowDetailsModal, TellMeMoreModal } from '../action-flows';
 import type { ProactiveCoachCardProps } from './types';
 
 /**
@@ -15,6 +17,11 @@ export function ProactiveCoachCard({
     loading = false,
 }: ProactiveCoachCardProps) {
     const { id, priority, title, description, reasoning, actions, dismissible, generatedAt } = recommendation;
+
+    // Modal state
+    const [showActionPlan, setShowActionPlan] = useState(false);
+    const [showDetails, setShowDetails] = useState(false);
+    const [showChat, setShowChat] = useState(false);
 
     // Priority styling
     const getPriorityColor = () => {
@@ -163,7 +170,59 @@ export function ProactiveCoachCard({
                         ))}
                     </Stack>
                 )}
+
+                {/* Action Flow Buttons */}
+                <Group gap="xs" mt="md">
+                    <Button
+                        size="xs"
+                        variant="default"
+                        leftSection={<IconClipboardList size={14} />}
+                        onClick={() => setShowActionPlan(true)}
+                    >
+                        Create Action Plan
+                    </Button>
+                    <Button
+                        size="xs"
+                        variant="default"
+                        leftSection={<IconChartBar size={14} />}
+                        onClick={() => setShowDetails(true)}
+                    >
+                        Show Details
+                    </Button>
+                    <Button
+                        size="xs"
+                        variant="default"
+                        leftSection={<IconMessageCircle size={14} />}
+                        onClick={() => setShowChat(true)}
+                    >
+                        Tell Me More
+                    </Button>
+                </Group>
             </Stack>
+
+            {/* Action Flow Modals */}
+            <CreateActionPlanModal
+                opened={showActionPlan}
+                onClose={() => setShowActionPlan(false)}
+                recommendation={recommendation}
+                onSubmit={(plan) => {
+                    console.log('Action plan created:', plan);
+                    // TODO: Send to API to create goals/tasks
+                    setShowActionPlan(false);
+                }}
+            />
+            
+            <ShowDetailsModal
+                opened={showDetails}
+                onClose={() => setShowDetails(false)}
+                recommendation={recommendation}
+            />
+            
+            <TellMeMoreModal
+                opened={showChat}
+                onClose={() => setShowChat(false)}
+                recommendation={recommendation}
+            />
         </Card>
     );
 }
