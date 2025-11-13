@@ -3543,6 +3543,340 @@ async def delete_report_schedule(
 
 
 # ===================================
+# Custom Metrics & KPI Endpoints
+# ===================================
+
+from packages.agent.custom_metrics import (
+    create_custom_metric_engine,
+    MetricType,
+    MetricCalculationResult
+)
+
+
+@app.post("/v1/tenants/{tenant_id}/metrics/custom")
+async def create_custom_metric(
+    tenant_id: str,
+    name: str = Query(..., description="Metric name"),
+    description: str = Query(..., description="Metric description"),
+    metric_type: MetricType = Query(MetricType.CALCULATED, description="Metric type"),
+    formula: str = Query(..., description="Mathematical formula"),
+    unit: str = Query(..., description="Unit of measurement"),
+    data_sources: str = Query(..., description="Comma-separated data source IDs"),
+    thresholds: Optional[str] = Query(None, description="JSON array of thresholds")
+):
+    """
+    Create a new custom metric with formula and thresholds.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    
+    Allows users to define custom business metrics with:
+    - Mathematical formulas using existing data sources
+    - Threshold-based alerts (info, warning, critical)
+    - Flexible units and formatting
+    """
+    engine = create_custom_metric_engine()
+    
+    # Parse data sources
+    source_list = [s.strip() for s in data_sources.split(",")]
+    
+    # Parse thresholds if provided
+    threshold_list = None
+    if thresholds:
+        import json
+        try:
+            threshold_list = json.loads(thresholds)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid thresholds JSON")
+    
+    try:
+        metric = await engine.create_metric(
+            tenant_id=tenant_id,
+            name=name,
+            description=description,
+            metric_type=metric_type,
+            formula=formula,
+            unit=unit,
+            data_sources=source_list,
+            thresholds=threshold_list,
+            created_by="user"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    return {
+        "id": metric.id,
+        "name": metric.name,
+        "description": metric.description,
+        "metric_type": metric.metric_type,
+        "formula": metric.formula,
+        "unit": metric.unit,
+        "data_sources": metric.data_sources,
+        "thresholds_count": len(metric.thresholds),
+        "created_at": metric.created_at.isoformat()
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/custom")
+async def list_custom_metrics(
+    tenant_id: str,
+    enabled_only: bool = Query(True, description="Only return enabled metrics")
+):
+    """
+    List all custom metrics for a tenant.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    """
+    engine = create_custom_metric_engine()
+    
+    metrics = await engine.list_metrics(
+        tenant_id=tenant_id,
+        enabled_only=enabled_only
+    )
+    
+    return {
+        "tenant_id": tenant_id,
+        "count": len(metrics),
+        "metrics": metrics
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/custom/{metric_id}")
+async def get_custom_metric(
+    tenant_id: str,
+    metric_id: str
+):
+    """
+    Get a specific custom metric with full details.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    """
+    engine = create_custom_metric_engine()
+    
+    metric = await engine.get_metric(tenant_id=tenant_id, metric_id=metric_id)
+    
+    if not metric:
+        raise HTTPException(status_code=404, detail="Metric not found")
+    
+    return {
+        "id": metric.id,
+        "name": metric.name,
+        "description": metric.description,
+        "metric_type": metric.metric_type,
+        "formula": metric.formula,
+        "unit": metric.unit,
+        "data_sources": metric.data_sources,
+        "thresholds": [
+            {
+                "comparison": t.comparison.value,
+                "value": t.value,
+                "severity": t.severity.value,
+                "message": t.message
+            }
+            for t in metric.thresholds
+        ],
+        "enabled": metric.enabled,
+        "created_at": metric.created_at.isoformat(),
+        "updated_at": metric.updated_at.isoformat(),
+        "created_by": metric.created_by
+    }
+
+
+@app.put("/v1/tenants/{tenant_id}/metrics/custom/{metric_id}")
+async def update_custom_metric(
+    tenant_id: str,
+    metric_id: str,
+    name: Optional[str] = Query(None, description="New metric name"),
+    description: Optional[str] = Query(None, description="New description"),
+    formula: Optional[str] = Query(None, description="New formula"),
+    enabled: Optional[bool] = Query(None, description="Enable/disable metric")
+):
+    """
+    Update an existing custom metric.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    """
+    engine = create_custom_metric_engine()
+    
+    updates = {}
+    if name is not None:
+        updates["name"] = name
+    if description is not None:
+        updates["description"] = description
+    if formula is not None:
+        updates["formula"] = formula
+    if enabled is not None:
+        updates["enabled"] = enabled
+    
+    try:
+        metric = await engine.update_metric(
+            tenant_id=tenant_id,
+            metric_id=metric_id,
+            updates=updates
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    if not metric:
+        raise HTTPException(status_code=404, detail="Metric not found")
+    
+    return {
+        "id": metric.id,
+        "name": metric.name,
+        "enabled": metric.enabled,
+        "updated_at": metric.updated_at.isoformat()
+    }
+
+
+@app.delete("/v1/tenants/{tenant_id}/metrics/custom/{metric_id}")
+async def delete_custom_metric(
+    tenant_id: str,
+    metric_id: str
+):
+    """
+    Delete a custom metric.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    """
+    engine = create_custom_metric_engine()
+    
+    success = await engine.delete_metric(tenant_id=tenant_id, metric_id=metric_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Metric not found")
+    
+    return {"message": "Metric deleted successfully"}
+
+
+@app.post("/v1/tenants/{tenant_id}/metrics/custom/{metric_id}/calculate")
+async def calculate_custom_metric(
+    tenant_id: str,
+    metric_id: str,
+    data: Optional[str] = Query(None, description="JSON object with data values")
+):
+    """
+    Calculate a custom metric value.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    
+    Returns calculated value and any triggered threshold alerts.
+    """
+    engine = create_custom_metric_engine()
+    
+    # Parse data if provided
+    data_dict = None
+    if data:
+        import json
+        try:
+            data_dict = json.loads(data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid data JSON")
+    
+    try:
+        result = await engine.calculate_metric(
+            tenant_id=tenant_id,
+            metric_id=metric_id,
+            data=data_dict
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    return {
+        "metric_id": result.metric_id,
+        "metric_name": result.metric_name,
+        "value": result.value,
+        "unit": result.unit,
+        "calculated_at": result.calculated_at.isoformat(),
+        "triggered_thresholds": result.triggered_thresholds,
+        "data_points": result.data_points
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/templates")
+async def get_metric_templates(
+    tenant_id: str,
+    category: Optional[str] = Query(None, description="Filter by category"),
+    industry: Optional[str] = Query(None, description="Filter by industry")
+):
+    """
+    Get available KPI templates.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    
+    Returns pre-built templates for common business metrics:
+    - Financial: Gross margin, CLV, break-even point
+    - Operational: Inventory turnover, labor cost %, prime cost
+    - Marketing: CAC, conversion rates
+    - Sales: Revenue per employee, table turnover
+    """
+    engine = create_custom_metric_engine()
+    
+    templates = await engine.get_templates(category=category, industry=industry)
+    
+    return {
+        "count": len(templates),
+        "categories": ["financial", "operational", "marketing", "sales"],
+        "industries": ["restaurant", "retail", None],
+        "templates": templates
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/metrics/templates/{template_id}/create")
+async def create_metric_from_template(
+    tenant_id: str,
+    template_id: str,
+    custom_name: Optional[str] = Query(None, description="Custom metric name")
+):
+    """
+    Create a custom metric from a template.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    
+    Instantiates a pre-built KPI template with recommended thresholds.
+    """
+    engine = create_custom_metric_engine()
+    
+    try:
+        metric = await engine.create_from_template(
+            tenant_id=tenant_id,
+            template_id=template_id,
+            custom_name=custom_name,
+            created_by="user"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    return {
+        "id": metric.id,
+        "name": metric.name,
+        "description": metric.description,
+        "formula": metric.formula,
+        "unit": metric.unit,
+        "data_sources": metric.data_sources,
+        "thresholds_count": len(metric.thresholds),
+        "created_at": metric.created_at.isoformat()
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/metrics/data-sources")
+async def get_available_data_sources(tenant_id: str):
+    """
+    Get list of available data sources for building metrics.
+    
+    Phase 4: Custom Metrics & KPI Builder - Task 4.4
+    
+    Returns all data points that can be used in custom metric formulas.
+    """
+    engine = create_custom_metric_engine()
+    
+    sources = await engine.get_available_data_sources(tenant_id=tenant_id)
+    
+    return {
+        "count": len(sources),
+        "data_sources": sources
+    }
+
+
+# ===================================
 # Decision Ledger Endpoints
 # ===================================
 

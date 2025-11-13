@@ -22,6 +22,7 @@ import ConnectorMarketplace from './pages/ConnectorMarketplace'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
+import { CustomMetrics } from './pages/CustomMetrics'
 import Executor from './pages/Executor'
 import ForgotPassword from './pages/ForgotPassword'
 import Goals from './pages/Goals'
@@ -499,6 +500,16 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <Reports />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/custom-metrics"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CustomMetrics />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
