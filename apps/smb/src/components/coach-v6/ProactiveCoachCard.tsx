@@ -1,0 +1,169 @@
+import { ActionIcon, Badge, Button, Card, Group, Stack, Text, ThemeIcon } from '@mantine/core';
+import { IconAlertCircle, IconArrowRight, IconBulb, IconCheck, IconInfoCircle, IconSparkles, IconX } from '@tabler/icons-react';
+import type { ProactiveCoachCardProps } from './types';
+
+/**
+ * Proactive Coach Card Component
+ * 
+ * Displays AI-generated recommendations with actionable steps.
+ * Priority-based styling (critical/important/suggestion).
+ */
+export function ProactiveCoachCard({
+    recommendation,
+    onTakeAction,
+    onDismiss,
+    loading = false,
+}: ProactiveCoachCardProps) {
+    const { id, priority, title, description, reasoning, actions, dismissible, generatedAt } = recommendation;
+
+    // Priority styling
+    const getPriorityColor = () => {
+        switch (priority) {
+            case 'critical':
+                return 'red';
+            case 'important':
+                return 'yellow';
+            case 'suggestion':
+                return 'blue';
+            default:
+                return 'gray';
+        }
+    };
+
+    const getPriorityIcon = () => {
+        switch (priority) {
+            case 'critical':
+                return <IconAlertCircle size={20} />;
+            case 'important':
+                return <IconInfoCircle size={20} />;
+            case 'suggestion':
+                return <IconBulb size={20} />;
+            default:
+                return <IconSparkles size={20} />;
+        }
+    };
+
+    const getPriorityLabel = () => {
+        switch (priority) {
+            case 'critical':
+                return 'Urgent';
+            case 'important':
+                return 'Important';
+            case 'suggestion':
+                return 'Suggested';
+            default:
+                return 'Info';
+        }
+    };
+
+    return (
+        <Card
+            shadow="sm"
+            padding="lg"
+            radius="md"
+            withBorder
+            style={{
+                position: 'relative',
+                borderLeft: priority === 'critical' ? '4px solid var(--mantine-color-red-6)' : undefined,
+            }}
+        >
+            {/* Header */}
+            <Group justify="space-between" align="flex-start" mb="md">
+                <Group gap="xs" align="center">
+                    <ThemeIcon color={getPriorityColor()} variant="light" size="md">
+                        {getPriorityIcon()}
+                    </ThemeIcon>
+                    <div>
+                        <Group gap={8}>
+                            <Badge size="xs" color={getPriorityColor()} variant="light">
+                                {getPriorityLabel()}
+                            </Badge>
+                            <Text size="xs" c="dimmed">
+                                {new Date(generatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </Text>
+                        </Group>
+                    </div>
+                </Group>
+
+                {dismissible && (
+                    <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="sm"
+                        onClick={() => onDismiss(id)}
+                    >
+                        <IconX size={14} />
+                    </ActionIcon>
+                )}
+            </Group>
+
+            {/* Content */}
+            <Stack gap="md">
+                <div>
+                    <Text size="md" fw={600} mb={4}>
+                        {title}
+                    </Text>
+                    <Text size="sm" c="dimmed">
+                        {description}
+                    </Text>
+                </div>
+
+                {reasoning && (
+                    <Card padding="sm" bg="gray.0" radius="sm">
+                        <Group gap={6} align="flex-start">
+                            <IconSparkles size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+                            <Text size="xs" c="dimmed" style={{ flex: 1 }}>
+                                {reasoning}
+                            </Text>
+                        </Group>
+                    </Card>
+                )}
+
+                {/* Actions */}
+                {actions.length > 0 && (
+                    <Stack gap="xs">
+                        <Text size="xs" fw={600} tt="uppercase" c="dimmed" style={{ letterSpacing: '0.5px' }}>
+                            Recommended Actions
+                        </Text>
+                        {actions.map((action, index) => (
+                            <Card key={index} padding="sm" bg="blue.0" radius="sm" withBorder>
+                                <Group justify="space-between" align="flex-start">
+                                    <div style={{ flex: 1 }}>
+                                        <Group gap={6} mb={4}>
+                                            {action.completed && (
+                                                <ThemeIcon color="green" size="xs" radius="xl">
+                                                    <IconCheck size={10} />
+                                                </ThemeIcon>
+                                            )}
+                                            <Text
+                                                size="sm"
+                                                fw={500}
+                                                style={{ textDecoration: action.completed ? 'line-through' : 'none' }}
+                                            >
+                                                {action.label}
+                                            </Text>
+                                        </Group>
+                                        {action.description && (
+                                            <Text size="xs" c="dimmed" ml={action.completed ? 22 : 0}>
+                                                {action.description}
+                                            </Text>
+                                        )}
+                                    </div>
+                                    <Button
+                                        size="xs"
+                                        variant="light"
+                                        rightSection={<IconArrowRight size={12} />}
+                                        onClick={() => onTakeAction(action)}
+                                        disabled={action.completed}
+                                    >
+                                        {action.buttonText}
+                                    </Button>
+                                </Group>
+                            </Card>
+                        ))}
+                    </Stack>
+                )}
+            </Stack>
+        </Card>
+    );
+}
