@@ -30,6 +30,7 @@ services/smb_gateway/
 ### 1. Template System (`coach_templates.py`)
 
 **RecommendationTemplate** - Core template structure:
+
 ```python
 class RecommendationTemplate:
     trigger: TemplateTrigger           # What triggers this recommendation
@@ -43,6 +44,7 @@ class RecommendationTemplate:
 ```
 
 **Key Features:**
+
 - Declarative template definitions
 - Data-driven trigger evaluation
 - Dynamic priority calculation
@@ -52,12 +54,14 @@ class RecommendationTemplate:
 ### 2. GPT-4 Integration (`gpt4_recommendations.py`)
 
 **GPT4RecommendationGenerator** - Natural language generation:
+
 - Contextual recommendation generation
 - Business-specific insights
 - Personalized tone and language
 - Falls back to templates if GPT-4 unavailable
 
 **RecommendationEnricher** - Enhance recommendations:
+
 - Enrich template-based recommendations with GPT-4
 - Generate follow-up insights for chat conversations
 - Maintain consistency while adding personality
@@ -65,6 +69,7 @@ class RecommendationTemplate:
 ### 3. Recommendations Service (`recommendations_service.py`)
 
 Enhanced service with template support:
+
 ```python
 service = CoachRecommendationsService(
     tenant_id="tenant-123",
@@ -243,6 +248,7 @@ custom_template = RecommendationTemplate(
 Each template specifies required data fields. The service maps connector data to these fields:
 
 ### Cash Flow Data
+
 - `cash_balance`: Current bank balance
 - `burn_rate`: Daily/weekly burn rate
 - `days_until_negative`: Projected days until negative balance
@@ -252,6 +258,7 @@ Each template specifies required data fields. The service maps connector data to
 - `overdue_days_avg`: Average days overdue
 
 ### Inventory Data
+
 - `aging_items_count`: Number of aging items
 - `aging_days`: Days in inventory threshold
 - `capital_tied`: Dollar value in aging inventory
@@ -260,6 +267,7 @@ Each template specifies required data fields. The service maps connector data to
 - `slow_moving_count`: Number of slow-moving items
 
 ### Revenue Data
+
 - `current_revenue`: Current period revenue
 - `previous_revenue`: Previous period revenue
 - `revenue_change_percent`: Percent change
@@ -267,6 +275,7 @@ Each template specifies required data fields. The service maps connector data to
 - `seasonal_uplift_potential`: Seasonal growth opportunity
 
 ### Operations Data
+
 - `overdue_tasks`: Number of overdue tasks
 - `completion_rate`: Task completion percentage
 - `capacity_utilization`: Percent of capacity used
@@ -275,11 +284,13 @@ Each template specifies required data fields. The service maps connector data to
 ## GPT-4 Configuration
 
 Set environment variable for GPT-4:
+
 ```bash
 export OPENAI_API_KEY="sk-your-key"
 ```
 
 Or pass directly:
+
 ```python
 from packages.agent.gpt4_recommendations import GPT4RecommendationGenerator
 
@@ -300,6 +311,7 @@ Templates use Python expressions for priority calculation:
 ## Testing
 
 Test template matching:
+
 ```python
 from packages.agent.coach_templates import get_triggered_templates
 
@@ -357,6 +369,7 @@ openai>=1.0.0
 ```
 
 Install:
+
 ```bash
 pip install pydantic
 pip install openai  # Optional
