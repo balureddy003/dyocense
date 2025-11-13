@@ -16,8 +16,9 @@ import {
     ProactiveCoachCard,
     TasksColumn,
 } from '../components/coach-v6';
-import * as api from '../lib/api';
+import { useNotificationStore } from '../components/notifications';
 import { useWebSocket } from '../hooks/useWebSocket';
+import * as api from '../lib/api';
 
 /**
  * Coach V6 - Fitness Dashboard Paradigm
@@ -47,6 +48,9 @@ export default function CoachV6() {
     const tenantId = localStorage.getItem('tenantId') || 'tenant-demo';
     const token = localStorage.getItem('token') || undefined;
 
+    // Notification store for in-app notifications
+    const { addNotification } = useNotificationStore();
+
     // Initialize WebSocket connection for real-time updates
     const { isConnected: wsConnected, error: wsError } = useWebSocket(
         {
@@ -61,9 +65,39 @@ export default function CoachV6() {
                 setPreviousScore(data.previousScore);
                 setAlerts(data.alerts as any);
                 setSignals(data.signals as any);
+
+                // Show notification for significant score changes
+                const scoreDiff = data.score - data.previousScore;
+                if (Math.abs(scoreDiff) >= 5) {
+                    addNotification({
+                        type: 'info',
+                        priority: Math.abs(scoreDiff) >= 10 ? 'important' : 'normal',
+                        title: `Health Score ${scoreDiff > 0 ? 'Improved' : 'Declined'}`,
+                        message: `Your business health score ${scoreDiff > 0 ? 'increased' : 'decreased'} from ${data.previousScore} to ${data.score}`,
+                        autoDismissMs: 5000,
+                    });
+                }
             },
             onNewRecommendation: (data) => {
                 console.log('[Coach V6] New recommendation:', data);
+
+                // Add notification for new recommendation
+                addNotification({
+                    type: 'recommendation',
+                    priority: data.priority === 'critical' ? 'critical' : data.priority === 'important' ? 'important' : 'normal',
+                    title: 'New Recommendation',
+                    message: data.title,
+                    action: {
+                        label: 'View',
+                        onClick: () => {
+                            // Scroll to recommendations section
+                            document.getElementById('recommendations-section')?.scrollIntoView({ behavior: 'smooth' });
+                        },
+                    },
+                    autoDismissMs: data.priority === 'critical' ? 0 : 8000, // Critical stays until dismissed
+                    metadata: { recommendationId: data.id },
+                });
+
                 // Add new recommendation to top of list
                 setRecommendations((prev) => [
                     {
@@ -85,6 +119,16 @@ export default function CoachV6() {
             },
             onTaskCompleted: (data) => {
                 console.log('[Coach V6] Task completed:', data);
+
+                // Show notification for task completion
+                addNotification({
+                    type: 'task',
+                    priority: 'normal',
+                    title: 'Task Completed! 🎉',
+                    message: data.taskTitle,
+                    autoDismissMs: 5000,
+                });
+
                 // Update task status in state
                 setTasks((prev) =>
                     prev.map((task) =>
@@ -96,6 +140,27 @@ export default function CoachV6() {
             },
             onGoalProgressUpdate: (data) => {
                 console.log('[Coach V6] Goal progress update:', data);
+
+                // Show notification for significant progress (milestone achieved)
+                if (data.progress >= 100) {
+                    addNotification({
+                        type: 'goal',
+                        priority: 'important',
+                        title: 'Goal Achieved! 🏆',
+                        message: data.goalTitle,
+                        autoDismissMs: 10000,
+                    });
+                } else if (data.progress >= 50 && data.progress < 60) {
+                    // Milestone: 50% complete
+                    addNotification({
+                        type: 'goal',
+                        priority: 'normal',
+                        title: 'Halfway There!',
+                        message: `${data.goalTitle} is ${Math.round(data.progress)}% complete`,
+                        autoDismissMs: 5000,
+                    });
+                }
+
                 // Update goal progress in state
                 setGoals((prev) =>
                     prev.map((goal) =>
@@ -508,67 +573,72 @@ export default function CoachV6() {
     }
 
     return (
-        <Container size="xl" py="md">
-            <Stack gap="lg">
-                {/* Health Score Header - Always visible, sticky */}
-                <HealthScoreHeader
-                    score={healthScore}
-                    previousScore={previousScore}
-                    trend={healthScore > previousScore ? 'up' : healthScore < previousScore ? 'down' : 'stable'}
-                    changeAmount={Math.abs(healthScore - previousScore)}
-                    criticalAlerts={alerts}
-                    positiveSignals={signals}
-                    onViewReport={handleViewReport}
-                    onAskCoach={handleAskCoach}
-                    loading={loading}
-                />
+        <>
+            {/* Notification Center - Fixed position bell icon + toast notifications */}
+            <NotificationCenter position="top-right" showToasts maxToasts={3} />
 
-                {/* Key Metrics Grid */}
-                <MetricsGrid metrics={metrics} loading={loading} onMetricClick={handleMetricClick} />
+            <Container size="xl" py="md">
+                <Stack gap="lg">
+                    {/* Health Score Header - Always visible, sticky */}
+                    <HealthScoreHeader
+                        score={healthScore}
+                        previousScore={previousScore}
+                        trend={healthScore > previousScore ? 'up' : healthScore < previousScore ? 'down' : 'stable'}
+                        changeAmount={Math.abs(healthScore - previousScore)}
+                        criticalAlerts={alerts}
+                        positiveSignals={signals}
+                        onViewReport={handleViewReport}
+                        onAskCoach={handleAskCoach}
+                        loading={loading}
+                    />
 
-                {/* Three-column layout: Coach | Goals & Tasks | Evidence */}
-                <div
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: '360px 1fr 360px',
-                        gap: '24px',
-                    }}
-                >
-                    {/* Left: Proactive Coach */}
-                    <div>
-                        <Stack gap="md">
-                            {recommendations.map((rec) => (
-                                <ProactiveCoachCard
-                                    key={rec.id}
-                                    recommendation={rec}
-                                    onTakeAction={handleTakeAction}
-                                    onDismiss={handleDismissRecommendation}
+                    {/* Key Metrics Grid */}
+                    <MetricsGrid metrics={metrics} loading={loading} onMetricClick={handleMetricClick} />
+
+                    {/* Three-column layout: Coach | Goals & Tasks | Evidence */}
+                    <div
+                        style={{
+                            display: 'grid',
+                            gridTemplateColumns: '360px 1fr 360px',
+                            gap: '24px',
+                        }}
+                    >
+                        {/* Left: Proactive Coach */}
+                        <div id="recommendations-section">
+                            <Stack gap="md">
+                                {recommendations.map((rec) => (
+                                    <ProactiveCoachCard
+                                        key={rec.id}
+                                        recommendation={rec}
+                                        onTakeAction={handleTakeAction}
+                                        onDismiss={handleDismissRecommendation}
+                                        loading={loading}
+                                    />
+                                ))}
+                            </Stack>
+                        </div>
+
+                        {/* Center: Goals & Tasks */}
+                        <div>
+                            <Stack gap="xl">
+                                <GoalsColumn goals={goals} loading={loading} onGoalClick={handleGoalClick} />
+                                <TasksColumn
+                                    tasks={tasks}
                                     loading={loading}
+                                    onTaskClick={handleTaskClick}
+                                    onToggleComplete={handleToggleComplete}
                                 />
-                            ))}
-                        </Stack>
-                    </div>
+                            </Stack>
+                        </div>
 
-                    {/* Center: Goals & Tasks */}
-                    <div>
-                        <Stack gap="xl">
-                            <GoalsColumn goals={goals} loading={loading} onGoalClick={handleGoalClick} />
-                            <TasksColumn
-                                tasks={tasks}
-                                loading={loading}
-                                onTaskClick={handleTaskClick}
-                                onToggleComplete={handleToggleComplete}
-                            />
-                        </Stack>
+                        {/* Right: Evidence (TODO: Implement in Phase 2) */}
+                        <div>
+                            {/* Placeholder for evidence panel */}
+                            {/* Will contain: Recent activity, data sources, insights history */}
+                        </div>
                     </div>
-
-                    {/* Right: Evidence (TODO: Implement in Phase 2) */}
-                    <div>
-                        {/* Placeholder for evidence panel */}
-                        {/* Will contain: Recent activity, data sources, insights history */}
-                    </div>
-                </div>
-            </Stack>
-        </Container>
+                </Stack>
+            </Container>
+        </>
     );
 }
