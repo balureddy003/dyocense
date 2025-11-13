@@ -3877,6 +3877,177 @@ async def get_available_data_sources(tenant_id: str):
 
 
 # ===================================
+# Forecasting & Predictive Analytics Endpoints
+# ===================================
+
+from packages.agent.forecasting import (
+    create_forecasting_engine,
+    ForecastMethod,
+    AnomalyMethod
+)
+
+
+@app.post("/v1/tenants/{tenant_id}/forecast/{metric_name}")
+async def forecast_metric(
+    tenant_id: str,
+    metric_name: str,
+    periods: int = Query(7, ge=1, le=90, description="Number of periods to forecast"),
+    method: ForecastMethod = Query(ForecastMethod.AUTO, description="Forecasting method"),
+    confidence_level: float = Query(0.95, ge=0.5, le=0.99, description="Confidence level")
+):
+    """
+    Generate forecast for a metric.
+    
+    Phase 4: Advanced Forecasting Engine - Task 4.5
+    
+    Predicts future values using various forecasting methods:
+    - LINEAR: Simple linear regression (good for steady trends)
+    - MOVING_AVERAGE: Average of recent values (good for stable data)
+    - EXPONENTIAL_SMOOTHING: Weighted average (adapts to changes)
+    - SEASONAL: Accounts for recurring patterns
+    - AUTO: Automatically selects best method
+    """
+    engine = create_forecasting_engine()
+    
+    try:
+        result = await engine.forecast_metric(
+            tenant_id=tenant_id,
+            metric_name=metric_name,
+            periods=periods,
+            method=method,
+            confidence_level=confidence_level
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    return {
+        "metric_name": result.metric_name,
+        "method": result.method,
+        "forecast_periods": result.forecast_periods,
+        "forecasted_values": result.forecasted_values,
+        "confidence_intervals": result.confidence_intervals,
+        "accuracy_metrics": result.accuracy_metrics,
+        "metadata": result.metadata
+    }
+
+
+@app.get("/v1/tenants/{tenant_id}/seasonality/{metric_name}")
+async def detect_seasonality(
+    tenant_id: str,
+    metric_name: str
+):
+    """
+    Detect seasonality patterns in time series data.
+    
+    Phase 4: Advanced Forecasting Engine - Task 4.5
+    
+    Analyzes data for recurring patterns:
+    - Weekly: 7-day patterns
+    - Monthly: 30-day patterns
+    - Returns strength score (0-1) and decomposition
+    """
+    engine = create_forecasting_engine()
+    
+    result = await engine.detect_seasonality(
+        tenant_id=tenant_id,
+        metric_name=metric_name
+    )
+    
+    return {
+        "metric_name": result.metric_name,
+        "has_seasonality": result.has_seasonality,
+        "period": result.period,
+        "strength": result.strength,
+        "seasonal_components": result.seasonal_components[:30],  # Limit response size
+        "trend_components": result.trend_components[:30],
+        "residual_components": result.residual_components[:30]
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/anomalies/{metric_name}")
+async def detect_anomalies(
+    tenant_id: str,
+    metric_name: str,
+    method: AnomalyMethod = Query(AnomalyMethod.ZSCORE, description="Detection method"),
+    sensitivity: float = Query(3.0, ge=1.0, le=5.0, description="Sensitivity threshold")
+):
+    """
+    Detect anomalies in time series data.
+    
+    Phase 4: Advanced Forecasting Engine - Task 4.5
+    
+    Identifies unusual data points using:
+    - ZSCORE: Statistical standard deviation method
+    - IQR: Interquartile range method
+    
+    Higher sensitivity = fewer anomalies detected
+    """
+    engine = create_forecasting_engine()
+    
+    result = await engine.detect_anomalies(
+        tenant_id=tenant_id,
+        metric_name=metric_name,
+        method=method,
+        sensitivity=sensitivity
+    )
+    
+    return {
+        "metric_name": result.metric_name,
+        "method": result.method,
+        "anomaly_count": result.anomaly_count,
+        "anomaly_percentage": result.anomaly_percentage,
+        "anomalies": result.anomalies
+    }
+
+
+@app.post("/v1/tenants/{tenant_id}/scenarios")
+async def run_scenario(
+    tenant_id: str,
+    scenario_name: str = Query(..., description="Scenario name"),
+    assumptions: str = Query(..., description="JSON object with assumptions")
+):
+    """
+    Run what-if scenario analysis.
+    
+    Phase 4: Advanced Forecasting Engine - Task 4.5
+    
+    Predicts outcomes based on hypothetical changes:
+    - Revenue growth scenarios
+    - Cost reduction impacts
+    - Volume changes
+    
+    Example assumptions:
+    {
+        "revenue_growth": 0.15,
+        "customers_change": 100,
+        "avg_order_value_growth": 0.10
+    }
+    """
+    engine = create_forecasting_engine()
+    
+    # Parse assumptions
+    import json
+    try:
+        assumptions_dict = json.loads(assumptions)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid assumptions JSON")
+    
+    result = await engine.run_scenario(
+        tenant_id=tenant_id,
+        scenario_name=scenario_name,
+        assumptions=assumptions_dict
+    )
+    
+    return {
+        "scenario_name": result.scenario_name,
+        "assumptions": result.assumptions,
+        "predicted_outcomes": result.predicted_outcomes,
+        "comparison_to_baseline": result.comparison_to_baseline,
+        "confidence_level": result.confidence_level
+    }
+
+
+# ===================================
 # Decision Ledger Endpoints
 # ===================================
 

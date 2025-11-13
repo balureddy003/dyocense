@@ -24,6 +24,7 @@ import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
 import { CustomMetrics } from './pages/CustomMetrics'
 import Executor from './pages/Executor'
+import { Forecasting } from './pages/Forecasting'
 import ForgotPassword from './pages/ForgotPassword'
 import Goals from './pages/Goals'
 import Home from './pages/Home'
@@ -510,6 +511,16 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <CustomMetrics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/forecasting"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Forecasting />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
