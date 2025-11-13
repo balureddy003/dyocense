@@ -978,6 +978,9 @@ from packages.agent.industry_metrics import (
     create_metric_calculator,
     Metric,
 )
+from packages.agent.dashboard_layouts import (
+    get_layout_config,
+)
 
 
 class BusinessTypeResponse(BaseModel):
@@ -1248,6 +1251,75 @@ async def get_industry_metrics(
         raise
     except Exception as e:
         logger.error(f"Error calculating industry metrics for {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/tenants/{tenant_id}/dashboard/layout")
+async def get_dashboard_layout(tenant_id: str):
+    """
+    Get industry-specific dashboard layout configuration.
+    
+    Returns widget configurations adapted to the tenant's business type:
+    - Widget types and positioning (12-column grid)
+    - Priority ordering for responsive layouts
+    - Metric bindings to industry-specific KPIs
+    - Visual theming and color schemes
+    - Chart types and data sources
+    
+    Frontend uses this to:
+    - Render appropriate widgets for the business type
+    - Show relevant metrics (restaurant vs retail vs services)
+    - Apply industry-specific theming
+    - Optimize mobile/tablet layouts using priority
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        
+        # Build connection string
+        pg_url = os.getenv("POSTGRES_URL")
+        if not pg_url:
+            pg_host = os.getenv("POSTGRES_HOST", "localhost")
+            pg_port = os.getenv("POSTGRES_PORT", "5432")
+            pg_db = os.getenv("POSTGRES_DB", "dyocense")
+            pg_user = os.getenv("POSTGRES_USER", "dyocense")
+            pg_pass = os.getenv("POSTGRES_PASSWORD", "pass@1234")
+            pg_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+        
+        # Get business type from tenant metadata
+        conn = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metadata FROM tenants.tenants WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail=f"Tenant {tenant_id} not found")
+                
+                metadata = dict(result).get("metadata", {})
+                classification = metadata.get("business_classification")
+                
+                # Default to "other" if not classified yet
+                if not classification:
+                    business_type = "other"
+                    logger.info(f"Tenant {tenant_id} not classified, using default layout")
+                else:
+                    business_type = classification.get("business_type", "other")
+        finally:
+            conn.close()
+        
+        # Get layout configuration for business type
+        layout_config = get_layout_config(business_type)
+        
+        return layout_config
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dashboard layout for {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
