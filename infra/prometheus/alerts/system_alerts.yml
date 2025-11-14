@@ -108,7 +108,7 @@ groups:
           component: cost
         annotations:
           summary: "High daily LLM cost per tenant"
-          description: "Tenant {{ $labels.tenant_id }} spent ${{ $value | printf "%.2f" }} on LLM in the last 24h (threshold: $100)"
+          description: 'Tenant {{ $labels.tenant_id }} spent ${{ $value | printf "%.2f" }} on LLM in the last 24h (threshold: $100)'
 
       - alert: HighDailyTotalCost
         expr: (increase(infrastructure_cost_total[1d]) + increase(llm_cost_total[1d])) > 150
@@ -118,4 +118,4 @@ groups:
           component: cost
         annotations:
           summary: "High daily total cost"
-          description: "Total daily cost is ${{ $value | printf "%.2f" }} (threshold: $150)"
+          description: 'Total daily cost is ${{ $value | printf "%.2f" }} (threshold: $150)'

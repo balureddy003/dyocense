@@ -2,32 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "🚀 Backend Monolith (Recommended)",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "uvicorn",
-      "args": [
-        "backend.main:app",
-        "--reload",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8001",
-        "--log-level",
-        "debug"
-      ],
-      "env": {
-        "PYTHONPATH": "${workspaceFolder}",
-        "ALLOW_ANONYMOUS": "true",
-        "PLAN_ENABLE_TRACING": "1"
-      },
-      "envFile": "${workspaceFolder}/.env",
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "🚀 Kernel (Legacy Services)",
+      "name": "🚀 Kernel (Unified - Recommended)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",

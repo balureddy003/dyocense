@@ -94,32 +94,6 @@ export async function tryDelete(path: string, token?: string): Promise<boolean> 
     }
 }
 
-// ===================================
-// v4 Monolith Auth & Core APIs
-// ===================================
-
-export type LoginResponse = {
-    access_token: string
-    token_type: 'bearer'
-    expires_in: number
-}
-
-export async function authLogin(email: string, password: string, tenantId?: string): Promise<LoginResponse> {
-    return post('/api/v1/auth/login', { email, password, tenant_id: tenantId })
-}
-
-export async function authMe(token: string): Promise<{ sub: string; tenant_id: string; email: string; role: string }> {
-    return get('/api/v1/auth/me', token)
-}
-
-export async function listUsersV4(token: string): Promise<Array<{ id: string; tenant_id: string; email: string; role: string; is_active: boolean }>> {
-    return get('/api/v1/users/', token)
-}
-
-export async function listWorkspacesV4(token: string): Promise<Array<{ id: string; tenant_id: string; name: string; description?: string | null }>> {
-    return get('/api/v1/workspaces/', token)
-}
-
 export async function requestPasswordReset(email: string): Promise<{ message: string }> {
     return post('/v1/auth/request-password-reset', { email })
 }

@@ -1,189 +1,149 @@
-"""
-Dyocense v4.0 Unified Backend - FastAPI Monolith Entry Point
-
-This replaces 19 microservices with a single, cost-optimized application.
-Architecture: Modular monolith with clear separation of concerns.
-
-Key features:
-- Multi-tenant isolation via Row-Level Security (RLS)
-- PostgreSQL with TimescaleDB, pgvector, Apache AGE
-- Hybrid LLM routing (70% local, 30% cloud)
-- OpenTelemetry instrumentation
-- Prometheus metrics
-"""
-
-from __future__ import annotations
-
-import logging
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
-from sqlalchemy import text
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Body
 from fastapi.responses import JSONResponse
-from prometheus_client import make_asgi_app
-
-from backend.config import settings
-from backend.dependencies import get_db
-from backend.routes import (
-    coach_router,
-    optimizer_router,
-    forecaster_router,
-    evidence_router,
-    connector_router,
-    tenant_router,
-    user_router,
-    workspace_router,
-    auth_router,
-    health_router,
-)
-from backend.utils.logging import setup_logging
-from backend.utils.observability import setup_tracing, setup_metrics
-
-# Configure logging
-logger = setup_logging(__name__)
+from typing import Any, Dict, List, Optional
+import os
+from datetime import datetime, timezone
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """
-    Application lifespan manager - handles startup and shutdown tasks.
-    
-    Startup:
-    - Initialize database connections
-    - Setup observability (tracing, metrics)
-    - Warm up LLM connections
-    
-    Shutdown:
-    - Close database connections
-    - Flush metrics
-    - Cleanup resources
-    """
-    logger.info("Starting Dyocense v4.0 backend...")
-    logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Database: {settings.DATABASE_URL.split('@')[-1]}")  # Hide credentials
-    
-    # Initialize database
-    try:
-        # Test database connection
-        async for db in get_db():
-            await db.execute(text("SELECT 1"))
-            logger.info("Database connection verified")
-            break
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        raise
-    
-    # Setup observability
-    if settings.ENABLE_PROMETHEUS:
-        setup_metrics()
-        logger.info("Prometheus metrics enabled")
-    
-    # Warm up LLM connections (optional)
-    # TODO: Implement backend/services/coach/llm_router.py
-    # if settings.ENABLE_LOCAL_LLM:
-    #     from backend.services.coach.llm_router import warm_up_llm
-    #     await warm_up_llm()
-    #     logger.info("Local LLM warmed up")
-    
-    logger.info("Application startup complete")
-    
-    yield
-    
-    # Shutdown tasks
-    logger.info("Shutting down Dyocense v4.0 backend...")
-    # Database connections will be closed automatically by SQLAlchemy
-    logger.info("Shutdown complete")
+def create_app() -> FastAPI:
+	app = FastAPI(title="Dyocense Kernel (stub)", version="0.1.0")
+
+	@app.get("/health")
+	def health() -> Dict[str, str]:
+		return {"status": "ok"}
+
+	@app.post("/v1/compile")
+	def compile_goal(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+		goal = payload.get("goal", "")
+		tenant_id = payload.get("tenant_id", "")
+		project_id = payload.get("project_id", "")
+		# Minimal stub: return a single no-op that carries the goal metadata
+		ops: List[Dict[str, Any]] = [
+			{
+				"id": "op-1",
+				"type": "noop",
+				"meta": {"goal": goal, "tenant_id": tenant_id, "project_id": project_id},
+			}
+		]
+		return {"ops": ops}
+
+	@app.post("/v1/optimise")
+	def optimise(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+		_ops = payload.get("ops", [])
+		# Minimal stub: accept ops and report success
+		return JSONResponse(status_code=200, content={"status": "ok", "ops_count": len(_ops)})
+
+	@app.get("/v1/catalog")
+	def catalog() -> Dict[str, Any]:
+		# Minimal stub: example catalog
+		return {"items": [
+			{"id": "policy-001", "name": "Default Policy", "category": "policy"},
+			{"id": "optimizer-default", "name": "Default Optimizer", "category": "optimizer"},
+		]}
+
+	# --- Minimal Health Score API for beta validation ---
+	@app.get("/v1/tenants/{tenant_id}/health-score")
+	def get_health_score(tenant_id: str) -> Dict[str, Any]:
+		"""
+		Return a minimal but realistic health score payload.
+		This is a stub: in production, compute from metrics and goals.
+		"""
+		now = datetime.now(timezone.utc).isoformat()
+		# Simple deterministic demo based on tenant_id length to avoid hardcoding
+		base = 65 + (len(tenant_id) % 10)  # 65-74
+		revenue = min(100, max(0, base + 5))
+		operations = min(100, max(0, base - 10))
+		customer = min(100, max(0, base + 2))
+		trend = 2  # pretend it's up +2 vs prior period
+		return {
+			"score": round((revenue + operations + customer) / 3),
+			"trend": trend,
+			"breakdown": {
+				"revenue": revenue,
+				"operations": operations,
+				"customer": customer,
+				"revenue_available": True,
+				"operations_available": True,
+				"customer_available": True,
+			},
+			"last_updated": now,
+			"period_days": 7,
+		}
+
+	@app.get("/v1/tenants/{tenant_id}/health-score/alerts")
+	def get_health_alerts(tenant_id: str) -> List[Dict[str, Any]]:
+		# Minimal illustrative alerts
+		return [
+			{
+				"id": "alert-low-ops",
+				"type": "critical",
+				"title": "Operational efficiency is low",
+				"description": "Order fulfillment times are trending above target.",
+				"metric": "operations",
+				"value": "SLA 92%",
+				"threshold": ">= 95%",
+			}
+		]
+
+	@app.get("/v1/tenants/{tenant_id}/health-score/signals")
+	def get_health_signals(tenant_id: str) -> List[Dict[str, Any]]:
+		# Minimal illustrative positive signals
+		return [
+			{
+				"id": "signal-rev-growth",
+				"type": "positive",
+				"title": "Revenue up week-over-week",
+				"description": "Last 7 days revenue grew +4% vs prior period.",
+				"metric": "revenue",
+				"value": "+4%",
+			}
+		]
+
+	@app.get("/v1/tenants/{tenant_id}/metrics/snapshot")
+	def get_metrics_snapshot(tenant_id: str) -> List[Dict[str, Any]]:
+		"""
+		Return a small set of metric snapshots for dashboard cards.
+		The shape matches apps/smb/src/lib/api.ts MetricSnapshot.
+		"""
+		return [
+			{
+				"id": "current_score",
+				"label": "Current Score",
+				"value": "72",
+				"change": 4,
+				"changeType": "absolute",
+				"trend": "up",
+				"period": "last_7_days",
+			},
+			{
+				"id": "revenue_growth",
+				"label": "Revenue Growth",
+				"value": "+4.2%",
+				"change": 4.2,
+				"changeType": "percentage",
+				"trend": "up",
+				"period": "vs_prev_7d",
+			},
+			{
+				"id": "tasks_completed",
+				"label": "Tasks Completed",
+				"value": "27",
+				"change": 17,
+				"changeType": "percentage",
+				"trend": "up",
+				"period": "last_7_days",
+			},
+		]
+
+	return app
 
 
-# Create FastAPI app
-app = FastAPI(
-    title="Dyocense v4.0",
-    description="""
-    AI-Powered Business Intelligence Platform for SMBs
-    
-    Features:
-    - **AI Coach**: Natural language business insights and recommendations
-    - **Optimization**: Inventory, staffing, and budget optimization
-    - **Forecasting**: ARIMA, Prophet, XGBoost with uncertainty quantification
-    - **Causal Inference**: Understand why metrics changed
-    - **External Benchmarks**: Compare against industry standards
-    
-    Cost: <$30/month per tenant (vs $500-1500 for traditional BI tools)
-    """,
-    version="4.0.0",
-    lifespan=lifespan,
-    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
-    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
-)
-
-# Instrument tracing before server start to avoid middleware errors
-if settings.ENABLE_TRACING:
-    setup_tracing(app, settings.OTEL_SERVICE_NAME, settings.OTEL_EXPORTER_OTLP_ENDPOINT)
-    logger.info("OpenTelemetry tracing enabled")
-
-# CORS middleware - must be added early
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-
-# Include routers
-app.include_router(health_router, prefix="/api", tags=["Health"])
-app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
-app.include_router(tenant_router, prefix="/api/v1/tenants", tags=["Tenants"])
-app.include_router(user_router, prefix="/api/v1/users", tags=["Users"])
-app.include_router(workspace_router, prefix="/api/v1/workspaces", tags=["Workspaces"])
-app.include_router(coach_router, prefix="/api/v1/coach", tags=["AI Coach"])
-app.include_router(optimizer_router, prefix="/api/v1/optimize", tags=["Optimization"])
-app.include_router(forecaster_router, prefix="/api/v1/forecast", tags=["Forecasting"])
-app.include_router(evidence_router, prefix="/api/v1/evidence", tags=["Evidence"])
-app.include_router(connector_router, prefix="/api/v1/connectors", tags=["Connectors"])
-
-# Mount Prometheus metrics endpoint
-if settings.ENABLE_PROMETHEUS:
-    metrics_app = make_asgi_app()
-    app.mount("/metrics", metrics_app)
-
-# Global exception handler
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Handle unexpected errors gracefully"""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "detail": str(exc) if settings.ENVIRONMENT != "production" else "An error occurred",
-        },
-    )
-
-
-# Root endpoint
-@app.get("/")
-async def root():
-    """API root - basic info"""
-    return {
-        "name": "Dyocense v4.0",
-        "version": "4.0.0",
-        "description": "AI-Powered Business Intelligence for SMBs",
-        "docs": "/docs" if settings.ENVIRONMENT != "production" else None,
-        "health": "/api/health",
-    }
+app = create_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
-    
-    uvicorn.run(
-        "backend.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.ENVIRONMENT == "development",
-        log_level=settings.LOG_LEVEL.lower(),
-    )
+	import uvicorn
+
+	host = os.getenv("HOST", "127.0.0.1")
+	port = int(os.getenv("PORT", "8001"))
+	uvicorn.run("backend.main:app", host=host, port=port, reload=False)
