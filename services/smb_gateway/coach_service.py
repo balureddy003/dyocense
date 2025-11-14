@@ -43,6 +43,7 @@ class ChatRequest(BaseModel):
     data_sources: Optional[List[str]] = Field(default=None, description="Specific data sources to analyze")
     include_evidence: bool = Field(default=True, description="Include data source citations")
     include_forecast: bool = Field(default=False, description="Include demand forecasting")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Frontend-passed dashboard context (health score, alerts, signals, goals, tasks)")
     # Phase 2: Model settings (power users)
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="LLM temperature (0.0-2.0)")
     max_tokens: Optional[int] = Field(default=None, ge=1, le=8192, description="Max tokens to generate")

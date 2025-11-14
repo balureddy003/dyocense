@@ -1,6 +1,7 @@
 import { Badge, Box, Button, Card, Container, Divider, Group, Paper, RingProgress, Select, SimpleGrid, Stack, Table, Tabs, Text, ThemeIcon, Title } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { get } from '../lib/api';
 import { useAuthStore } from '../stores/auth';
@@ -10,6 +11,32 @@ export function Analytics() {
     const apiToken = useAuthStore((s) => s.apiToken);
     const [timeRange, setTimeRange] = useState('30days');
     const [activeTab, setActiveTab] = useState('overview');
+    const [searchParams] = useSearchParams();
+
+    // Deep linking support: Read metric from query params
+    const metricParam = searchParams.get('metric');
+    const goalParam = searchParams.get('goal');
+
+    // Refs for scrolling to specific sections
+    const metricsRef = useRef<HTMLDivElement>(null);
+    const goalsRef = useRef<HTMLDivElement>(null);
+
+    // Handle deep linking on mount or param change
+    useEffect(() => {
+        if (metricParam) {
+            // Switch to metrics tab and scroll to that metric
+            setActiveTab('metrics');
+            setTimeout(() => {
+                metricsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        } else if (goalParam) {
+            // Switch to goals tab and scroll
+            setActiveTab('goals');
+            setTimeout(() => {
+                goalsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        }
+    }, [metricParam, goalParam]);
 
     // Determine days based on time range
     const days = timeRange === '7days' ? 7 : timeRange === '30days' ? 30 : 90;

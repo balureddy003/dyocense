@@ -59,7 +59,7 @@ class ConnectionManager:
             "connected_at": datetime.utcnow().isoformat(),
         }
         
-        logger.info(f"WebSocket connected for tenant {tenant_id}. Active connections: {len(self.active_connections[tenant_id])}")
+        logger.debug(f"WebSocket connected for tenant {tenant_id}. Active connections: {len(self.active_connections[tenant_id])}")
         
         # Send connection acknowledgment
         await self.send_personal_message(websocket, {
@@ -84,7 +84,7 @@ class ConnectionManager:
             if not self.active_connections[tenant_id]:
                 del self.active_connections[tenant_id]
             
-            logger.info(f"WebSocket disconnected for tenant {tenant_id}. Remaining: {len(self.active_connections.get(tenant_id, []))}")
+            logger.debug(f"WebSocket disconnected for tenant {tenant_id}. Remaining: {len(self.active_connections.get(tenant_id, []))}")
         
         # Clean up mappings
         self.connection_to_tenant.pop(websocket, None)

@@ -19,6 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from pydantic import BaseModel
 
 from packages.llm import _invoke_llm
+from services.smb_gateway.coach_multi_agent_viz import generate_visual_response
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ class CoachState(TypedDict):
     task_results: Dict[str, Any]
     report_id: Optional[str]
     final_response: str
+    
+    # Multi-agent visualization results
+    visual_response: Optional[Dict[str, Any]]  # Structured UI components
     
     # Human-in-the-loop
     pending_approval: Optional[Dict[str, Any]]
@@ -272,44 +276,206 @@ def generate_report_node(state: CoachState) -> CoachState:
 
 
 def generate_analysis_node(state: CoachState) -> CoachState:
-    """Generate final AI analysis using LLM"""
+    """Generate final AI analysis using LLM with rich formatting and action plans"""
     logger.info("[LangGraph] Generating AI analysis")
     
     # Build context for LLM
     business_context = state['business_context']
     task_results = state['task_results']
+    user_message = state['user_message']
     
-    prompt = f"""You are a business coach analyzing data for {business_context.get('business_name', 'the business')}.
+    # Extract health context
+    health_score_data = business_context.get('health_score', {})
+    if isinstance(health_score_data, dict):
+        health_score = health_score_data.get('score', 'N/A')
+        health_trend = health_score_data.get('trend', 'N/A')
+        breakdown = health_score_data.get('breakdown', {})
+    else:
+        health_score = health_score_data
+        health_trend = 'N/A'
+        breakdown = {}
+    
+    # Extract alerts and signals with details
+    alerts = business_context.get('alerts', [])
+    signals = business_context.get('signals', [])
+    goals = business_context.get('goals', [])
+    tasks = business_context.get('tasks', [])
+    
+    # Build alert summary
+    alert_summary = ""
+    if alerts:
+        alert_titles = [a.get('title', 'Unknown') for a in alerts[:3]]
+        alert_summary = f"Critical issues: {', '.join(alert_titles)}"
+    
+    # Build signal summary
+    signal_summary = ""
+    if signals:
+        signal_titles = [s.get('title', 'Unknown') for s in signals[:3]]
+        signal_summary = f"Positive trends: {', '.join(signal_titles)}"
+    
+    # Build comprehensive analysis prompt with conversational style
+    prompt = f"""You are a senior business analyst conducting a live review with the owner of {business_context.get('business_name', 'this business')}. You've just finished analyzing their data and are now presenting your findings in a conversational, engaging way.
 
-User Question: {state['user_message']}
+**THEIR QUESTION:**
+"{user_message}"
 
-Analysis Results:
-{json.dumps(task_results, indent=2)}
+**BUSINESS HEALTH SNAPSHOT:**
+- Overall Health Score: {health_score}/100 (trending {health_trend})
+- Revenue Health: {breakdown.get('revenue', 'N/A')}/100
+- Operations Health: {breakdown.get('operations', 'N/A')}/100
+- Customer Health: {breakdown.get('customer', 'N/A')}/100
+- {alert_summary if alert_summary else "No critical alerts"}
+- {signal_summary if signal_summary else "Limited positive signals"}
+- Active Goals: {len(goals)}
+- Pending Tasks: {len(tasks)}
 
-Business Context:
-- Health Score: {business_context.get('health_score', {}).get('score', 'N/A')}/100
-- Goals: {len(business_context.get('goals', []))}
-- Tasks: {len(business_context.get('tasks', []))}
+**DETAILED DATA FROM YOUR ANALYSIS:**
+{json.dumps(task_results, indent=2, default=str)}
 
-Please provide a conversational, insightful analysis that:
-1. Directly answers the user's question
-2. Highlights key findings from the data
-3. Provides actionable recommendations
-4. Uses a warm, encouraging tone
+**YOUR ROLE:**
+You're having a conversation with a busy business owner who needs ACTIONABLE insights, not generic advice. Reference SPECIFIC numbers from the data, explain the "why" behind your recommendations, and make them feel like you understand their unique situation.
 
-Keep it concise (2-3 paragraphs).
+**RESPONSE GUIDELINES:**
+
+1. **Start Conversationally** (2-3 paragraphs):
+   - Open with what immediately stands out from their data
+   - Reference specific numbers (e.g., "I see you have 47 overdue invoices worth $12,500...")
+   - Connect to their health score and explain what it means
+   - Show you understand their question and situation
+
+2. **Prioritized Action Plan** (4-6 specific actions):
+   - **Be specific with numbers**: Instead of "follow up on invoices", say "Contact the 3 clients with invoices over $5,000 overdue"
+   - **Explain urgency**: Use phrases like "This is critical because..." or "I'm prioritizing this because..."
+   - **Reference their data**: Connect each action to something you found in the analysis
+   - **Make it practical**: Actions they can complete in 7 days, not vague strategies
+   
+   Format as:
+   ## 🎯 Your Action Plan for the Next 7 Days
+   
+   **This Week's Top Priority:**
+   [The ONE thing that will make the biggest impact, with specific numbers and deadline]
+   
+   **Day 1-2: Immediate Actions**
+   - **[Specific action with numbers]** - [Why this matters based on your data]
+   
+   **Day 3-5: Follow-Through**
+   - **[Next steps based on data]** - [Expected outcome with metrics]
+   
+   **Day 6-7: Optimization**
+   - **[Longer-term improvement]** - [How this prevents future issues]
+
+3. **Data-Backed Insights** (3-4 findings):
+   - Each insight MUST reference actual numbers from task_results
+   - Explain what the numbers mean in plain English
+   - Connect to revenue, cash flow, or customer impact
+   
+   Format as:
+   ## 💡 What the Data Shows
+   
+   **[Insight based on actual data]**
+   Looking at your [specific data source], I found [specific number/pattern]. This means [business impact]. I recommend [specific action].
+
+4. **Quick Wins** (2-3 easy actions):
+   Things they can do TODAY that will improve their health score or address alerts.
+
+5. **What to Monitor** (3 specific metrics):
+   Based on their data, what numbers should they check daily/weekly?
+
+**TONE & STYLE:**
+- Conversational, like you're sitting across from them
+- Use "I see..." "I noticed..." "Let me show you..."
+- Avoid jargon - explain in plain English
+- Show empathy for challenges revealed in the data
+- Be encouraging about strengths, honest about issues
+- Reference their business name naturally in conversation
+
+**CRITICAL RULES:**
+- ALWAYS cite specific numbers from the task_results data
+- If you don't have data, say "I don't have visibility into X, but..."
+- Connect everything back to their health score of {health_score}/100
+- Make every recommendation actionable within 7 days
+- End with ONE clear next step they should take TODAY
+
+Generate your response now as if you're presenting live to them:
+- Use - for bullet points
+- Use numbered lists for sequential actions
+- Include emojis for visual guidance (📊 🎯 💡 ⚠️ 📈)
+- Be specific with numbers, dates, and metrics
+- Keep tone encouraging but honest about challenges
+- Make every recommendation actionable and measurable
 """
     
     try:
         response = _invoke_llm(
             prompt=prompt,
-            temperature=0.7,
-            max_tokens=500
+            temperature=0.8,  # Increased for more conversational, varied responses
+            max_tokens=2500  # Increased for detailed, data-rich response
         )
         state['final_response'] = response if isinstance(response, str) else str(response)
+        logger.info(f"[LangGraph] Generated analysis: {len(state['final_response'])} chars")
     except Exception as e:
         logger.error(f"[LangGraph] LLM generation failed: {e}")
-        state['final_response'] = "I've completed the analysis. Please check the generated report for detailed insights."
+        # Fallback with conversational format
+        state['final_response'] = f"""I've reviewed your data for {business_context.get('business_name', 'your business')}, and here's what I found:
+
+**Quick Take:** Your health score is at {health_score}/100, which {
+    'shows strong performance' if health_score >= 70 else
+    'indicates some challenges' if health_score >= 40 else
+    'needs immediate attention'
+}.
+
+## 🎯 Your Priority Actions This Week
+
+**Right Now:**
+- Review your {len(alerts)} critical alerts - these need immediate attention
+- Leverage your {len(signals)} positive trends to maintain momentum
+
+**This Week:**
+- Focus on your {len(goals)} active goals
+- Work through your {len(tasks)} pending tasks
+
+## 💡 What to Watch
+
+Keep an eye on the metrics that feed into your health score, especially in areas scoring below 60.
+
+**Bottom Line:** Start with addressing your highest-priority alert today, then build from there.
+
+*Note: I encountered a system limitation generating the full analysis. Try asking a more specific question for detailed insights.*
+
+## 💡 Key Insight
+
+Your business data has been analyzed. Check the generated report for detailed insights.
+
+**Note:** Full analysis temporarily unavailable due to system limits. Please try asking a more specific question.
+"""
+    
+    return state
+
+
+def generate_visual_response_node(state: CoachState) -> CoachState:
+    """Multi-Agent Visualization System - Generate structured UI components instead of text"""
+    logger.info("[LangGraph] Generating visual response with multi-agent system")
+    
+    try:
+        visual_response = generate_visual_response(
+            business_context=state['business_context'],
+            task_results=state['task_results'],
+            user_message=state['user_message']
+        )
+        state['visual_response'] = visual_response
+        logger.info(f"[LangGraph] Visual response generated: {len(visual_response.get('charts', []))} charts, "
+                   f"{len(visual_response.get('actions', []))} actions, {len(visual_response.get('kpis', []))} KPIs")
+    except Exception as e:
+        logger.error(f"[LangGraph] Visual response generation failed: {e}")
+        # Fallback to minimal response
+        state['visual_response'] = {
+            "summary": "Unable to generate visualizations. Please try again.",
+            "kpis": [],
+            "charts": [],
+            "tables": [],
+            "actions": [],
+            "insights": []
+        }
     
     return state
 
@@ -353,6 +519,7 @@ def build_coach_workflow(checkpointer=None):
     workflow.add_node("apply_feedback", apply_human_feedback_node)
     workflow.add_node("generate_report", generate_report_node)
     workflow.add_node("generate_analysis", generate_analysis_node)
+    workflow.add_node("generate_visual_response", generate_visual_response_node)  # NEW: Multi-agent visualization
     
     # Entry point
     workflow.set_entry_point("analyze_intent")
@@ -376,7 +543,8 @@ def build_coach_workflow(checkpointer=None):
     
     workflow.add_edge("apply_feedback", "execute_task")
     workflow.add_edge("generate_report", "generate_analysis")
-    workflow.add_edge("generate_analysis", END)
+    workflow.add_edge("generate_analysis", "generate_visual_response")  # UPDATED: Visual after text
+    workflow.add_edge("generate_visual_response", END)  # UPDATED: End after visuals
     
     # Compile with checkpointer
     # interrupt_before=["apply_feedback"] means: pause before apply_feedback if we reach it

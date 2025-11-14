@@ -78,20 +78,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount SMB Gateway directly without prefix
+# This exposes all /v1/tenants/* endpoints through the kernel
+if smb_gateway_app:
+    try:
+        # Import the routes from SMB gateway using its internal router
+        # This properly includes all dependencies and middleware
+        from starlette.routing import Mount
+        
+        # Mount the entire SMB gateway app
+        # Use a custom mount that includes all routes at root level
+        for route in smb_gateway_app.routes:
+            # Add each route directly to kernel's route list
+            app.router.routes.append(route)
+        
+        logger.info(f"Mounted SMB Gateway routes at root level ({len(smb_gateway_app.routes)} routes)")
+    except Exception as e:
+        logger.error(f"Failed to mount SMB Gateway: {e}")
+        import traceback
+        traceback.print_exc()
+
+# Mount other sub-apps at /api/{service} for backward compatibility
 for sub_app in SUB_APPS:
-    # Add each sub-service router and tag its operations with the service title
-    # This keeps a single, flat API surface while grouping docs nicely.
+    if sub_app is smb_gateway_app:
+        # Already mounted above
+        continue
+        
     try:
         service_tag = getattr(sub_app, "title", None) or sub_app.__class__.__name__
-        app.include_router(sub_app.router, tags=[service_tag])
-        # Additionally, expose accounts routes at root for direct access
-        if sub_app is accounts_app:
-            app.include_router(accounts_app.router)
-        # Mount each sub-app at /api/{service} for backward compatibility
         service_name = service_tag.lower().replace(' ', '_').replace('service', '').replace('api', '').strip('_')
+        
+        # Mount at /api/{service}
         app.mount(f"/api/{service_name}", sub_app)
+        logger.info(f"Mounted {service_tag} at /api/{service_name}")
     except Exception as e:
-        logger.warning(f"Skipping router for sub-app due to error: {e}")
+        logger.warning(f"Skipping sub-app {service_tag} due to error: {e}")
 
 # Back-compat: also expose Accounts under /api/accounts for UIs expecting this prefix
 if accounts_app is not None:

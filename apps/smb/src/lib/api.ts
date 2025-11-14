@@ -206,8 +206,8 @@ const connectorsPath = (path: string) => `${CONNECTORS_API_BASE}${path}`
 export async function listConnectors(token?: string, statusFilter?: ConnectorStatus, tenantId?: string): Promise<TenantConnector[]> {
     if (!tenantId) return []
     const query = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : ''
-    const data = await tryGet<TenantConnector[]>(`/v1/tenants/${tenantId}/connectors${query}`, token)
-    return data ?? []
+    const response = await tryGet<{ connectors: TenantConnector[]; total: number }>(`/v1/tenants/${tenantId}/connectors${query}`, token)
+    return response?.connectors ?? []
 }
 
 export async function fetchConnectorCatalog(token?: string): Promise<ConnectorCatalogItem[]> {

@@ -3,7 +3,10 @@ import { useMediaQuery } from '@mantine/hooks'
 import { IconChartBar, IconChevronLeft, IconChevronRight, IconDotsVertical, IconFileText, IconSend, IconSparkles, IconTarget, IconTrendingUp } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { AgentModeSwitcher, type AgentMode, type DataSource } from '../components/AgentModeSwitcher'
+import CoachVisualization from '../components/CoachVisualization'
 import CreateTaskModal from '../components/CreateTaskModal'
 import { ReportDownloadButtons } from '../components/ReportDownloadButtons'
 import { API_BASE, get, post, put } from '../lib/api'
@@ -26,6 +29,7 @@ export type Message = {
         data_sources?: string[]
         tools_used?: string[]
         report_id?: string
+        visual_response?: any  // Multi-agent visualization data
     }
 }
 
@@ -35,6 +39,9 @@ export default function CoachV5() {
     const apiToken = useAuthStore((s) => s.apiToken)
     const navigate = useNavigate()
     const { chatId } = useParams<{ chatId?: string }>()
+    const location = useLocation() as any
+    const passedContext = (location?.state && location.state.context) || null
+    const contextBootstrappedRef = useRef(false)
     const queryClient = useQueryClient()
 
     const isMobile = useMediaQuery('(max-width: 767px)')
@@ -59,6 +66,12 @@ export default function CoachV5() {
         enabled: !!tenantId && !!apiToken,
         staleTime: 60_000,
     })
+    const { data: connectorsData = [] } = useQuery({
+        queryKey: ['connectors', tenantId],
+        queryFn: () => get(`/v1/tenants/${tenantId}/connectors`, apiToken),
+        enabled: !!tenantId && !!apiToken,
+        staleTime: 60_000,
+    })
 
     // Conversation state
     const [conversations, setConversations] = useState<Conversation[]>(() => (tenantId ? loadConversations(tenantId) : []))
@@ -76,11 +89,27 @@ export default function CoachV5() {
     const [isSending, setIsSending] = useState(false)
     const [taskModalOpen, setTaskModalOpen] = useState(false)
     const [taskDraftTitle, setTaskDraftTitle] = useState<string | undefined>()
+    const [agentMode, setAgentMode] = useState<AgentMode>('analyze')  // Agent mode switcher
+    const [selectedDataSources, setSelectedDataSources] = useState<string[]>([])  // Selected connectors
     const abortControllerRef = useRef<AbortController | null>(null)
 
     // Execution progress state
     const [executionPhase, setExecutionPhase] = useState<string | null>(null)
     const [executionProgress, setExecutionProgress] = useState<{ intent?: string; total_tasks?: number; completed_tasks?: number }>({});
+
+    // Transform connectors to data sources for agent context
+    const availableDataSources: DataSource[] = useMemo(() => {
+        if (!connectorsData || !Array.isArray(connectorsData)) return [];
+
+        return connectorsData.map((connector: any) => ({
+            id: connector.connector_id || connector.id,
+            type: connector.connector_type || connector.type || 'unknown',
+            name: connector.display_name || connector.name || connector.connector_type,
+            category: connector.category || 'data',
+            icon: connector.icon || 'database',
+            recordCount: connector.metadata?.total_records || connector.record_count || 0
+        }));
+    }, [connectorsData]);
 
     // Three-plane layout state (Trip.com style: left=AI+Insights, center=Action Plan, right=Evidence/Reports)
     const [showLeftPlane, setShowLeftPlane] = useState(true)
@@ -149,19 +178,152 @@ export default function CoachV5() {
                 return
             }
         }
-        // seed welcome
-        setMessages([
-            {
-                id: 'hello',
-                role: 'assistant',
-                content:
-                    selectedGoalId
-                        ? `You're working on this goal. Ask me to draft an action plan or create tasks.\n\n• "Create a weekly action plan"\n• "Break down this goal into 5 tasks"\n• "Suggest the next best action"`
-                        : `Welcome! Link this chat to a goal to keep everything in one place.\n\n• "Help me set a goal"\n• "Create an action plan for revenue growth"`,
-                timestamp: new Date(),
-            },
-        ])
+        // If no existing conversation and no chatId, seed welcome
+        if (!chatId) {
+            setMessages([
+                {
+                    id: 'hello',
+                    role: 'assistant',
+                    content:
+                        selectedGoalId
+                            ? `You're working on this goal. Ask me to draft an action plan or create tasks.\n\n• "Create a weekly action plan"\n• "Break down this goal into 5 tasks"\n• "Suggest the next best action"`
+                            : `Welcome! Link this chat to a goal to keep everything in one place.\n\n• "Help me set a goal"\n• "Create an action plan for revenue growth"`,
+                    timestamp: new Date(),
+                },
+            ])
+        }
     }, [tenantId, chatId])
+
+    // Start chat based on passed dashboard context (if present)
+    useEffect(() => {
+        if (!tenantId || !apiToken) return
+        if (contextBootstrappedRef.current) return
+        if (!passedContext) return
+        contextBootstrappedRef.current = true
+
+        // Show initial progress and activate "thinking" indicator
+        setIsSending(true)
+        setExecutionPhase('planning')
+        setExecutionProgress({ intent: 'analyzing_dashboard', total_tasks: 4, completed_tasks: 0 })
+
+        const summaryParts: string[] = []
+        // Handle healthScore as either object or number
+        const healthScoreValue = typeof passedContext.healthScore === 'object'
+            ? passedContext.healthScore.score
+            : passedContext.healthScore
+        summaryParts.push(`Today's health score is ${healthScoreValue}/100 (prev ${passedContext.previousScore}).`)
+        if (Array.isArray(passedContext.alerts) && passedContext.alerts.length) {
+            const a = passedContext.alerts.slice(0, 3).map((x: any) => x.title).join('; ')
+            summaryParts.push(`Needs attention: ${a}.`)
+        }
+        if (Array.isArray(passedContext.signals) && passedContext.signals.length) {
+            const s = passedContext.signals.slice(0, 3).map((x: any) => x.title).join('; ')
+            summaryParts.push(`Positive: ${s}.`)
+        }
+        if (Array.isArray(passedContext.goals) && passedContext.goals.length) {
+            const g = passedContext.goals.slice(0, 2).map((x: any) => x.title).join('; ')
+            summaryParts.push(`Top goals: ${g}.`)
+        }
+        const pendingTasks = Array.isArray(passedContext.tasks) ? passedContext.tasks.filter((t: any) => t.status !== 'completed') : []
+        summaryParts.push(`Pending tasks: ${pendingTasks.length}.`)
+        const prompt = `${summaryParts.join(' ')} Based on this, propose the next best actions for the next 7 days.`
+
+        // Kick off streaming with context prompt
+        const assistantId = `${Date.now()}-a`
+        setMessages((prev) => [
+            ...prev,
+            { id: `${Date.now()}-u`, role: 'user', content: prompt, timestamp: new Date() },
+            { id: assistantId, role: 'assistant', content: '', timestamp: new Date() }
+        ])
+
+            ; (async () => {
+                try {
+                    setExecutionProgress({ intent: 'analyzing_dashboard', total_tasks: 4, completed_tasks: 1 })
+                    const controller = new AbortController()
+                    abortControllerRef.current = controller
+                    const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/coach/chat/stream/v2`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+                        },
+                        body: JSON.stringify({
+                            message: prompt,
+                            conversation_history: [],
+                            persona: 'business_analyst',
+                            context: passedContext,
+                        }),
+                        signal: controller.signal,
+                    })
+
+                    if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`)
+
+                    setExecutionPhase('task_execution')
+                    setExecutionProgress({ intent: 'analyzing_dashboard', total_tasks: 4, completed_tasks: 2 })
+
+                    const reader = response.body.getReader()
+                    const decoder = new TextDecoder()
+                    let full = ''
+                    let collectedMetadata: any = {}
+                    let dataSources = new Set<string>()
+                    let toolsUsed = new Set<string>()
+                    let taskCount = 0
+
+                    while (true) {
+                        const { done, value } = await reader.read()
+                        if (done) break
+                        const lines = decoder.decode(value).split('\n')
+                        for (const line of lines) {
+                            if (!line.startsWith('data: ')) continue
+                            try {
+                                const data = JSON.parse(line.slice(6))
+                                if (data.delta) full += data.delta
+                                if (data.metadata) {
+                                    collectedMetadata = { ...collectedMetadata, ...data.metadata }
+                                    if (data.metadata.phase) setExecutionPhase(data.metadata.phase)
+
+                                    // Track task progress
+                                    if (data.metadata.total_tasks) {
+                                        const completedTasks = data.metadata.completed_tasks || taskCount
+                                        setExecutionProgress({
+                                            intent: data.metadata.intent || 'analyzing_dashboard',
+                                            total_tasks: data.metadata.total_tasks,
+                                            completed_tasks: completedTasks
+                                        })
+                                    }
+                                    if (data.metadata.task_status === 'completed') {
+                                        taskCount++
+                                        setExecutionProgress((prev) => ({
+                                            ...prev,
+                                            completed_tasks: taskCount
+                                        }))
+                                    }
+                                }
+                                setMessages((prev) => prev.map((m) => (m.id === assistantId ? {
+                                    ...m,
+                                    content: full,
+                                    metadata: {
+                                        ...collectedMetadata,
+                                        data_sources: Array.from(dataSources),
+                                        tools_used: Array.from(toolsUsed)
+                                    }
+                                } : m)))
+                            } catch { }
+                        }
+                    }
+
+                    // Clear progress on completion
+                    setExecutionPhase(null)
+                    setExecutionProgress({})
+                    setIsSending(false)
+                } catch (e: any) {
+                    setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: `⚠️ Error: ${e?.message || 'failed to reach coach'}` } : m)))
+                } finally {
+                    abortControllerRef.current = null
+                    setIsSending(false)
+                }
+            })()
+    }, [passedContext, tenantId, apiToken])
 
     // Persist conversation whenever messages change
     useEffect(() => {
@@ -565,9 +727,95 @@ export default function CoachV5() {
                                                 background: m.role === 'assistant' ? theme.colors.gray[0] : theme.colors.brand[6],
                                                 border: m.role === 'assistant' ? `1px solid ${theme.colors.gray[2]}` : 'none'
                                             }}>
-                                                <Text size="xs" c={m.role === 'user' ? 'white' : 'dark'} style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                                                    {m.content}
-                                                </Text>
+                                                {m.role === 'assistant' ? (
+                                                    <div style={{
+                                                        fontSize: '13px',
+                                                        lineHeight: '1.6',
+                                                        color: theme.colors.dark[7]
+                                                    }} className="markdown-content">
+                                                        {/* Multi-agent visualizations */}
+                                                        {m.metadata?.visual_response && (
+                                                            <CoachVisualization visualResponse={m.metadata.visual_response} />
+                                                        )}
+
+                                                        {/* Text content (if any) */}
+                                                        {m.content && (
+                                                            <ReactMarkdown
+                                                                components={{
+                                                                    h2: ({ children }: any) => (
+                                                                        <Text size="md" fw={700} mt="md" mb="xs" c="dark.7">
+                                                                            {children}
+                                                                        </Text>
+                                                                    ),
+                                                                    h3: ({ children }: any) => (
+                                                                        <Text size="sm" fw={600} mt="sm" mb="xs" c="dark.6">
+                                                                            {children}
+                                                                        </Text>
+                                                                    ),
+                                                                    p: ({ children }: any) => (
+                                                                        <Text size="sm" mb="xs" style={{ lineHeight: 1.6 }}>
+                                                                            {children}
+                                                                        </Text>
+                                                                    ),
+                                                                    ul: ({ children }: any) => (
+                                                                        <ul style={{ marginLeft: '16px', marginBottom: '8px' }}>
+                                                                            {children}
+                                                                        </ul>
+                                                                    ),
+                                                                    ol: ({ children }: any) => (
+                                                                        <ol style={{ marginLeft: '16px', marginBottom: '8px' }}>
+                                                                            {children}
+                                                                        </ol>
+                                                                    ),
+                                                                    li: ({ children }: any) => (
+                                                                        <li style={{ marginBottom: '4px', fontSize: '13px' }}>
+                                                                            {children}
+                                                                        </li>
+                                                                    ),
+                                                                    strong: ({ children }: any) => (
+                                                                        <strong style={{ fontWeight: 600, color: theme.colors.dark[8] }}>
+                                                                            {children}
+                                                                        </strong>
+                                                                    ),
+                                                                    hr: () => (
+                                                                        <Divider my="sm" />
+                                                                    ),
+                                                                    code: ({ children, className }: any) => {
+                                                                        const isInline = !className
+                                                                        return isInline ? (
+                                                                            <code style={{
+                                                                                background: theme.colors.gray[1],
+                                                                                padding: '2px 6px',
+                                                                                borderRadius: '4px',
+                                                                                fontSize: '12px',
+                                                                                fontFamily: 'monospace'
+                                                                            }}>
+                                                                                {children}
+                                                                            </code>
+                                                                        ) : (
+                                                                            <pre style={{
+                                                                                background: theme.colors.gray[1],
+                                                                                padding: '8px',
+                                                                                borderRadius: '6px',
+                                                                                overflow: 'auto',
+                                                                                fontSize: '12px',
+                                                                                fontFamily: 'monospace'
+                                                                            }}>
+                                                                                <code>{children}</code>
+                                                                            </pre>
+                                                                        )
+                                                                    }
+                                                                }}
+                                                            >
+                                                                {m.content}
+                                                            </ReactMarkdown>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <Text size="xs" c="white" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                                                        {m.content}
+                                                    </Text>
+                                                )}
                                             </div>
                                             <Text size="xs" c="dimmed" mt={3} style={{ textAlign: m.role === 'user' ? 'right' : 'left' }}>
                                                 {m.timestamp instanceof Date ? m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
@@ -576,12 +824,37 @@ export default function CoachV5() {
                                     </div>
                                 ))}
                                 {isSending && (
-                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                        <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Text size="sm" c="white">✨</Text>
+                                    <Stack gap={8}>
+                                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                            <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                <Text size="sm" c="white">✨</Text>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <Text size="sm" c="dimmed" fs="italic">
+                                                    {executionPhase === 'planning' && 'Planning analysis...'}
+                                                    {executionPhase === 'task_execution' && 'Analyzing your business...'}
+                                                    {executionPhase === 'report_generated' && 'Generating insights...'}
+                                                    {executionPhase === 'analysis' && 'Crafting recommendations...'}
+                                                    {!executionPhase && 'Thinking...'}
+                                                </Text>
+                                                {executionProgress.total_tasks && executionProgress.total_tasks > 0 && (
+                                                    <>
+                                                        <Progress
+                                                            value={(executionProgress.completed_tasks || 0) / executionProgress.total_tasks * 100}
+                                                            size="xs"
+                                                            radius="xl"
+                                                            color="violet"
+                                                            mt={4}
+                                                            animated
+                                                        />
+                                                        <Text size="xs" c="dimmed" mt={2}>
+                                                            {executionProgress.completed_tasks || 0} of {executionProgress.total_tasks} tasks completed
+                                                        </Text>
+                                                    </>
+                                                )}
+                                            </div>
                                         </div>
-                                        <Text size="sm" c="dimmed" fs="italic">Thinking...</Text>
-                                    </div>
+                                    </Stack>
                                 )}
                             </Stack>
                         </ScrollArea>
@@ -620,6 +893,16 @@ export default function CoachV5() {
                                         </Group>
                                     </Stack>
                                 )}
+
+                                {/* Agent Mode Switcher */}
+                                <AgentModeSwitcher
+                                    mode={agentMode}
+                                    onChange={setAgentMode}
+                                    availableDataSources={availableDataSources}
+                                    selectedDataSources={selectedDataSources}
+                                    onDataSourceChange={setSelectedDataSources}
+                                />
+
                                 <Group gap={6} align="flex-end">
                                     <Textarea
                                         placeholder="Ask anything about your business..."

@@ -14,10 +14,7 @@ import { Achievements } from './pages/Achievements'
 import { AdvancedAnalytics } from './pages/AdvancedAnalytics'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
-import Coach from './pages/Coach'
-import CoachV3 from './pages/CoachV3'
 import CoachV5 from './pages/CoachV5'
-import CoachV6 from './pages/CoachV6'
 import ConnectorMarketplace from './pages/ConnectorMarketplace'
 import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
@@ -447,31 +444,11 @@ function App() {
                                 }
                             />
                             <Route
-                                path="/coach-v6"
+                                path="/coach-v5"
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV6 />
-                                        </PlatformLayout>
-                                    </RequireAuth>
-                                }
-                            />
-                            <Route
-                                path="/coach-v3"
-                                element={
-                                    <RequireAuth>
-                                        <PlatformLayout>
-                                            <CoachV3 />
-                                        </PlatformLayout>
-                                    </RequireAuth>
-                                }
-                            />
-                            <Route
-                                path="/coach-old"
-                                element={
-                                    <RequireAuth>
-                                        <PlatformLayout>
-                                            <Coach />
+                                            <CoachV5 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }

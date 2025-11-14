@@ -23,25 +23,32 @@ export function HealthScoreHeader({
     const theme = useMantineTheme();
     const [expanded, setExpanded] = useState(false);
 
-    // Determine health color based on score
+    // Determine health color based on score (softer thresholds)
     const getHealthColor = (score: number): string => {
         if (score >= 86) return theme.colors.emerald[6];
         if (score >= 76) return theme.colors.emerald[5];
         if (score >= 61) return theme.colors.blue[5];
-        if (score >= 41) return theme.colors.yellow[5];
-        return theme.colors.red[5];
+        if (score >= 46) return theme.colors.yellow[5];
+        if (score >= 31) return theme.colors.orange?.[5] ?? '#fb923c';
+        return theme.colors.red[4]; // softer red
     };
 
-    const getHealthGradient = (score: number): string => {
+    // Use a gentler gradient with neutral handling when data is minimal
+    const getHealthGradient = (score: number, criticalCount: number, positiveCount: number): string => {
+        // Neutral if no signal and score missing/zero
+        if ((score === 0 || !Number.isFinite(score)) && criticalCount === 0 && positiveCount === 0) {
+            return 'linear-gradient(135deg, #6B7280 0%, #9CA3AF 100%)'; // gray
+        }
         if (score >= 86) return 'linear-gradient(135deg, #059669 0%, #10B981 100%)';
         if (score >= 76) return 'linear-gradient(135deg, #10B981 0%, #34D399 100%)';
         if (score >= 61) return 'linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%)';
-        if (score >= 41) return 'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)';
-        return 'linear-gradient(135deg, #DC2626 0%, #EF4444 100%)';
+        if (score >= 46) return 'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)';
+        if (score >= 31) return 'linear-gradient(135deg, #FB923C 0%, #F59E0B 100%)'; // orange
+        return 'linear-gradient(135deg, #EF4444 0%, #F87171 100%)'; // softer red
     };
 
     const healthColor = getHealthColor(score);
-    const healthGradient = getHealthGradient(score);
+    const healthGradient = getHealthGradient(score, criticalAlerts.length, positiveSignals.length);
 
     // Limit visible alerts/signals
     const visibleAlerts = criticalAlerts.slice(0, 2);
