@@ -6,6 +6,7 @@ import '@mantine/notifications/styles.css'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import ProtectedRoute from './components/ProtectedRoute'
 import RequireAuth from './components/RequireAuth'
 import { BusinessContextProvider } from './contexts/BusinessContext'
 import PlatformLayout from './layouts/PlatformLayout'
@@ -20,6 +21,7 @@ import Connectors from './pages/Connectors'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
 import { CustomMetrics } from './pages/CustomMetrics'
+import DashboardPage from './pages/DashboardPage'
 import Executor from './pages/Executor'
 import { Forecasting } from './pages/Forecasting'
 import ForgotPassword from './pages/ForgotPassword'
@@ -28,6 +30,7 @@ import Home from './pages/Home'
 import { Integrations } from './pages/Integrations'
 import LandingPage from './pages/LandingPage'
 import Login from './pages/Login'
+import LoginPage from './pages/LoginPage'
 import OAuthCallback from './pages/OAuthCallback'
 import Planner from './pages/Planner'
 import { Reports } from './pages/Reports'
@@ -275,10 +278,26 @@ function App() {
                             />
                             <Route
                                 path="/login"
+                                element={<LoginPage />}
+                            />
+                            <Route
+                                path="/login-old"
                                 element={
                                     <PublicLayout showNav={false}>
                                         <Login />
                                     </PublicLayout>
+                                }
+                            />
+                            <Route
+                                path="/login-v4"
+                                element={<LoginPage />}
+                            />
+                            <Route
+                                path="/dashboard"
+                                element={
+                                    <ProtectedRoute>
+                                        <DashboardPage />
+                                    </ProtectedRoute>
                                 }
                             />
                             <Route

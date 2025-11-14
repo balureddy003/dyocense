@@ -1,0 +1,892 @@
+{
+    "annotations": {
+        "list": []
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": null,
+    "links": [],
+    "panels": [
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 75
+                            },
+                            {
+                                "color": "red",
+                                "value": 100
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 6,
+                "w": 6,
+                "x": 0,
+                "y": 0
+            },
+            "id": 1,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "sum"
+                    ],
+                    "fields": ""
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "sum(increase(llm_cost_total{app=\"dyocense\",provider=\"local\"}[24h]))",
+                    "refId": "A"
+                }
+            ],
+            "title": "Local LLM Cost (24h)",
+            "type": "stat"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 50
+                            },
+                            {
+                                "color": "red",
+                                "value": 100
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 6,
+                "w": 6,
+                "x": 6,
+                "y": 0
+            },
+            "id": 2,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "sum"
+                    ],
+                    "fields": ""
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "sum(increase(llm_cost_total{app=\"dyocense\",provider=\"azure\"}[24h]))",
+                    "refId": "A"
+                }
+            ],
+            "title": "Azure OpenAI Cost (24h)",
+            "type": "stat"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "blue",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 6,
+                "w": 6,
+                "x": 12,
+                "y": 0
+            },
+            "id": 3,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "sum"
+                    ],
+                    "fields": ""
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "sum(increase(infrastructure_cost_total{app=\"dyocense\"}[24h]))",
+                    "refId": "A"
+                }
+            ],
+            "title": "Infrastructure Cost (24h)",
+            "type": "stat"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "purple",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 6,
+                "w": 6,
+                "x": 18,
+                "y": 0
+            },
+            "id": 4,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "sum"
+                    ],
+                    "fields": ""
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "sum(increase(llm_cost_total{app=\"dyocense\"}[24h])) + sum(increase(infrastructure_cost_total{app=\"dyocense\"}[24h]))",
+                    "refId": "A"
+                }
+            ],
+            "title": "Total Cost (24h)",
+            "type": "stat"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisBorderShow": false,
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "tooltip": false,
+                            "viz": false,
+                            "legend": false
+                        },
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "normal"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "line"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 100
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 6
+            },
+            "id": 5,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean",
+                        "max",
+                        "sum"
+                    ],
+                    "displayMode": "table",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "desc"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(llm_cost_total{app=\"dyocense\",provider=\"local\"}[1h])",
+                    "legendFormat": "Local LLM",
+                    "refId": "A"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(llm_cost_total{app=\"dyocense\",provider=\"azure\"}[1h])",
+                    "legendFormat": "Azure OpenAI",
+                    "refId": "B"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(infrastructure_cost_total{app=\"dyocense\",component=\"compute\"}[1h])",
+                    "legendFormat": "Compute",
+                    "refId": "C"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(infrastructure_cost_total{app=\"dyocense\",component=\"storage\"}[1h])",
+                    "legendFormat": "Storage",
+                    "refId": "D"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(infrastructure_cost_total{app=\"dyocense\",component=\"network\"}[1h])",
+                    "legendFormat": "Network",
+                    "refId": "E"
+                }
+            ],
+            "title": "Cost Breakdown Over Time (hourly)",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "hideFrom": {
+                            "tooltip": false,
+                            "viz": false,
+                            "legend": false
+                        }
+                    },
+                    "mappings": [],
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 6
+            },
+            "id": 6,
+            "options": {
+                "displayLabels": [
+                    "percent",
+                    "value"
+                ],
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom",
+                    "showLegend": true,
+                    "values": [
+                        "value",
+                        "percent"
+                    ]
+                },
+                "pieType": "donut",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "sum"
+                    ],
+                    "fields": ""
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "sum by (provider) (increase(llm_cost_total{app=\"dyocense\"}[24h]))",
+                    "legendFormat": "{{provider}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "LLM Cost Distribution (24h)",
+            "type": "piechart"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisBorderShow": false,
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "tooltip": false,
+                            "viz": false,
+                            "legend": false
+                        },
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "short"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 14
+            },
+            "id": 7,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean",
+                        "sum"
+                    ],
+                    "displayMode": "table",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "rate(llm_tokens_total{app=\"dyocense\",token_type=\"input\"}[5m]) * 60",
+                    "legendFormat": "Input Tokens/min",
+                    "refId": "A"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "rate(llm_tokens_total{app=\"dyocense\",token_type=\"output\"}[5m]) * 60",
+                    "legendFormat": "Output Tokens/min",
+                    "refId": "B"
+                }
+            ],
+            "title": "LLM Token Usage Rate",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisBorderShow": false,
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "tooltip": false,
+                            "viz": false,
+                            "legend": false
+                        },
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 14
+            },
+            "id": 8,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean",
+                        "sum"
+                    ],
+                    "displayMode": "table",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "desc"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "increase(llm_cost_total{app=\"dyocense\"}[1h]) / sum(increase(coach_queries_total{app=\"dyocense\"}[1h]))",
+                    "legendFormat": "LLM Cost per Query",
+                    "refId": "A"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "(increase(llm_cost_total{app=\"dyocense\"}[1h]) + increase(infrastructure_cost_total{app=\"dyocense\"}[1h])) / sum(increase(coach_queries_total{app=\"dyocense\"}[1h]))",
+                    "legendFormat": "Total Cost per Query",
+                    "refId": "B"
+                }
+            ],
+            "title": "Cost per Query (hourly)",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "custom": {
+                        "align": "auto",
+                        "cellOptions": {
+                            "type": "auto"
+                        },
+                        "inspect": false
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "currencyUSD"
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Cost"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.cellOptions",
+                                "value": {
+                                    "type": "color-background"
+                                }
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "mode": "absolute",
+                                    "steps": [
+                                        {
+                                            "color": "green",
+                                            "value": null
+                                        },
+                                        {
+                                            "color": "yellow",
+                                            "value": 10
+                                        },
+                                        {
+                                            "color": "red",
+                                            "value": 50
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 22
+            },
+            "id": 9,
+            "options": {
+                "cellHeight": "sm",
+                "footer": {
+                    "countRows": false,
+                    "fields": "",
+                    "reducer": [
+                        "sum"
+                    ],
+                    "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                    {
+                        "desc": true,
+                        "displayName": "Cost"
+                    }
+                ]
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "topk(10, sum by (tenant_id) (increase(llm_cost_total{app=\"dyocense\"}[24h])))",
+                    "format": "table",
+                    "instant": true,
+                    "legendFormat": "__auto",
+                    "refId": "A"
+                }
+            ],
+            "title": "Top 10 Tenants by LLM Cost (24h)",
+            "transformations": [
+                {
+                    "id": "organize",
+                    "options": {
+                        "excludeByName": {
+                            "Time": true
+                        },
+                        "indexByName": {},
+                        "renameByName": {
+                            "tenant_id": "Tenant ID",
+                            "Value": "Cost"
+                        }
+                    }
+                }
+            ],
+            "type": "table"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "continuous-GrYlRd"
+                    },
+                    "mappings": [],
+                    "max": 100,
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 70
+                            },
+                            {
+                                "color": "red",
+                                "value": 90
+                            }
+                        ]
+                    },
+                    "unit": "percent"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 22
+            },
+            "id": 10,
+            "options": {
+                "minVizHeight": 75,
+                "minVizWidth": 75,
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": [
+                        "lastNotNull"
+                    ],
+                    "fields": ""
+                },
+                "showThresholdLabels": false,
+                "showThresholdMarkers": true,
+                "sizing": "auto"
+            },
+            "pluginVersion": "10.0.0",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "prometheus"
+                    },
+                    "expr": "(sum(increase(llm_cost_total{app=\"dyocense\"}[1d])) / 100) * 100",
+                    "legendFormat": "Daily Budget Usage",
+                    "refId": "A"
+                }
+            ],
+            "title": "Daily Budget Usage (Target: $100/day)",
+            "type": "gauge"
+        }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 39,
+    "tags": [
+        "dyocense",
+        "cost",
+        "budget"
+    ],
+    "templating": {
+        "list": []
+    },
+    "time": {
+        "from": "now-7d",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "browser",
+    "title": "Dyocense - Cost Tracking",
+    "uid": "dyocense-cost-tracking",
+    "version": 1,
+    "weekStart": ""
+}

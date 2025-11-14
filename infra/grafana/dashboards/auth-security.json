@@ -1,0 +1,397 @@
+{
+    "dashboard": {
+        "id": null,
+        "uid": "dyocense-auth-metrics",
+        "title": "Dyocense - Authentication & Security",
+        "tags": [
+            "dyocense",
+            "auth",
+            "security"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 1,
+        "refresh": "30s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "Login Attempts by Status",
+                "type": "graph",
+                "gridPos": {
+                    "x": 0,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(auth_login_attempts_total{status=\"success\"}[5m])",
+                        "legendFormat": "Success - {{tenant_id}}",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "rate(auth_login_attempts_total{status=\"invalid_credentials\"}[5m])",
+                        "legendFormat": "Invalid Credentials - {{tenant_id}}",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "rate(auth_login_attempts_total{status=\"user_not_found\"}[5m])",
+                        "legendFormat": "User Not Found - {{tenant_id}}",
+                        "refId": "C"
+                    },
+                    {
+                        "expr": "rate(auth_login_attempts_total{status=\"account_disabled\"}[5m])",
+                        "legendFormat": "Account Disabled - {{tenant_id}}",
+                        "refId": "D"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Attempts/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ],
+                "seriesOverrides": [
+                    {
+                        "alias": "/Invalid|Not Found|Disabled/",
+                        "color": "#F2495C",
+                        "fill": 0
+                    },
+                    {
+                        "alias": "/Success/",
+                        "color": "#73BF69"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Login Success Rate",
+                "type": "graph",
+                "gridPos": {
+                    "x": 12,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(auth_login_attempts_total{status=\"success\"}[5m]) / (rate(auth_login_attempts_total[5m]) > 0) * 100",
+                        "legendFormat": "{{tenant_id}}",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "percent",
+                        "label": "Success Rate",
+                        "max": 100,
+                        "min": 0
+                    },
+                    {
+                        "format": "short"
+                    }
+                ],
+                "thresholds": [
+                    {
+                        "value": 95,
+                        "color": "green"
+                    },
+                    {
+                        "value": 80,
+                        "color": "yellow"
+                    },
+                    {
+                        "value": 0,
+                        "color": "red"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "Login Latency",
+                "type": "graph",
+                "gridPos": {
+                    "x": 0,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(auth_login_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p95",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.50, rate(auth_login_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p50",
+                        "refId": "B"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.99, rate(auth_login_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p99",
+                        "refId": "C"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "s",
+                        "label": "Latency"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ],
+                "alert": {
+                    "conditions": [
+                        {
+                            "evaluator": {
+                                "params": [
+                                    0.5
+                                ],
+                                "type": "gt"
+                            },
+                            "query": {
+                                "params": [
+                                    "A",
+                                    "5m",
+                                    "now"
+                                ]
+                            },
+                            "type": "query"
+                        }
+                    ],
+                    "message": "Login latency p95 exceeds 500ms"
+                }
+            },
+            {
+                "id": 4,
+                "title": "Failed Login Attempts (Security Alert)",
+                "type": "graph",
+                "gridPos": {
+                    "x": 12,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "sum by (tenant_id) (rate(auth_login_attempts_total{status!=\"success\"}[5m]))",
+                        "legendFormat": "{{tenant_id}}",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Failed Attempts/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ],
+                "thresholds": [
+                    {
+                        "value": 5,
+                        "color": "yellow"
+                    },
+                    {
+                        "value": 10,
+                        "color": "red"
+                    }
+                ]
+            },
+            {
+                "id": 5,
+                "title": "Total Login Attempts - Last Hour",
+                "type": "stat",
+                "gridPos": {
+                    "x": 0,
+                    "y": 16,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(auth_login_attempts_total[1h]))",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "short",
+                        "decimals": 0,
+                        "displayName": "Total Logins"
+                    }
+                }
+            },
+            {
+                "id": 6,
+                "title": "Success Rate - Last Hour",
+                "type": "stat",
+                "gridPos": {
+                    "x": 6,
+                    "y": 16,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(auth_login_attempts_total{status=\"success\"}[1h])) / sum(increase(auth_login_attempts_total[1h])) * 100",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "percent",
+                        "decimals": 1,
+                        "displayName": "Success Rate",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": 0,
+                                    "color": "red"
+                                },
+                                {
+                                    "value": 80,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 95,
+                                    "color": "green"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 7,
+                "title": "Failed Attempts - Last Hour",
+                "type": "stat",
+                "gridPos": {
+                    "x": 12,
+                    "y": 16,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "sum(increase(auth_login_attempts_total{status!=\"success\"}[1h]))",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "short",
+                        "decimals": 0,
+                        "displayName": "Failed Logins",
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {
+                                    "value": 0,
+                                    "color": "green"
+                                },
+                                {
+                                    "value": 10,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 50,
+                                    "color": "red"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            {
+                "id": 8,
+                "title": "Average Login Latency",
+                "type": "stat",
+                "gridPos": {
+                    "x": 18,
+                    "y": 16,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "avg(rate(auth_login_duration_seconds_sum[5m]) / rate(auth_login_duration_seconds_count[5m]))",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "s",
+                        "decimals": 3,
+                        "displayName": "Avg Latency"
+                    }
+                }
+            }
+        ],
+        "templating": {
+            "list": [
+                {
+                    "name": "tenant",
+                    "type": "query",
+                    "datasource": "Prometheus",
+                    "query": "label_values(auth_login_attempts_total, tenant_id)",
+                    "multi": true,
+                    "includeAll": true,
+                    "refresh": 1
+                }
+            ]
+        },
+        "time": {
+            "from": "now-1h",
+            "to": "now"
+        },
+        "timepicker": {
+            "refresh_intervals": [
+                "5s",
+                "10s",
+                "30s",
+                "1m",
+                "5m"
+            ]
+        }
+    }
+}

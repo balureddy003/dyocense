@@ -31,6 +31,37 @@ format:
 test: setup
 	PYTHONPATH=. $(VENV_BIN)/pytest
 
+# =================================================================
+# v4.0 Unified Backend Commands
+# =================================================================
+
+dev: setup
+	@echo "Starting Dyocense v4.0 backend..."
+	PYTHONPATH=. $(VENV_BIN)/uvicorn backend.main:app --reload --host 127.0.0.1 --port 8001 --log-level debug
+
+run-backend: dev
+
+migrate: setup
+	@echo "Running database migrations..."
+	PYTHONPATH=. $(VENV_BIN)/alembic upgrade head
+
+migrate-create: setup
+	@echo "Creating new migration..."
+	@read -p "Migration name: " name; \
+	PYTHONPATH=. $(VENV_BIN)/alembic revision --autogenerate -m "$$name"
+
+migrate-rollback: setup
+	@echo "Rolling back last migration..."
+	PYTHONPATH=. $(VENV_BIN)/alembic downgrade -1
+
+db-shell: setup
+	@echo "Connecting to PostgreSQL..."
+	psql postgresql://dyocense:dyocense@localhost:5432/dyocense
+
+# =================================================================
+# Legacy Service Commands (for migration reference)
+# =================================================================
+
 run-kernel: setup
 	PYTHONPATH=. $(VENV_BIN)/uvicorn services.kernel.main:app --reload --port 8001
 

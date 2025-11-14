@@ -1,0 +1,303 @@
+{
+    "dashboard": {
+        "id": null,
+        "uid": "dyocense-evidence-engine",
+        "title": "Dyocense - Evidence Engine Analytics",
+        "tags": [
+            "dyocense",
+            "evidence",
+            "analytics"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 1,
+        "refresh": "30s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "Correlation Analyses - Total",
+                "type": "graph",
+                "gridPos": {
+                    "x": 0,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(evidence_correlations_total[5m])",
+                        "legendFormat": "{{tenant_id}} ({{num_series}} series)",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Correlation Analysis Latency",
+                "type": "graph",
+                "gridPos": {
+                    "x": 12,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(evidence_correlation_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p95 ({{num_series}} series)",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.50, rate(evidence_correlation_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p50 ({{num_series}} series)",
+                        "refId": "B"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "s",
+                        "label": "Latency"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "What-If Analyses - Total",
+                "type": "graph",
+                "gridPos": {
+                    "x": 0,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(evidence_whatif_total[5m])",
+                        "legendFormat": "{{tenant_id}}",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 4,
+                "title": "What-If Model Quality (R²)",
+                "type": "graph",
+                "gridPos": {
+                    "x": 12,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(evidence_model_r2_bucket[5m]))",
+                        "legendFormat": "p95 R²",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.50, rate(evidence_model_r2_bucket[5m]))",
+                        "legendFormat": "p50 R²",
+                        "refId": "B"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "percentunit",
+                        "label": "R² Score",
+                        "max": 1,
+                        "min": 0
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 5,
+                "title": "Driver Inference Operations",
+                "type": "graph",
+                "gridPos": {
+                    "x": 0,
+                    "y": 16,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(evidence_drivers_total[5m])",
+                        "legendFormat": "{{tenant_id}} ({{num_drivers}} drivers)",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 6,
+                "title": "Granger Causality Tests",
+                "type": "graph",
+                "gridPos": {
+                    "x": 12,
+                    "y": 16,
+                    "w": 12,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(evidence_granger_total[5m])",
+                        "legendFormat": "{{tenant_id}}",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "ops",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 7,
+                "title": "Correlation Coefficient Distribution",
+                "type": "heatmap",
+                "gridPos": {
+                    "x": 0,
+                    "y": 24,
+                    "w": 24,
+                    "h": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(evidence_correlation_strength_bucket[5m])",
+                        "legendFormat": "{{le}}",
+                        "refId": "A",
+                        "format": "heatmap"
+                    }
+                ],
+                "dataFormat": "tsbuckets"
+            },
+            {
+                "id": 8,
+                "title": "Evidence Engine - Overall Performance",
+                "type": "stat",
+                "gridPos": {
+                    "x": 0,
+                    "y": 32,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "sum(rate(evidence_correlations_total[5m])) + sum(rate(evidence_whatif_total[5m])) + sum(rate(evidence_drivers_total[5m])) + sum(rate(evidence_granger_total[5m]))",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    },
+                    "textMode": "value_and_name"
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "ops",
+                        "decimals": 2,
+                        "displayName": "Total Operations/sec"
+                    }
+                }
+            },
+            {
+                "id": 9,
+                "title": "Average Latency",
+                "type": "stat",
+                "gridPos": {
+                    "x": 6,
+                    "y": 32,
+                    "w": 6,
+                    "h": 4
+                },
+                "targets": [
+                    {
+                        "expr": "avg(rate(evidence_correlation_duration_seconds_sum[5m]) / rate(evidence_correlation_duration_seconds_count[5m]))",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "reduceOptions": {
+                        "values": false,
+                        "calcs": [
+                            "lastNotNull"
+                        ]
+                    }
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "s",
+                        "decimals": 3,
+                        "displayName": "Avg Latency"
+                    }
+                }
+            }
+        ],
+        "templating": {
+            "list": [
+                {
+                    "name": "tenant",
+                    "type": "query",
+                    "datasource": "Prometheus",
+                    "query": "label_values(evidence_correlations_total, tenant_id)",
+                    "multi": true,
+                    "includeAll": true,
+                    "refresh": 1
+                }
+            ]
+        },
+        "time": {
+            "from": "now-1h",
+            "to": "now"
+        },
+        "timepicker": {
+            "refresh_intervals": [
+                "5s",
+                "10s",
+                "30s",
+                "1m",
+                "5m"
+            ]
+        }
+    }
+}

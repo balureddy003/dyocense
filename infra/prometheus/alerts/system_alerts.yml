@@ -1,0 +1,121 @@
+# =====================================================================
+# System Alert Rules for Dyocense v4.0
+# =====================================================================
+
+groups:
+  - name: system_alerts
+    interval: 30s
+    rules:
+      # PostgreSQL Alerts
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database has been down for more than 1 minute"
+
+      - alert: PostgreSQLTooManyConnections
+        expr: sum(pg_stat_activity_count) > 150
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "PostgreSQL has too many connections"
+          description: "PostgreSQL has {{ $value }} active connections (threshold: 150)"
+
+      - alert: PostgreSQLSlowQueries
+        expr: rate(pg_stat_statements_mean_exec_time[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "PostgreSQL slow queries detected"
+          description: "Average query execution time is {{ $value }}ms"
+
+      # Kernel Service Alerts
+      - alert: KernelServiceDown
+        expr: up{job="kernel"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: kernel
+        annotations:
+          summary: "Kernel service is down"
+          description: "Kernel service has been down for more than 1 minute"
+
+      - alert: KernelHighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: kernel
+        annotations:
+          summary: "Kernel service has high error rate"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: KernelHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: kernel
+        annotations:
+          summary: "Kernel service has high latency"
+          description: "95th percentile latency is {{ $value }}s"
+
+      # System Resource Alerts
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}%"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 10% on {{ $labels.mountpoint }}"
+
+      # Cost Alerts
+      - alert: HighDailyLLMCostPerTenant
+        expr: sum by (tenant_id) (increase(llm_cost_total[1d])) > 100
+        for: 15m
+        labels:
+          severity: warning
+          component: cost
+        annotations:
+          summary: "High daily LLM cost per tenant"
+          description: "Tenant {{ $labels.tenant_id }} spent ${{ $value | printf "%.2f" }} on LLM in the last 24h (threshold: $100)"
+
+      - alert: HighDailyTotalCost
+        expr: (increase(infrastructure_cost_total[1d]) + increase(llm_cost_total[1d])) > 150
+        for: 15m
+        labels:
+          severity: warning
+          component: cost
+        annotations:
+          summary: "High daily total cost"
+          description: "Total daily cost is ${{ $value | printf "%.2f" }} (threshold: $150)"
