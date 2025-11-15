@@ -1,0 +1,40 @@
+External Data Integration
+Benchmark Data Sources
+1. Industry Benchmarks
+Sources:
+
+IBISWorld: Industry reports (paid subscription, ~$1000/year)
+Statista: Statistical data (freemium model)
+BizMiner: Financial benchmarks by industry/size (paid)
+Pipeline:
+
+Scheduled Download: Airflow DAG fetches monthly reports
+Parsing: PDF/Excel → structured JSON (via LLM extraction or tabula-py)
+Validation: Check data ranges, flag outliers
+Storage: external_benchmarks table
+API: GET /v1/benchmarks?industry=X&metric=Y
+2. Competitor Intelligence
+Sources (legal compliance required):
+
+Public Financials: SEC filings, annual reports
+Web Scraping: Pricing pages (robots.txt compliant)
+Aggregated Datasets: Crunchbase, PitchBook (paid)
+Privacy: Aggregate data only (min 5 companies per peer group)
+
+3. Economic Indicators
+Sources:
+
+FRED API: Federal Reserve Economic Data (free)
+World Bank API: Global development indicators (free)
+US Census Bureau: Business statistics (free)
+Metrics: CPI, unemployment rate, GDP growth, consumer confidence
+
+Pipeline: Daily Airflow DAG fetches latest data
+
+4. Compliance Standards
+Sources:
+
+AICPA: Audit standards (free public resources)
+NIST: Cybersecurity framework (free)
+ISO: ISO 27001, SOC2 checklists (manual curation)
+Storage: Structured questionnaires in PostgreSQL

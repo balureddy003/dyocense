@@ -13,8 +13,7 @@ const navItems = [
     { path: '/coach', label: 'Coach', icon: '💡', description: 'AI business coach' },
     { path: '/analytics', label: 'Analytics', icon: '📈', description: 'Track your progress' },
     { path: '/achievements', label: 'Achievements', icon: '🏆', description: 'Unlock badges' },
-    { path: '/marketplace', label: 'Marketplace', icon: '🏪', description: 'Browse connectors' },
-    { path: '/connectors', label: 'Data', icon: '🔗', description: 'Connected sources' },
+    { path: '/connectors', label: 'Data Sources', icon: '�', description: 'Connect and manage your business data' },
 ]
 
 export default function PlatformLayout({ children }: PlatformLayoutProps) {
@@ -23,6 +22,9 @@ export default function PlatformLayout({ children }: PlatformLayoutProps) {
     const clearAuth = useAuthStore((s) => s.clearAuth)
     const tenantId = useAuthStore((s) => s.tenantId)
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+    // Debug: Log tenant ID to verify it's not stuck on 'demo'
+    console.log('[PlatformLayout] Current tenantId:', tenantId)
 
     const handleSignOut = () => {
         clearAuth()
@@ -71,20 +73,15 @@ export default function PlatformLayout({ children }: PlatformLayoutProps) {
 
                     {/* User Menu */}
                     <div className="flex items-center gap-2">
-                        <Link
-                            to="/marketplace"
-                            className="hidden items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-medium text-brand-700 transition hover:border-brand-300 hover:bg-brand-100 md:inline-flex"
-                        >
-                            <span>🏪</span>
-                            <span className="hidden lg:inline">Marketplace</span>
-                        </Link>
+                        {/* Quick Access: Data Sources */}
                         <Link
                             to="/connectors"
-                            className="hidden items-center gap-1 rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-700 transition hover:border-brand-600 hover:text-brand-700 md:inline-flex"
+                            className="hidden items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-medium text-brand-700 transition hover:border-brand-300 hover:bg-brand-100 md:inline-flex"
                         >
-                            <span>🔗</span>
-                            <span className="hidden lg:inline">Data Sources</span>
+                            <span>🔌</span>
+                            <span>Data Sources</span>
                         </Link>
+
                         <button
                             type="button"
                             onClick={handleSignOut}

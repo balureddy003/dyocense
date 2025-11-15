@@ -28,7 +28,7 @@ export async function post<T = any>(path: string, body: any = {}, token?: string
         error.status = res.status
         error.statusText = res.statusText
         try {
-            error.body = await res.json()
+            error.body = await readBody(res)
         } catch {
             // Ignore if response body is not JSON
         }
@@ -92,6 +92,14 @@ export async function tryDelete(path: string, token?: string): Promise<boolean> 
     } catch (_err) {
         return false
     }
+}
+
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+    return post('/v1/auth/request-password-reset', { email })
+}
+
+export async function resetPassword(token: string, password: string): Promise<{ message: string }> {
+    return post('/v1/auth/reset-password', { token, password })
 }
 
 export type CatalogItem = {
@@ -198,8 +206,8 @@ const connectorsPath = (path: string) => `${CONNECTORS_API_BASE}${path}`
 export async function listConnectors(token?: string, statusFilter?: ConnectorStatus, tenantId?: string): Promise<TenantConnector[]> {
     if (!tenantId) return []
     const query = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : ''
-    const data = await tryGet<TenantConnector[]>(`/v1/tenants/${tenantId}/connectors${query}`, token)
-    return data ?? []
+    const response = await tryGet<{ connectors: TenantConnector[]; total: number }>(`/v1/tenants/${tenantId}/connectors${query}`, token)
+    return response?.connectors ?? []
 }
 
 export async function fetchConnectorCatalog(token?: string): Promise<ConnectorCatalogItem[]> {
@@ -303,4 +311,124 @@ export type ConnectorRecommendationsResponse = {
 export async function getConnectorRecommendations(token?: string, tenantId?: string): Promise<ConnectorRecommendationsResponse> {
     if (!tenantId) throw new Error('Tenant ID required')
     return get(`/v1/tenants/${tenantId}/connectors/recommendations`, token)
+}
+
+// ===================================
+// Coach V6 API Functions
+// ===================================
+
+export type CoachRecommendation = {
+    id: string
+    priority: 'critical' | 'important' | 'suggestion'
+    title: string
+    description: string
+    reasoning?: string
+    actions: Array<{
+        id: string
+        label: string
+        description?: string
+        buttonText: string
+        variant?: string
+        completed?: boolean
+    }>
+    dismissible: boolean
+    dismissed: boolean
+    createdAt: string
+    generatedAt: string
+    expiresAt?: string
+    metadata?: Record<string, any>
+}
+
+export type Alert = {
+    id: string
+    type: string
+    title: string
+    description: string
+    metric?: string
+    value?: any
+    threshold?: any
+}
+
+export type Signal = {
+    id: string
+    type: string
+    title: string
+    description: string
+    metric?: string
+    value?: any
+}
+
+export type MetricSnapshot = {
+    id: string
+    label: string
+    value: string
+    change: number
+    changeType: 'percentage' | 'absolute'
+    trend: 'up' | 'down' | 'stable'
+    sparklineData?: number[]
+    period?: string
+    format?: string
+}
+
+export async function getCoachRecommendations(tenantId: string, token?: string): Promise<CoachRecommendation[]> {
+    return get(`/v1/tenants/${tenantId}/coach/recommendations`, token)
+}
+
+export async function dismissRecommendation(tenantId: string, recId: string, token?: string): Promise<{ success: boolean }> {
+    return post(`/v1/tenants/${tenantId}/coach/recommendations/${recId}/dismiss`, {}, token)
+}
+
+export interface RecommendationFeedback {
+    helpful: boolean
+    reason?: string
+    comment?: string
+}
+
+export async function submitRecommendationFeedback(
+    tenantId: string,
+    recId: string,
+    feedback: RecommendationFeedback,
+    token?: string
+): Promise<{ success: boolean; feedback_id: string }> {
+    return post(`/v1/tenants/${tenantId}/coach/recommendations/${recId}/feedback`, feedback, token)
+}
+
+export async function getHealthAlerts(tenantId: string, token?: string): Promise<Alert[]> {
+    return get(`/v1/tenants/${tenantId}/health-score/alerts`, token)
+}
+
+export async function getHealthSignals(tenantId: string, token?: string): Promise<Signal[]> {
+    return get(`/v1/tenants/${tenantId}/health-score/signals`, token)
+}
+
+export async function getMetricsSnapshot(tenantId: string, token?: string): Promise<MetricSnapshot[]> {
+    return get(`/v1/tenants/${tenantId}/metrics/snapshot`, token)
+}
+
+export type HealthScore = {
+    score: number
+    trend: number
+    breakdown: {
+        revenue?: number
+        operations?: number
+        customer?: number
+        revenue_available: boolean
+        operations_available: boolean
+        customer_available: boolean
+    }
+    last_updated: string
+    period_days: number
+}
+
+export async function getHealthScore(tenantId: string, token?: string): Promise<HealthScore> {
+    return get(`/v1/tenants/${tenantId}/health-score`, token)
+}
+
+export async function getGoals(tenantId: string, token?: string): Promise<any[]> {
+    return get(`/v1/tenants/${tenantId}/goals`, token)
+}
+
+export async function getTasks(tenantId: string, token?: string, horizon?: string): Promise<any[]> {
+    const params = horizon ? `?horizon=${horizon}` : '';
+    return get(`/v1/tenants/${tenantId}/tasks${params}`, token)
 }

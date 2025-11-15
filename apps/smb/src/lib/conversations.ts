@@ -1,4 +1,12 @@
-import { Message } from '../pages/CoachV4'
+// Keep this file self-contained to avoid tight coupling with a specific Coach version.
+// Define a minimal Message type compatible with CoachV4/V5 message shapes.
+export interface Message {
+    id: string
+    role: 'user' | 'assistant'
+    content: string
+    timestamp: Date
+    metadata?: Record<string, any>
+}
 
 export interface Conversation {
     id: string
@@ -8,6 +16,7 @@ export interface Conversation {
     updatedAt: Date
     agent: string
     tenantId: string  // Ensure conversations are tenant-specific
+    goalId?: string   // Optional link to a goal for context
 }
 
 const MAX_CONVERSATIONS = 50

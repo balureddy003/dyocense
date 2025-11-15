@@ -1,13 +1,14 @@
-import { ActionIcon, Alert, Badge, Button, Card, Group, Loader, Progress, Stack, Text, Title } from '@mantine/core'
-import { IconArrowRight, IconCheck, IconCircle, IconRefresh, IconSparkles, IconTarget } from '@tabler/icons-react'
+import { ActionIcon, Alert, Badge, Button, Card, Group, Loader, Modal, Stack, Text, Textarea, Title } from '@mantine/core'
+import { IconCheck, IconCircle, IconRefresh, IconSparkles, IconX } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import React from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { get, post } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 import { useTemplateStore } from '../stores/template'
 
 type Task = {
+    id?: string
     label: string
     owner?: string
     status?: string
@@ -26,6 +27,12 @@ export default function Planner() {
     const { selectedTemplate } = useTemplateStore()
     const navigate = useNavigate()
     const queryClient = useQueryClient()
+    const [searchParams] = useSearchParams()
+
+    // Deep linking support for taskId
+    const taskIdParam = searchParams.get('taskId')
+    const [selectedTaskIndex, setSelectedTaskIndex] = useState<number | null>(null)
+    const [taskDetailOpen, setTaskDetailOpen] = useState(false)
 
     // Check if coming from coach page
     const [showWelcomeBanner, setShowWelcomeBanner] = React.useState(() => {
@@ -49,6 +56,17 @@ export default function Planner() {
     })
 
     const plan = planData
+
+    // Handle deep linking to specific task
+    useEffect(() => {
+        if (taskIdParam && plan?.tasks) {
+            const taskIndex = plan.tasks.findIndex((t: Task) => t.id === taskIdParam || t.label.includes(taskIdParam))
+            if (taskIndex !== -1) {
+                setSelectedTaskIndex(taskIndex)
+                setTaskDetailOpen(true)
+            }
+        }
+    }, [taskIdParam, plan]);
 
     const taskStats = React.useMemo(() => {
         if (!plan?.tasks?.length) return { total: 0, completed: 0, inProgress: 0, pending: 0 }
@@ -99,12 +117,9 @@ export default function Planner() {
             {/* Header */}
             <Group justify="space-between" mb="xl">
                 <div>
-                    <Group gap="xs" mb={4}>
-                        <IconTarget size={28} color="#4c6ef5" />
-                        <Title order={2}>Action Plan</Title>
-                    </Group>
-                    <Text size="sm" c="dimmed">
-                        Your weekly roadmap to achieve your goals
+                    <Title order={1}>Action Plan</Title>
+                    <Text c="dimmed" size="sm">
+                        Your tasks and priorities
                     </Text>
                 </div>
                 <Group>
@@ -312,6 +327,21 @@ export default function Planner() {
                             </Button>
                         </Group>
                     </Card>
+
+                    {/* Task Detail Modal - New */}
+                    <Modal
+                        opened={taskDetailOpen}
+                        onClose={() => setTaskDetailOpen(false)}
+                        title="Task Details"
+                        size="lg"
+                    >
+                        {selectedTaskIndex !== null && plan.tasks && (
+                            <TaskDetailView
+                                task={plan.tasks[selectedTaskIndex]}
+                                onClose={() => setTaskDetailOpen(false)}
+                            />
+                        )}
+                    </Modal>
                 </>
             )}
 
@@ -341,6 +371,63 @@ export default function Planner() {
                     Please try refreshing the page or contact support.
                 </Alert>
             )}
+        </div>
+    )
+}
+
+// New TaskDetailView component for modal
+function TaskDetailView({ task, onClose }: { task: Task, onClose: () => void }) {
+    const [taskData, setTaskData] = useState<Task>(task)
+
+    const updateTaskMutation = useMutation({
+        mutationFn: async (updatedTask: Task) => {
+            if (!updatedTask.id) throw new Error('Task ID is required')
+            return await post<Task>(
+                `/v1/tenants/${encodeURIComponent(taskData.tenantId!)}/tasks/${encodeURIComponent(updatedTask.id)}`,
+                updatedTask,
+                taskData.apiToken,
+            )
+        },
+        onSuccess: (data) => {
+            setTaskData(data)
+        },
+    })
+
+    return (
+        <div>
+            <Text size="lg" fw={500} mb="md">
+                {taskData.label}
+            </Text>
+            <Textarea
+                value={taskData.description}
+                onChange={(e) => setTaskData({ ...taskData, description: e.target.value })}
+                placeholder="Task description"
+                label="Description"
+                minRows={2}
+                mb="md"
+            />
+            <Group position="apart" mt="md">
+                <Button
+                    variant="light"
+                    onClick={() => {
+                        onClose()
+                        updateTaskMutation.mutate(taskData)
+                    }}
+                    loading={updateTaskMutation.isPending}
+                >
+                    Save Changes
+                </Button>
+                <Button
+                    variant="outline"
+                    color="red"
+                    onClick={() => {
+                        onClose()
+                        // Optionally, add task deletion logic here
+                    }}
+                >
+                    <IconX size={16} /> Delete Task
+                </Button>
+            </Group>
         </div>
     )
 }

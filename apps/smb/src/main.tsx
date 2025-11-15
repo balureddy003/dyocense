@@ -11,22 +11,25 @@ import { BusinessContextProvider } from './contexts/BusinessContext'
 import PlatformLayout from './layouts/PlatformLayout'
 import PublicLayout from './layouts/PublicLayout'
 import { Achievements } from './pages/Achievements'
+import { AdvancedAnalytics } from './pages/AdvancedAnalytics'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
-import Coach from './pages/Coach'
-import CoachV3 from './pages/CoachV3'
-import CoachV4 from './pages/CoachV4'
-import ConnectorMarketplace from './pages/ConnectorMarketplace'
-import Connectors from './pages/Connectors'
+import CoachV5 from './pages/CoachV5'
+import ConnectorsNew from './pages/ConnectorsNew'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
+import { CustomMetrics } from './pages/CustomMetrics'
 import Executor from './pages/Executor'
+import { Forecasting } from './pages/Forecasting'
+import ForgotPassword from './pages/ForgotPassword'
 import Goals from './pages/Goals'
 import Home from './pages/Home'
+import { Integrations } from './pages/Integrations'
 import LandingPage from './pages/LandingPage'
 import Login from './pages/Login'
 import OAuthCallback from './pages/OAuthCallback'
 import Planner from './pages/Planner'
+import { Reports } from './pages/Reports'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
 import Tools from './pages/Tools'
@@ -278,6 +281,14 @@ function App() {
                                 }
                             />
                             <Route
+                                path="/forgot-password"
+                                element={
+                                    <PublicLayout showNav={false}>
+                                        <ForgotPassword />
+                                    </PublicLayout>
+                                }
+                            />
+                            <Route
                                 path="/verify"
                                 element={
                                     <PublicLayout showNav={false}>
@@ -356,17 +367,18 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <Connectors />
+                                            <ConnectorsNew />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
                             />
+                            {/* Legacy redirect - marketplace now unified with connectors */}
                             <Route
                                 path="/marketplace"
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <ConnectorMarketplace />
+                                            <ConnectorsNew />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
@@ -416,7 +428,7 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV4 />
+                                            <CoachV5 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
@@ -426,27 +438,17 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV4 />
+                                            <CoachV5 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
                             />
                             <Route
-                                path="/coach-v3"
+                                path="/coach-v5"
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <CoachV3 />
-                                        </PlatformLayout>
-                                    </RequireAuth>
-                                }
-                            />
-                            <Route
-                                path="/coach-old"
-                                element={
-                                    <RequireAuth>
-                                        <PlatformLayout>
-                                            <Coach />
+                                            <CoachV5 />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
@@ -457,6 +459,56 @@ function App() {
                                     <RequireAuth>
                                         <PlatformLayout>
                                             <Analytics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/advanced-analytics"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <AdvancedAnalytics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/reports"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Reports />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/custom-metrics"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <CustomMetrics />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/forecasting"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Forecasting />
+                                        </PlatformLayout>
+                                    </RequireAuth>
+                                }
+                            />
+                            <Route
+                                path="/integrations"
+                                element={
+                                    <RequireAuth>
+                                        <PlatformLayout>
+                                            <Integrations />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
