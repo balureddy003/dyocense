@@ -1,6 +1,6 @@
 """add_raw_and_dq_alerts
 
-Revision ID: add_raw_and_dq_alerts_20251115_1305
+Revision ID: raw_dq_20251115
 Revises: f8a82d1a01e2
 Create Date: 2025-11-15 13:05:00+00:00
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'add_raw_and_dq_alerts_20251115_1305'
+revision: str = 'raw_dq_20251115'
 down_revision: Union[str, None] = 'f8a82d1a01e2'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
