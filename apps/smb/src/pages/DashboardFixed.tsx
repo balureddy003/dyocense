@@ -24,6 +24,7 @@ export default function DashboardFixed() {
     const [metrics, setMetrics] = useState<MetricSnapshot[]>([]);
     const [goals, setGoals] = useState<GoalWithProgress[]>([]);
     const [tasks, setTasks] = useState<TaskWithPriority[]>([]);
+    const [connectedSourcesCount, setConnectedSourcesCount] = useState<number>(0);
     const [recFilter, setRecFilter] = useState<'all' | 'critical' | 'important' | 'suggestion'>('all');
     const [showCoach, setShowCoach] = useState(false);
     const [showGoalsTasks, setShowGoalsTasks] = useState(true);
@@ -48,13 +49,14 @@ export default function DashboardFixed() {
         setError(null);
         try {
             // Fetch tasks with defensive fallback in case horizon=today is unsupported
-            const [health, alertsData, signalsData, metricsData, goalsData, recs] = await Promise.all([
+            const [health, alertsData, signalsData, metricsData, goalsData, recs, connectedSources] = await Promise.all([
                 api.getHealthScore(tenantId, token),
                 api.getHealthAlerts(tenantId, token),
                 api.getHealthSignals(tenantId, token),
                 api.getMetricsSnapshot(tenantId, token),
                 api.getGoals(tenantId, token),
                 api.getCoachRecommendations(tenantId, token),
+                api.get<{ connectors: any[]; total: number }>(`/v1/tenants/${tenantId}/connectors/connected`).catch(() => ({ connectors: [], total: 0 })),
             ]);
 
             let tasksData: any[] = [];
@@ -115,6 +117,8 @@ export default function DashboardFixed() {
                     },
                 })),
             })) as any);
+
+            setConnectedSourcesCount(connectedSources?.total ?? 0);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load data');
         } finally {
@@ -225,9 +229,29 @@ export default function DashboardFixed() {
                     </Card>
 
                     <Group gap="sm">
+                        {connectedSourcesCount === 0 && (
+                            <Button
+                                variant="gradient"
+                                gradient={{ from: 'brand', to: 'cyan', deg: 45 }}
+                                leftSection={<span>🔌</span>}
+                                onClick={() => navigate('/connectors')}
+                                size="md"
+                            >
+                                Connect Your First Data Source
+                            </Button>
+                        )}
                         <Button variant="light" leftSection={<IconBulb size={16} />} onClick={handleAskCoach}>Ask Coach</Button>
-                        <Button variant="gradient" leftSection={<IconTarget size={16} />} onClick={() => navigate('/goals')}>Set a goal</Button>
+                        <Button variant={connectedSourcesCount === 0 ? 'default' : 'gradient'} leftSection={<IconTarget size={16} />} onClick={() => navigate('/goals')}>Set a goal</Button>
                         <Button variant="default" leftSection={<IconNote size={16} />} onClick={() => navigate('/planner')}>Open Action Plan</Button>
+                        {connectedSourcesCount > 0 && (
+                            <Button
+                                variant="subtle"
+                                leftSection={<span>🔌</span>}
+                                onClick={() => navigate('/connectors')}
+                            >
+                                Data Sources ({connectedSourcesCount})
+                            </Button>
+                        )}
                     </Group>
 
                     <Grid gutter="xl">

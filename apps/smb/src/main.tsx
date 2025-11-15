@@ -15,8 +15,7 @@ import { AdvancedAnalytics } from './pages/AdvancedAnalytics'
 import Agents from './pages/Agents'
 import { Analytics } from './pages/Analytics'
 import CoachV5 from './pages/CoachV5'
-import ConnectorMarketplace from './pages/ConnectorMarketplace'
-import Connectors from './pages/Connectors'
+import ConnectorsNew from './pages/ConnectorsNew'
 import Contact from './pages/Contact'
 import Copilot from './pages/Copilot'
 import { CustomMetrics } from './pages/CustomMetrics'
@@ -368,17 +367,18 @@ function App() {
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <Connectors />
+                                            <ConnectorsNew />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }
                             />
+                            {/* Legacy redirect - marketplace now unified with connectors */}
                             <Route
                                 path="/marketplace"
                                 element={
                                     <RequireAuth>
                                         <PlatformLayout>
-                                            <ConnectorMarketplace />
+                                            <ConnectorsNew />
                                         </PlatformLayout>
                                     </RequireAuth>
                                 }

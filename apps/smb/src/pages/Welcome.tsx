@@ -1,5 +1,5 @@
-import { Button, Progress, Stack, Text, Title } from '@mantine/core'
-import { IconSparkles } from '@tabler/icons-react'
+import { Badge, Button, Card, Grid, Group, Paper, Progress, Stack, Text, Title } from '@mantine/core'
+import { IconChartBar, IconCheckbox, IconPlugConnected, IconRocket, IconSparkles, IconTarget } from '@tabler/icons-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/auth'
