@@ -4,6 +4,9 @@ from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional
 import os
 from datetime import datetime, timezone
+import datetime as py_dt
+import uuid
+import json
 
 # Optional imports of internal packages (guarded so local dev still runs)
 try:
@@ -124,22 +127,28 @@ def create_app() -> FastAPI:
 		orders = 0
 		inventory = 0
 		customers = 0
-		if CONNECTORS_AVAILABLE and PostgresBackend is not None:
+		# Prefer direct Postgres reads when available (even if connector_repo package is missing)
+		if PostgresBackend is not None:
 			try:
 				backend = get_backend()
 				if backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
 					with backend.get_connection() as conn:  # type: ignore
 						with conn.cursor() as cur:
+							# Align with current schema: use data_sources.extra_data for totals and data types
 							cur.execute(
 								"""
-								SELECT data_types, COALESCE((metadata->>'total_records')::int, 0) AS total
-								  FROM connectors.connectors
+								SELECT COALESCE(extra_data->>'data_types', '[]') AS data_types,
+								       COALESCE((extra_data->>'total_records')::int, 0)    AS total
+								  FROM data_sources
 								 WHERE tenant_id = %s
 								""",
 								[tenant_id],
 							)
 							for row in cur.fetchall():
-								dt = row[0] or []
+								try:
+									dt = json.loads(row[0] or "[]")
+								except Exception:
+									dt = []
 								total = int(row[1] or 0)
 								if "orders" in dt:
 									orders += total
@@ -351,7 +360,7 @@ def create_app() -> FastAPI:
 		Shape matches apps/smb/src/contexts/BusinessContext.tsx DataSource.
 		"""
 		# Attempt to compute from connectors metadata in Postgres
-		if CONNECTORS_AVAILABLE and PostgresBackend is not None:
+		if PostgresBackend is not None:
 			try:
 				backend = get_backend()
 				if backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
@@ -363,14 +372,18 @@ def create_app() -> FastAPI:
 						with conn.cursor() as cur:
 							cur.execute(
 								"""
-								SELECT data_types, COALESCE((metadata->>'total_records')::int, 0) AS total
-								  FROM connectors.connectors
+								SELECT COALESCE(extra_data->>'data_types', '[]') AS data_types,
+								       COALESCE((extra_data->>'total_records')::int, 0)    AS total
+								  FROM data_sources
 								 WHERE tenant_id = %s
 								""",
 								[tenant_id],
 							)
 							for row in cur.fetchall():
-								dtypes = row[0] or []
+								try:
+									dtypes = json.loads(row[0] or "[]")
+								except Exception:
+									dtypes = []
 								total = int(row[1] or 0)
 								if total > 0:
 									has_real = True
@@ -489,6 +502,7 @@ def create_app() -> FastAPI:
 	@app.get("/v1/tenants/{tenant_id}/connectors")
 	def list_connectors(tenant_id: str, status_filter: Optional[str] = Query(default=None)) -> Dict[str, Any]:
 		"""List connectors from Postgres when available; fallback to in-memory."""
+		# Preferred path: repository (when package is available)
 		if connector_repo is not None:
 			status_enum = None
 			if status_filter:
@@ -504,6 +518,49 @@ def create_app() -> FastAPI:
 			models = connector_repo.list_by_tenant(tenant_id, status_enum)  # type: ignore
 			items = [m.model_dump() if hasattr(m, "model_dump") else m for m in models]
 			return {"connectors": items, "total": len(items)}
+		# Secondary path: direct SQL against data_sources when Postgres backend available
+		if PostgresBackend is not None:
+			try:
+				backend = get_backend()
+				if backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+					with backend.get_connection() as conn:  # type: ignore
+						with conn.cursor() as cur:
+							cur.execute(
+								"""
+								SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
+								  FROM data_sources
+								 WHERE tenant_id = %s
+								""",
+								[tenant_id],
+							)
+							rows = cur.fetchall()
+							items: List[Dict[str, Any]] = []
+							for r in rows:
+								(src_id, t_id, ctype, name, status, last_sync, freq, extra) = r
+								meta = extra or {}
+								if isinstance(meta, str):
+									try:
+										meta = json.loads(meta)
+									except Exception:
+										meta = {}
+								items.append({
+									"connector_id": str(src_id),
+									"connector_type": ctype,
+									"connector_name": ctype,
+									"display_name": name,
+									"category": meta.get("category", "api"),
+									"icon": meta.get("icon", "Plug"),
+									"data_types": meta.get("data_types", []),
+									"status": status or "inactive",
+									"sync_frequency": freq or "manual",
+									"last_sync": last_sync.isoformat() if last_sync else None,
+									"created_at": None,
+									"updated_at": None,
+									"metadata": meta,
+								})
+					return {"connectors": items, "total": len(items)}
+			except Exception:
+				pass
 		# Fallback (dev only)
 		items = connectors_store.get(tenant_id, [])
 		return {"connectors": items, "total": len(items)}
@@ -550,6 +607,54 @@ def create_app() -> FastAPI:
 			except Exception:
 				pass
 			return created.model_dump() if hasattr(created, "model_dump") else created  # type: ignore
+		# Direct SQL-backed creation (no repository package, but Postgres is available)
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				source_id = str(uuid.uuid4())
+				extra = {
+					"category": category,
+					"icon": icon,
+					"data_types": data_types,
+					"mcp_enabled": enable_mcp,
+				}
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						cur.execute(
+							"""
+							INSERT INTO data_sources (source_id, tenant_id, connector_type, name, credentials, config, status, last_sync, sync_frequency, created_at, extra_data)
+							VALUES (%s, %s, %s, %s, %s, %s, 'inactive', NULL, %s, NOW(), %s)
+							""",
+							[
+								source_id,
+								tenant_id,
+								connector_type,
+								display_name,
+								json.dumps({}),
+								json.dumps(config or {}),
+								sync_frequency,
+								json.dumps(extra),
+							],
+						)
+					conn.commit()
+				record = {
+					"connector_id": source_id,
+					"connector_type": connector_type,
+					"connector_name": connector_type,
+					"display_name": display_name,
+					"category": category,
+					"icon": icon,
+					"data_types": data_types,
+					"status": "inactive",
+					"sync_frequency": sync_frequency,
+					"last_sync": None,
+					"created_at": datetime.now(timezone.utc).isoformat(),
+					"updated_at": datetime.now(timezone.utc).isoformat(),
+					"metadata": extra,
+				}
+				return record
+			except Exception:
+				pass
 		# Fallback to in-memory
 		connector_id = f"conn-{int(datetime.now().timestamp()*1000)}"
 		item = {
@@ -606,6 +711,37 @@ def create_app() -> FastAPI:
 			except Exception:
 				pass
 			return {"success": True}
+		# Direct SQL when repository is unavailable but Postgres exists
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						# Update name, sync_frequency, status
+						cur.execute(
+							"""
+							UPDATE data_sources
+							   SET name = COALESCE(%s, name),
+							       sync_frequency = COALESCE(%s, sync_frequency),
+							       status = COALESCE(%s, status),
+							       extra_data = CASE WHEN %s IS NULL THEN extra_data ELSE jsonb_set(COALESCE(extra_data, '{}'::jsonb), '{mcp_enabled}', to_jsonb(%s::boolean), true) END,
+							       updated_at = NOW()
+							 WHERE source_id = %s AND tenant_id = %s
+							""",
+							[
+								payload.get("display_name"),
+								payload.get("sync_frequency"),
+								payload.get("status"),
+								None if "enable_mcp" not in payload else True,
+								bool(payload.get("enable_mcp")) if "enable_mcp" in payload else False,
+								connector_id,
+								tenant_id,
+							],
+						)
+					conn.commit()
+				return {"success": True}
+			except Exception:
+				pass
 		# Fallback
 		items = connectors_store.get(tenant_id, [])
 		for it in items:
@@ -625,11 +761,11 @@ def create_app() -> FastAPI:
 	@app.delete("/v1/tenants/{tenant_id}/connectors/{connector_id}")
 	def delete_connector(tenant_id: str, connector_id: str) -> Dict[str, Any]:
 		backend = get_backend()
-		if CONNECTORS_AVAILABLE and PostgresBackend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+		if PostgresBackend is not None and isinstance(backend, PostgresBackend):  # type: ignore
 			try:
 				with backend.get_connection() as conn:  # type: ignore
 					with conn.cursor() as cur:
-						cur.execute("DELETE FROM connectors.connectors WHERE connector_id=%s AND tenant_id=%s", [connector_id, tenant_id])
+						cur.execute("DELETE FROM data_sources WHERE source_id=%s AND tenant_id=%s", [connector_id, tenant_id])
 					conn.commit()
 				return {"success": True}
 			except Exception:
@@ -661,7 +797,25 @@ def create_app() -> FastAPI:
 					# Update sync timestamp
 					from datetime import datetime
 					connector_repo.update_sync_info(connector_id, total_records=0, duration=0.0)  # type: ignore
-					return {"success": True, "message": "Sync completed", "synced_at": datetime.utcnow().isoformat()}
+					return {"success": True, "message": "Sync completed", "synced_at": py_dt.datetime.now(py_dt.timezone.utc).isoformat()}
+			except Exception as e:
+				return {"success": False, "message": f"Sync failed: {e}"}
+		# Direct SQL path updates last_sync on data_sources
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						cur.execute(
+							"""
+							UPDATE data_sources
+							   SET last_sync = NOW(), status = 'active'
+							 WHERE source_id = %s AND tenant_id = %s
+							""",
+							[connector_id, tenant_id],
+						)
+					conn.commit()
+				return {"success": True, "message": "Sync completed", "synced_at": py_dt.datetime.now(py_dt.timezone.utc).isoformat()}
 			except Exception as e:
 				return {"success": False, "message": f"Sync failed: {e}"}
 		return {"success": True, "message": "Sync initiated (dev mode)"}
@@ -754,6 +908,47 @@ def create_app() -> FastAPI:
 
 	@app.get("/v1/tenants/{tenant_id}/connectors/connected")
 	def connectors_connected(tenant_id: str) -> Dict[str, Any]:
+		# Try DB first
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						cur.execute(
+							"""
+							SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
+							  FROM data_sources
+							 WHERE tenant_id = %s
+							""",
+							[tenant_id],
+						)
+						rows = cur.fetchall()
+						items: List[Dict[str, Any]] = []
+						for r in rows:
+							(src_id, _t, ctype, name, status, last_sync, freq, extra) = r
+							meta = extra or {}
+							if isinstance(meta, str):
+								try:
+									meta = json.loads(meta)
+								except Exception:
+									meta = {}
+							items.append({
+								"connector_id": str(src_id),
+								"connector_type": ctype,
+								"connector_name": ctype,
+								"display_name": name,
+								"category": meta.get("category", "api"),
+								"icon": meta.get("icon", "Plug"),
+								"data_types": meta.get("data_types", []),
+								"status": status or "inactive",
+								"sync_frequency": freq or "manual",
+								"last_sync": last_sync.isoformat() if last_sync else None,
+								"metadata": meta,
+							})
+					return {"connectors": items, "total": len(items)}
+			except Exception:
+				pass
+		# Fallback to in-memory
 		items = connectors_store.get(tenant_id, [])
 		return {"connectors": items, "total": len(items)}
 
@@ -764,7 +959,7 @@ def create_app() -> FastAPI:
 		connector_id: str = Form(...),
 		tenant_id: str = Form(...),
 	) -> Dict[str, Any]:
-		# For demo: read file to count bytes and fake record count, then update repo metadata
+		# For demo: read file to count bytes and fake record count
 		_size = 0
 		try:
 			content = await file.read()
@@ -772,9 +967,35 @@ def create_app() -> FastAPI:
 		except Exception:
 			pass
 		fake_count = max(1, _size // 200)  # rough proxy
+		# Update via repository when available
 		if connector_repo is not None:
 			try:
 				connector_repo.update_sync_info(connector_id, total_records=fake_count, duration=0.0)  # type: ignore
+				return {"success": True, "bytes": _size, "records": fake_count}
+			except Exception:
+				pass
+		# Direct SQL: update data_sources.extra_data and last_sync
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						# increment total_records and set last_sync
+						cur.execute(
+							"""
+							UPDATE data_sources
+							   SET last_sync = NOW(),
+							       extra_data = jsonb_set(
+							           COALESCE(extra_data, '{}'::jsonb),
+							           '{total_records}',
+							           to_jsonb(COALESCE((extra_data->>'total_records')::int, 0) + %s),
+							           true
+							       )
+							 WHERE source_id = %s AND tenant_id = %s
+							""",
+							[fake_count, connector_id, tenant_id],
+						)
+					conn.commit()
 				return {"success": True, "bytes": _size, "records": fake_count}
 			except Exception:
 				pass
