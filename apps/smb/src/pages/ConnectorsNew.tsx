@@ -159,12 +159,33 @@ export default function ConnectorsNew() {
             }
 
             // Backend expects connector_type, not connector_id
-            return await post(`/v1/tenants/${tenantId}/connectors`, {
+            const createdConnector = await post<{ connector_id: string }>(`/v1/tenants/${tenantId}/connectors`, {
                 connector_type: payload.connector_id,
                 display_name: displayName,
                 config: payload.config,
                 enable_mcp: Boolean((payload.config as any)?.enable_mcp),
             })
+
+            // If there's a pending file upload for CSV, upload it now
+            const pendingFile = (payload.config as any)?._pendingFile
+            if (isCSV && pendingFile && createdConnector?.connector_id) {
+                const formData = new FormData()
+                formData.append('file', pendingFile)
+                formData.append('connector_id', createdConnector.connector_id)
+                formData.append('tenant_id', tenantId)
+                formData.append('file_name', displayName)
+
+                const response = await fetch(`${API_BASE}/api/connectors/upload_csv`, {
+                    method: 'POST',
+                    body: formData,
+                })
+
+                if (!response.ok) {
+                    throw new Error('File upload failed')
+                }
+            }
+
+            return createdConnector
         },
         onSuccess: (_, variables) => {
             showNotification({
@@ -815,41 +836,14 @@ function ConnectorSetupModal({ connector, opened, onClose, onConnect, isLoading 
 
     const onSubmit = async (data: Record<string, unknown>) => {
         if (isCSVConnector && file) {
-            // For CSV, upload the file first
-            setUploading(true)
-            try {
-                const formData = new FormData()
-                formData.append('file', file)
-                formData.append('connector_id', connector.id)
-                formData.append('tenant_id', tenantId || 'demo')
-                formData.append('file_name', data.file_name as string || file.name)
-
-                const response = await fetch(`${API_BASE}/api/connectors/upload_csv`, {
-                    method: 'POST',
-                    body: formData,
-                })
-
-                if (!response.ok) {
-                    throw new Error('File upload failed')
-                }
-
-                // Pass file metadata in config
-                onConnect({
-                    ...data,
-                    file_name: data.file_name as string || file.name,
-                    file_uploaded: true,
-                    enable_mcp: integrationMode === 'mcp',
-                })
-            } catch (error) {
-                console.error('CSV upload error:', error)
-                showNotification({
-                    title: 'Upload failed',
-                    message: 'Failed to upload CSV file. Please try again.',
-                    color: 'red',
-                })
-            } finally {
-                setUploading(false)
-            }
+            // For CSV, first create the connector, then upload the file
+            onConnect({
+                ...data,
+                file_name: data.file_name as string || file.name,
+                enable_mcp: integrationMode === 'mcp',
+                // Store the file to upload after connector creation
+                _pendingFile: file,
+            })
         } else {
             onConnect({
                 ...data,

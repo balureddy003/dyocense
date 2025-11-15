@@ -7,17 +7,63 @@ from datetime import datetime, timezone
 import datetime as py_dt
 import uuid
 import json
+import psycopg2
+from contextlib import contextmanager
+from backend.services.elt_pipeline import ELTPipeline
+from backend.services.forecaster.service import ForecastService
+from backend.services.optimizer.inventory import InventoryOptimizer
+from backend.services.coach.narrative_service import NarrativeGenerator
+
+# Advanced services (optional)
+try:
+    from backend.services.forecaster.prophet_forecaster import ProphetForecaster
+    PROPHET_AVAILABLE = True
+except ImportError:
+    PROPHET_AVAILABLE = False
+
+try:
+    from backend.services.optimizer.ortools_optimizer import ORToolsOptimizer
+    ORTOOLS_AVAILABLE = True
+except ImportError:
+    ORTOOLS_AVAILABLE = False
+
+# Tenant ID mapping for demo mode
+DEMO_TENANT_UUID = "00000000-0000-0000-0000-000000000001"
+
+def normalize_tenant_id(tenant_id: str) -> str:
+	"""Map 'demo' to the demo tenant UUID, otherwise return as-is."""
+	if tenant_id == "demo":
+		return DEMO_TENANT_UUID
+	return tenant_id
+
+# Simple PostgresBackend implementation for direct database access
+class PostgresBackend:
+	def __init__(self, connection_string: str):
+		self.connection_string = connection_string
+	
+	@contextmanager
+	def get_connection(self):
+		conn = psycopg2.connect(self.connection_string)
+		try:
+			yield conn
+		finally:
+			conn.close()
+
+# Initialize PostgresBackend from environment
+_postgres_backend = None
+def get_backend():
+	global _postgres_backend
+	if _postgres_backend is None:
+		postgres_url = os.getenv("POSTGRES_URL", "postgresql://metadata:metadataPass123@localhost:5432/metadata")
+		_postgres_backend = PostgresBackend(postgres_url)
+	return _postgres_backend
 
 # Optional imports of internal packages (guarded so local dev still runs)
 try:
 	from packages.connectors.repository_postgres import ConnectorRepositoryPG  # type: ignore
-	from packages.kernel_common.persistence_v2 import get_backend, PostgresBackend  # type: ignore
 	CONNECTORS_AVAILABLE = True
 except Exception:
 	ConnectorRepositoryPG = None  # type: ignore
-	PostgresBackend = None  # type: ignore
-	def get_backend():  # type: ignore
-		return None
 	CONNECTORS_AVAILABLE = False
 try:
 	from packages.connectors.marketplace import ConnectorMarketplace  # type: ignore
@@ -43,7 +89,6 @@ def create_app() -> FastAPI:
 	app = FastAPI(title="Dyocense Kernel (stub)", version="0.1.0")
 
 	# --- In-memory demo state (per-process; resets on restart) ---
-	connectors_store: dict[str, list[dict]] = {}
 	coach_dismissed_store: dict[str, set[str]] = {}
 
 	# Instantiate reusable repositories/services when available
@@ -501,78 +546,60 @@ def create_app() -> FastAPI:
 	# --- Minimal Connectors API (used by hooks/useConnectors) ---
 	@app.get("/v1/tenants/{tenant_id}/connectors")
 	def list_connectors(tenant_id: str, status_filter: Optional[str] = Query(default=None)) -> Dict[str, Any]:
-		"""List connectors from Postgres when available; fallback to in-memory."""
-		# Preferred path: repository (when package is available)
-		if connector_repo is not None:
-			status_enum = None
-			if status_filter:
-				try:
-					from packages.connectors.models import ConnectorStatus  # type: ignore
-				except Exception:
-					ConnectorStatus = None  # type: ignore
-				if ConnectorStatus is not None:
-					try:
-						status_enum = ConnectorStatus(status_filter)  # type: ignore
-					except Exception:
-						status_enum = None
-			models = connector_repo.list_by_tenant(tenant_id, status_enum)  # type: ignore
-			items = [m.model_dump() if hasattr(m, "model_dump") else m for m in models]
-			return {"connectors": items, "total": len(items)}
-		# Secondary path: direct SQL against data_sources when Postgres backend available
-		if PostgresBackend is not None:
-			try:
-				backend = get_backend()
-				if backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-					with backend.get_connection() as conn:  # type: ignore
-						with conn.cursor() as cur:
-							cur.execute(
-								"""
-								SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
-								  FROM data_sources
-								 WHERE tenant_id = %s
-								""",
-								[tenant_id],
-							)
-							rows = cur.fetchall()
-							items: List[Dict[str, Any]] = []
-							for r in rows:
-								(src_id, t_id, ctype, name, status, last_sync, freq, extra) = r
-								meta = extra or {}
-								if isinstance(meta, str):
-									try:
-										meta = json.loads(meta)
-									except Exception:
-										meta = {}
-								items.append({
-									"connector_id": str(src_id),
-									"connector_type": ctype,
-									"connector_name": ctype,
-									"display_name": name,
-									"category": meta.get("category", "api"),
-									"icon": meta.get("icon", "Plug"),
-									"data_types": meta.get("data_types", []),
-									"status": status or "inactive",
-									"sync_frequency": freq or "manual",
-									"last_sync": last_sync.isoformat() if last_sync else None,
-									"created_at": None,
-									"updated_at": None,
-									"metadata": meta,
-								})
-					return {"connectors": items, "total": len(items)}
-			except Exception:
-				pass
-		# Fallback (dev only)
-		items = connectors_store.get(tenant_id, [])
+		"""List connectors from PostgreSQL database."""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
+					  FROM data_sources
+					 WHERE tenant_id = %s
+					""",
+					[tenant_id],
+				)
+				rows = cur.fetchall()
+				items: List[Dict[str, Any]] = []
+				for r in rows:
+					(src_id, t_id, ctype, name, status, last_sync, freq, extra) = r
+					meta = extra or {}
+					if isinstance(meta, str):
+						try:
+							meta = json.loads(meta)
+						except Exception:
+							meta = {}
+					items.append({
+						"connector_id": str(src_id),
+						"connector_type": ctype,
+						"connector_name": ctype,
+						"display_name": name,
+						"category": meta.get("category", "api"),
+						"icon": meta.get("icon", "Plug"),
+						"data_types": meta.get("data_types", []),
+						"datasets": meta.get("datasets", []),
+						"status": status or "inactive",
+						"sync_frequency": freq or "manual",
+						"last_sync": last_sync.isoformat() if last_sync else None,
+						"created_at": None,
+						"updated_at": None,
+						"metadata": meta,
+					})
 		return {"connectors": items, "total": len(items)}
+
 
 	@app.post("/v1/tenants/{tenant_id}/connectors")
 	def create_connector(tenant_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-		"""Create a connector backed by Postgres repository when available."""
+		"""Create a connector in PostgreSQL database."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		connector_type = payload.get("connector_type", "custom")
 		display_name = payload.get("display_name") or connector_type.replace("_", " ").title()
 		sync_frequency = payload.get("sync_frequency", "manual")
 		enable_mcp = bool(payload.get("enable_mcp", False))
 		config = payload.get("config", {})
+		
+		print(f"[CREATE_CONNECTOR] tenant_id={tenant_id}, connector_type={connector_type}, display_name={display_name}")
+		
 		# Enrich from marketplace if possible
 		category = "api"
 		icon = "Plug"
@@ -586,246 +613,127 @@ def create_app() -> FastAPI:
 					data_types = mp.get("dataTypes") or mp.get("data_types") or data_types
 			except Exception:
 				pass
-		# Repo-backed creation
-		if connector_repo is not None:
-			created = connector_repo.create(
-				tenant_id=tenant_id,
-				connector_type=connector_type,
-				connector_name=connector_type,
-				display_name=display_name,
-				category=category,
-				icon=icon,
-				config=config,
-				data_types=data_types,
-				created_by="system",
-				sync_frequency=sync_frequency,
-			)
-			# Set MCP flag if requested
-			try:
-				if enable_mcp:
-					connector_repo.update_metadata_flag(created.connector_id, mcp_enabled=True)
-			except Exception:
-				pass
-			return created.model_dump() if hasattr(created, "model_dump") else created  # type: ignore
-		# Direct SQL-backed creation (no repository package, but Postgres is available)
+		
+		# Direct SQL creation in PostgreSQL
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				source_id = str(uuid.uuid4())
-				# Build datasets from data_types and initialize counts
-				datasets = [dt.lower().replace(" ", "_") for dt in data_types]
-				last_record_count = {ds: 0 for ds in datasets}
-				extra = {
-					"category": category,
-					"icon": icon,
-					"data_types": data_types,
-					"datasets": datasets,
-					"last_record_count": last_record_count,
-					"total_records": 0,
-					"mcp_enabled": enable_mcp,
-				}
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute(
-							"""
-							INSERT INTO data_sources (source_id, tenant_id, connector_type, name, credentials, config, status, last_sync, sync_frequency, created_at, extra_data)
-							VALUES (%s, %s, %s, %s, %s, %s, 'inactive', NULL, %s, NOW(), %s)
-							""",
-							[
-								source_id,
-								tenant_id,
-								connector_type,
-								display_name,
-								json.dumps({}),
-								json.dumps(config or {}),
-								sync_frequency,
-								json.dumps(extra),
-							],
-						)
-					conn.commit()
-				record = {
-					"connector_id": source_id,
-					"connector_type": connector_type,
-					"connector_name": connector_type,
-					"display_name": display_name,
-					"category": category,
-					"icon": icon,
-					"data_types": data_types,
-					"datasets": datasets,
-					"status": "inactive",
-					"sync_frequency": sync_frequency,
-					"last_sync": None,
-					"created_at": datetime.now(timezone.utc).isoformat(),
-					"updated_at": datetime.now(timezone.utc).isoformat(),
-					"metadata": extra,
-				}
-				return record
-			except Exception:
-				pass
-		# Fallback to in-memory
-		connector_id = f"conn-{int(datetime.now().timestamp()*1000)}"
-		item = {
-			"connector_id": connector_id,
+		source_id = str(uuid.uuid4())
+		# Build datasets from data_types and initialize counts
+		datasets = [dt.lower().replace(" ", "_") for dt in data_types]
+		last_record_count = {ds: 0 for ds in datasets}
+		extra = {
+			"category": category,
+			"icon": icon,
+			"data_types": data_types,
+			"datasets": datasets,
+			"last_record_count": last_record_count,
+			"total_records": 0,
+			"mcp_enabled": enable_mcp,
+		}
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					INSERT INTO data_sources (source_id, tenant_id, connector_type, name, credentials, config, status, last_sync, sync_frequency, created_at, extra_data)
+					VALUES (%s, %s, %s, %s, %s, %s, 'inactive', NULL, %s, NOW(), %s)
+					""",
+					[
+						source_id,
+						tenant_id,
+						connector_type,
+						display_name,
+						json.dumps({}),
+						json.dumps(config or {}),
+						sync_frequency,
+						json.dumps(extra),
+					],
+				)
+			conn.commit()
+		
+		result = {
+			"connector_id": source_id,
 			"connector_type": connector_type,
 			"connector_name": connector_type,
 			"display_name": display_name,
 			"category": category,
 			"icon": icon,
 			"data_types": data_types,
+			"datasets": datasets,
 			"status": "inactive",
 			"sync_frequency": sync_frequency,
 			"last_sync": None,
 			"created_at": datetime.now(timezone.utc).isoformat(),
 			"updated_at": datetime.now(timezone.utc).isoformat(),
-			"metadata": {"mcp_enabled": enable_mcp},
+			"metadata": extra,
 		}
-		connectors_store.setdefault(tenant_id, []).append(item)
-		return item
+		
+		print(f"[CREATE_CONNECTOR] Created connector with ID: {source_id}")
+		return result
 
 	@app.put("/v1/tenants/{tenant_id}/connectors/{connector_id}")
 	def update_connector(tenant_id: str, connector_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-		"""Update connector metadata in Postgres; fallback to in-memory update."""
-		if connector_repo is not None and isinstance(get_backend(), PostgresBackend):  # type: ignore
-			# Apply MCP flag via repo
-			if "enable_mcp" in payload:
-				try:
-					connector_repo.update_metadata_flag(connector_id, mcp_enabled=bool(payload.get("enable_mcp")))  # type: ignore
-				except Exception:
-					pass
-			# Update simple fields via direct SQL against data_sources
-			try:
-				backend = get_backend()
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute(
-							"""
-							UPDATE data_sources
-							   SET name = COALESCE(%s, name),
-							       sync_frequency = COALESCE(%s, sync_frequency),
-							       status = COALESCE(%s, status),
-							       updated_at = NOW()
-							 WHERE source_id = %s AND tenant_id = %s
-							""",
-							[
-								payload.get("display_name"),
-								payload.get("sync_frequency"),
-								payload.get("status"),
-								connector_id,
-								tenant_id,
-							],
-						)
-					conn.commit()
-			except Exception:
-				pass
-			return {"success": True}
-		# Direct SQL when repository is unavailable but Postgres exists
+		"""Update connector metadata in PostgreSQL database."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						# Update name, sync_frequency, status
-						cur.execute(
-							"""
-							UPDATE data_sources
-							   SET name = COALESCE(%s, name),
-							       sync_frequency = COALESCE(%s, sync_frequency),
-							       status = COALESCE(%s, status),
-							       extra_data = CASE WHEN %s IS NULL THEN extra_data ELSE jsonb_set(COALESCE(extra_data, '{}'::jsonb), '{mcp_enabled}', to_jsonb(%s::boolean), true) END,
-							       updated_at = NOW()
-							 WHERE source_id = %s AND tenant_id = %s
-							""",
-							[
-								payload.get("display_name"),
-								payload.get("sync_frequency"),
-								payload.get("status"),
-								None if "enable_mcp" not in payload else True,
-								bool(payload.get("enable_mcp")) if "enable_mcp" in payload else False,
-								connector_id,
-								tenant_id,
-							],
-						)
-					conn.commit()
-				return {"success": True}
-			except Exception:
-				pass
-		# Fallback
-		items = connectors_store.get(tenant_id, [])
-		for it in items:
-			if it.get("connector_id") == connector_id:
-				it["display_name"] = payload.get("display_name", it.get("display_name"))
-				if payload.get("sync_frequency"):
-					it["sync_frequency"] = payload["sync_frequency"]
-				if payload.get("status"):
-					it["status"] = payload["status"]
-				meta = it.setdefault("metadata", {})
-				if "enable_mcp" in payload:
-					meta["mcp_enabled"] = bool(payload.get("enable_mcp"))
-				it["updated_at"] = datetime.now(timezone.utc).isoformat()
-				return it
-		return {"detail": "not found"}
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				# Update name, sync_frequency, status
+				cur.execute(
+					"""
+					UPDATE data_sources
+					   SET name = COALESCE(%s, name),
+					       sync_frequency = COALESCE(%s, sync_frequency),
+					       status = COALESCE(%s, status),
+					       extra_data = CASE WHEN %s IS NULL THEN extra_data ELSE jsonb_set(COALESCE(extra_data, '{}'::jsonb), '{mcp_enabled}', to_jsonb(%s::boolean), true) END,
+					       updated_at = NOW()
+					 WHERE source_id = %s AND tenant_id = %s
+					""",
+					[
+						payload.get("display_name"),
+						payload.get("sync_frequency"),
+						payload.get("status"),
+						None if "enable_mcp" not in payload else True,
+						bool(payload.get("enable_mcp")) if "enable_mcp" in payload else False,
+						connector_id,
+						tenant_id,
+					],
+				)
+			conn.commit()
+		return {"success": True}
 
 	@app.delete("/v1/tenants/{tenant_id}/connectors/{connector_id}")
 	def delete_connector(tenant_id: str, connector_id: str) -> Dict[str, Any]:
+		"""Delete connector from PostgreSQL database."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
-		if PostgresBackend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute("DELETE FROM data_sources WHERE source_id=%s AND tenant_id=%s", [connector_id, tenant_id])
-					conn.commit()
-				return {"success": True}
-			except Exception:
-				pass
-		# Fallback
-		items = connectors_store.get(tenant_id, [])
-		connectors_store[tenant_id] = [it for it in items if it.get("connector_id") != connector_id]
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute("DELETE FROM data_sources WHERE source_id=%s AND tenant_id=%s", [connector_id, tenant_id])
+			conn.commit()
 		return {"success": True}
 
 	@app.post("/v1/tenants/{tenant_id}/connectors/{connector_id}/test")
 	def test_connector(tenant_id: str, connector_id: str) -> Dict[str, Any]:
-		# Basic availability check: ensure connector exists in Postgres
-		if connector_repo is not None:
-			try:
-				conn = connector_repo.get_by_id(connector_id)  # type: ignore
-				if conn and getattr(conn, "tenant_id", tenant_id) == tenant_id:
-					return {"success": True, "message": "Connection verified"}
-			except Exception as e:
-				return {"success": False, "message": f"Lookup failed: {e}"}
-		return {"success": True, "message": "Connection verified (dev)"}
+		"""Test connector connection."""
+		tenant_id = normalize_tenant_id(tenant_id)
+		return {"success": True, "message": "Connection verified"}
 
 	@app.post("/v1/tenants/{tenant_id}/connectors/{connector_id}/sync")
 	def sync_connector(tenant_id: str, connector_id: str, payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
-		"""Trigger a sync for a connector. Updates last_sync timestamp."""
-		if connector_repo is not None:
-			try:
-				conn = connector_repo.get_by_id(connector_id)  # type: ignore
-				if conn and getattr(conn, "tenant_id", tenant_id) == tenant_id:
-					# Update sync timestamp
-					from datetime import datetime
-					connector_repo.update_sync_info(connector_id, total_records=0, duration=0.0)  # type: ignore
-					return {"success": True, "message": "Sync completed", "synced_at": py_dt.datetime.now(py_dt.timezone.utc).isoformat()}
-			except Exception as e:
-				return {"success": False, "message": f"Sync failed: {e}"}
-		# Direct SQL path updates last_sync on data_sources
+		"""Trigger a sync for a connector. Updates last_sync timestamp in PostgreSQL."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute(
-							"""
-							UPDATE data_sources
-							   SET last_sync = NOW(), status = 'active'
-							 WHERE source_id = %s AND tenant_id = %s
-							""",
-							[connector_id, tenant_id],
-						)
-					conn.commit()
-				return {"success": True, "message": "Sync completed", "synced_at": py_dt.datetime.now(py_dt.timezone.utc).isoformat()}
-			except Exception as e:
-				return {"success": False, "message": f"Sync failed: {e}"}
-		return {"success": True, "message": "Sync initiated (dev mode)"}
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					UPDATE data_sources
+					   SET last_sync = NOW(), status = 'active'
+					 WHERE source_id = %s AND tenant_id = %s
+					""",
+					[connector_id, tenant_id],
+				)
+			conn.commit()
+		return {"success": True, "message": "Sync completed", "synced_at": py_dt.datetime.now(py_dt.timezone.utc).isoformat()}
 
 	@app.post("/v1/tenants/{tenant_id}/connectors/test")
 	async def test_connector_config(tenant_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
@@ -908,108 +816,85 @@ def create_app() -> FastAPI:
 			],
 			"business_profile": {"industry": None, "business_type": None, "team_size": None},
 			"data_status": {"has_orders": False, "has_inventory": False, "has_customers": False, "has_products": False},
-			"existing_connectors": [it.get("connector_type") for it in connectors_store.get(tenant_id, [])],
+			"existing_connectors": [],
 			"message": "OK",
 		}
 
 
+
 	@app.get("/v1/tenants/{tenant_id}/connectors/connected")
 	def connectors_connected(tenant_id: str) -> Dict[str, Any]:
-		# Try DB first
+		"""Get list of connected connectors from PostgreSQL."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute(
-							"""
-							SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
-							  FROM data_sources
-							 WHERE tenant_id = %s
-							""",
-							[tenant_id],
-						)
-						rows = cur.fetchall()
-						items: List[Dict[str, Any]] = []
-						for r in rows:
-							(src_id, _t, ctype, name, status, last_sync, freq, extra) = r
-							meta = extra or {}
-							if isinstance(meta, str):
-								try:
-									meta = json.loads(meta)
-								except Exception:
-									meta = {}
-							items.append({
-								"connector_id": str(src_id),
-								"connector_type": ctype,
-								"connector_name": ctype,
-								"display_name": name,
-								"category": meta.get("category", "api"),
-								"icon": meta.get("icon", "Plug"),
-								"data_types": meta.get("data_types", []),
-								"status": status or "inactive",
-								"sync_frequency": freq or "manual",
-								"last_sync": last_sync.isoformat() if last_sync else None,
-								"metadata": meta,
-							})
-					return {"connectors": items, "total": len(items)}
-			except Exception:
-				pass
-		# Fallback to in-memory
-		items = connectors_store.get(tenant_id, [])
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					SELECT source_id, tenant_id, connector_type, name, status, last_sync, sync_frequency, extra_data
+					  FROM data_sources
+					 WHERE tenant_id = %s
+					""",
+					[tenant_id],
+				)
+				rows = cur.fetchall()
+				items: List[Dict[str, Any]] = []
+				for r in rows:
+					(src_id, _t, ctype, name, status, last_sync, freq, extra) = r
+					meta = extra or {}
+					if isinstance(meta, str):
+						try:
+							meta = json.loads(meta)
+						except Exception:
+							meta = {}
+					items.append({
+						"connector_id": str(src_id),
+						"connector_type": ctype,
+						"connector_name": ctype,
+						"display_name": name,
+						"category": meta.get("category", "api"),
+						"icon": meta.get("icon", "Plug"),
+						"data_types": meta.get("data_types", []),
+						"status": status or "inactive",
+						"sync_frequency": freq or "manual",
+						"last_sync": last_sync.isoformat() if last_sync else None,
+						"metadata": meta,
+					})
 		return {"connectors": items, "total": len(items)}
 
 	@app.get("/v1/tenants/{tenant_id}/connectors/readiness")
 	def connector_readiness(tenant_id: str) -> Dict[str, Any]:
-		"""Return connector data readiness for dashboards and narratives."""
-		# Try DB first
+		"""Return connector data readiness for dashboards and narratives from PostgreSQL."""
+		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						cur.execute(
-							"""
-							SELECT source_id, name, last_sync, extra_data
-							  FROM data_sources
-							 WHERE tenant_id = %s
-							""",
-							[tenant_id],
-						)
-						rows = cur.fetchall()
-						connectors: List[Dict[str, Any]] = []
-						for r in rows:
-							(src_id, name, last_sync, extra) = r
-							meta = extra or {}
-							if isinstance(meta, str):
-								try:
-									meta = json.loads(meta)
-								except Exception:
-									meta = {}
-							connectors.append({
-								"connector_id": str(src_id),
-								"display_name": name,
-								"datasets": meta.get("datasets", []),
-								"last_refreshed": last_sync.isoformat() if last_sync else None,
-								"counts": meta.get("last_record_count", {}),
-								"total_records": meta.get("total_records", 0),
-							})
-					return {"connectors": connectors, "total": len(connectors)}
-			except Exception:
-				pass
-		# Fallback to in-memory
-		items = connectors_store.get(tenant_id, [])
-		connectors = []
-		for it in items:
-			meta = it.get("metadata", {})
-			connectors.append({
-				"connector_id": it.get("connector_id"),
-				"display_name": it.get("display_name"),
-				"datasets": meta.get("datasets", []),
-				"last_refreshed": it.get("last_sync"),
-				"counts": meta.get("last_record_count", {}),
-				"total_records": meta.get("total_records", 0),
-			})
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					SELECT source_id, name, last_sync, extra_data
+					  FROM data_sources
+					 WHERE tenant_id = %s
+					""",
+					[tenant_id],
+				)
+				rows = cur.fetchall()
+				connectors: List[Dict[str, Any]] = []
+				for r in rows:
+					(src_id, name, last_sync, extra) = r
+					meta = extra or {}
+					if isinstance(meta, str):
+						try:
+							meta = json.loads(meta)
+						except Exception:
+							meta = {}
+					connectors.append({
+						"connector_id": str(src_id),
+						"display_name": name,
+						"datasets": meta.get("datasets", []),
+						"last_refreshed": last_sync.isoformat() if last_sync else None,
+						"counts": meta.get("last_record_count", {}),
+						"total_records": meta.get("total_records", 0),
+					})
 		return {"connectors": connectors, "total": len(connectors)}
 
 	# Upload endpoint used by CSV quickstart
@@ -1021,6 +906,11 @@ def create_app() -> FastAPI:
 	) -> Dict[str, Any]:
 		import csv
 		import io
+		
+		# Normalize tenant_id for demo mode
+		tenant_id = normalize_tenant_id(tenant_id)
+		
+		print(f"[UPLOAD_CSV] Received: connector_id={connector_id}, tenant_id={tenant_id}, file={file.filename}")
 		
 		# Read file content
 		content_bytes = b""
@@ -1046,86 +936,68 @@ def create_app() -> FastAPI:
 		file_size = len(content_bytes)
 		datasets = [h.lower().replace(" ", "_") for h in headers] if headers else ["data"]
 		
-		# Update via repository when available
-		if connector_repo is not None:
-			try:
-				connector_repo.update_sync_info(connector_id, total_records=record_count, duration=0.0)  # type: ignore
-			except Exception:
-				pass
-		
 		# Direct SQL: update data_sources.extra_data and insert raw ingestion record
 		backend = get_backend()
-		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
-			try:
-				with backend.get_connection() as conn:  # type: ignore
-					with conn.cursor() as cur:
-						# Update extra_data with datasets, counts, and timestamp
-						cur.execute(
-							"""
-							UPDATE data_sources
-							   SET last_sync = NOW(),
-							       status = 'active',
-							       extra_data = jsonb_set(
-							           jsonb_set(
-							               jsonb_set(
-							                   COALESCE(extra_data, '{}'::jsonb),
-							                   '{datasets}',
-							                   %s::jsonb,
-							                   true
-							               ),
-							               '{total_records}',
-							               to_jsonb(COALESCE((extra_data->>'total_records')::int, 0) + %s),
-							               true
-							           ),
-							           '{last_record_count}',
-							           %s::jsonb,
-							           true
-							       )
-							 WHERE source_id = %s AND tenant_id = %s
-							""",
-							[
-								json.dumps(datasets),
-								record_count,
-								json.dumps({ds: record_count for ds in datasets}),
-								connector_id,
-								tenant_id,
-							],
-						)
-						
-						# Insert raw ingestion record
-						raw_id = str(uuid.uuid4())
-						event_payload = {
-							"filename": file.filename or "upload.csv",
-							"bytes": file_size,
-							"record_count": record_count,
-							"headers": headers,
-							"sample_rows": sample_rows,
-						}
-						cur.execute(
-							"""
-							INSERT INTO raw_connector_data (raw_id, tenant_id, source_id, source_type, source_record_id, data, ingested_at, processed)
-							VALUES (%s, %s, %s, 'csv_upload', %s, %s, NOW(), false)
-							""",
-							[
-								raw_id,
-								tenant_id,
-								connector_id,
-								f"upload_{py_dt.datetime.now(py_dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}",
-								json.dumps(event_payload),
-							],
-						)
-					conn.commit()
-				return {"success": True, "bytes": file_size, "records": record_count, "datasets": datasets}
-			except Exception as e:
-				return {"success": False, "error": str(e)}
-		
-		# Fallback: update in-memory if present
-		for it in connectors_store.get(tenant_id, []):
-			if it.get("connector_id") == connector_id:
-				it["last_sync"] = datetime.now(timezone.utc).isoformat()
-				it.setdefault("metadata", {})["total_records"] = (it.get("metadata", {}).get("total_records") or 0) + record_count
-				break
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				# Update extra_data with datasets, counts, and timestamp
+				cur.execute(
+					"""
+					UPDATE data_sources
+					   SET last_sync = NOW(),
+					       status = 'active',
+					       extra_data = jsonb_set(
+					           jsonb_set(
+					               jsonb_set(
+					                   COALESCE(extra_data, '{}'::jsonb),
+					                   '{datasets}',
+					                   %s::jsonb,
+					                   true
+					               ),
+					               '{total_records}',
+					               to_jsonb(COALESCE((extra_data->>'total_records')::int, 0) + %s),
+					               true
+					           ),
+					           '{last_record_count}',
+					           %s::jsonb,
+					           true
+					       )
+					 WHERE source_id = %s AND tenant_id = %s
+					""",
+					[
+						json.dumps(datasets),
+						record_count,
+						json.dumps({ds: record_count for ds in datasets}),
+						connector_id,
+						tenant_id,
+					],
+				)
+				
+				# Insert raw ingestion record
+				raw_id = str(uuid.uuid4())
+				event_payload = {
+					"filename": file.filename or "upload.csv",
+					"bytes": file_size,
+					"record_count": record_count,
+					"headers": headers,
+					"sample_rows": sample_rows,
+				}
+				cur.execute(
+					"""
+					INSERT INTO raw_connector_data (raw_id, tenant_id, source_id, source_type, source_record_id, data, ingested_at, processed)
+					VALUES (%s, %s, %s, 'csv_upload', %s, %s, NOW(), false)
+					""",
+					[
+						raw_id,
+						tenant_id,
+						connector_id,
+						f"upload_{py_dt.datetime.now(py_dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+						json.dumps(event_payload),
+					],
+				)
+			conn.commit()
 		return {"success": True, "bytes": file_size, "records": record_count, "datasets": datasets}
+
 
 
 	# --- Analytics events sink (no-op) ---
@@ -1775,6 +1647,397 @@ def create_app() -> FastAPI:
 	def recommendation_feedback(tenant_id: str, rec_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 		_feedback_id = f"fb-{int(datetime.now().timestamp()*1000)}"
 		return {"success": True, "feedback_id": _feedback_id}
+
+	# --- ELT Pipeline endpoints ---
+	@app.post("/v1/tenants/{tenant_id}/elt/process")
+	async def process_elt_pipeline(tenant_id: str) -> Dict[str, Any]:
+		"""Run ELT pipeline to transform raw data into business metrics"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		elt = ELTPipeline(backend)
+		results = await elt.run_full_pipeline(tenant_id)
+		return {"success": True, "results": results}
+	
+	@app.get("/v1/tenants/{tenant_id}/metrics")
+	def get_business_metrics(tenant_id: str, metric_type: Optional[str] = None) -> Dict[str, Any]:
+		"""Get latest business metrics for a tenant"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				if metric_type:
+					cur.execute(
+						"""
+						SELECT metric_id, metric_name, value, metric_type, 
+						       timestamp, extra_data
+						FROM business_metrics 
+						WHERE tenant_id = %s AND metric_type = %s
+						ORDER BY timestamp DESC
+						LIMIT 10
+						""",
+						[tenant_id, metric_type]
+					)
+				else:
+					cur.execute(
+						"""
+						SELECT metric_id, metric_name, value, metric_type, 
+						       timestamp, extra_data
+						FROM business_metrics 
+						WHERE tenant_id = %s
+						ORDER BY timestamp DESC
+						LIMIT 20
+						""",
+						[tenant_id]
+					)
+				
+				rows = cur.fetchall()
+				metrics = []
+				for row in rows:
+					metrics.append({
+						'metric_id': row[0],
+						'metric_name': row[1],
+						'value': row[2],
+						'metric_type': row[3],
+						'timestamp': row[4].isoformat() if row[4] else None,
+						'extra_data': row[5]
+					})
+				
+				return {"success": True, "metrics": metrics}
+
+	# --- Forecasting endpoints ---
+	@app.post("/v1/tenants/{tenant_id}/forecast")
+	async def create_forecast(
+		tenant_id: str,
+		sku: Optional[str] = None,
+		periods: int = 4,
+		model: str = "auto"  # auto, simple, prophet
+	) -> Dict[str, Any]:
+		"""Generate demand forecast"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		# Choose model
+		if model == "prophet" and PROPHET_AVAILABLE:
+			forecaster = ProphetForecaster(backend)
+			results = await forecaster.forecast_with_prophet(tenant_id, sku, periods)
+		elif model == "auto" and PROPHET_AVAILABLE:
+			# Try Prophet, fallback to simple
+			try:
+				forecaster = ProphetForecaster(backend)
+				results = await forecaster.forecast_with_prophet(tenant_id, sku, periods)
+			except Exception:
+				forecaster = ForecastService(backend)
+				results = await forecaster.forecast_demand(tenant_id, sku, periods)
+		else:
+			# Use simple moving average model
+			forecaster = ForecastService(backend)
+			results = await forecaster.forecast_demand(tenant_id, sku, periods)
+		
+		return {"success": True, **results}
+	
+	@app.get("/v1/tenants/{tenant_id}/forecasts")
+	def get_forecasts(tenant_id: str, limit: int = 10) -> Dict[str, Any]:
+		"""Get historical forecasts"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					SELECT forecast_id, metric_name, horizon_days, 
+					       predictions, model_type, created_at
+					FROM forecasts 
+					WHERE tenant_id = %s
+					ORDER BY created_at DESC
+					LIMIT %s
+					""",
+					[tenant_id, limit]
+				)
+				
+				rows = cur.fetchall()
+				forecasts = []
+				for row in rows:
+					forecasts.append({
+						'forecast_id': row[0],
+						'metric_name': row[1],
+						'horizon_days': row[2],
+						'predictions': row[3],
+						'model_type': row[4],
+						'created_at': row[5].isoformat() if row[5] else None
+					})
+				
+				return {"success": True, "forecasts": forecasts}
+
+	# --- Optimization endpoints ---
+	@app.post("/v1/tenants/{tenant_id}/optimize/inventory")
+	async def optimize_inventory(
+		tenant_id: str,
+		objective: str = "minimize_cost",
+		algorithm: str = "auto",  # auto, simple, lp
+		constraints: Optional[Dict[str, Any]] = Body(default=None)
+	) -> Dict[str, Any]:
+		"""Optimize inventory levels and order quantities"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		# Choose algorithm
+		if algorithm == "lp" and ORTOOLS_AVAILABLE:
+			optimizer = ORToolsOptimizer(backend)
+			results = await optimizer.optimize_inventory_lp(tenant_id, objective, constraints)
+		elif algorithm == "auto" and ORTOOLS_AVAILABLE:
+			# Try OR-Tools, fallback to simple
+			try:
+				optimizer = ORToolsOptimizer(backend)
+				results = await optimizer.optimize_inventory_lp(tenant_id, objective, constraints)
+			except Exception:
+				optimizer = InventoryOptimizer(backend)
+				results = await optimizer.optimize_inventory(tenant_id, objective, constraints)
+		else:
+			# Use simple EOQ model
+			optimizer = InventoryOptimizer(backend)
+			results = await optimizer.optimize_inventory(tenant_id, objective, constraints)
+		
+		return {"success": True, **results}
+	
+	@app.get("/v1/tenants/{tenant_id}/optimizations")
+	def get_optimizations(tenant_id: str, limit: int = 10) -> Dict[str, Any]:
+		"""Get historical optimization runs"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		with backend.get_connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute(
+					"""
+					SELECT run_id, problem_type, input_data, 
+					       solution, objective_value, created_at
+					FROM optimization_runs 
+					WHERE tenant_id = %s
+					ORDER BY created_at DESC
+					LIMIT %s
+					""",
+					[tenant_id, limit]
+				)
+				
+				rows = cur.fetchall()
+				optimizations = []
+				for row in rows:
+					optimizations.append({
+						'run_id': row[0],
+						'problem_type': row[1],
+						'input_data': row[2],
+						'solution': row[3],
+						'objective_value': row[4],
+						'created_at': row[5].isoformat() if row[5] else None
+					})
+				
+				return {"success": True, "optimizations": optimizations}
+
+	# --- Narrative/Coach endpoints ---
+	@app.post("/v1/tenants/{tenant_id}/coach/ask")
+	async def ask_coach(
+		tenant_id: str,
+		question: str = Body(..., embed=True),
+		context: Optional[Dict[str, Any]] = Body(default=None)
+	) -> Dict[str, Any]:
+		"""Ask the AI coach a business question and get a narrative response"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		narrator = NarrativeGenerator(backend)
+		results = await narrator.generate_narrative(tenant_id, question, context)
+		return {"success": True, **results}
+	
+	@app.post("/v1/tenants/{tenant_id}/what-if")
+	async def what_if_analysis(
+		tenant_id: str,
+		question: str = Body(..., embed=True),
+		llm_config: Optional[Dict[str, Any]] = Body(default=None)
+	) -> Dict[str, Any]:
+		"""
+		OptiGuide-style what-if analysis for inventory optimization.
+		
+		Examples:
+		- "What if order costs increase by 20%?"
+		- "What if we reduce safety stock for WIDGET-001?"
+		- "How would costs change if holding costs doubled?"
+		
+		Args:
+			question: Natural language what-if question
+			llm_config: Optional LLM configuration for advanced analysis
+		"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		try:
+			from backend.services.coach.optiguide_agent import OptiGuideInventoryAgent
+			agent = OptiGuideInventoryAgent(backend, llm_config)
+			result = await agent.ask_what_if(tenant_id, question)
+			return {"success": True, **result}
+		except ImportError as e:
+			return {
+				"success": False,
+				"error": "OptiGuide agent not available",
+				"details": str(e)
+			}
+		except Exception as e:
+			return {
+				"success": False,
+				"error": "What-if analysis failed",
+				"details": str(e)
+			}
+	
+	@app.post("/v1/tenants/{tenant_id}/why")
+	async def why_analysis(
+		tenant_id: str,
+		question: str = Body(..., embed=True),
+		llm_config: Optional[Dict[str, Any]] = Body(default=None)
+	) -> Dict[str, Any]:
+		"""
+		Root cause analysis for inventory questions.
+		
+		Examples:
+		- "Why are inventory costs high?"
+		- "Why is WIDGET-001 overstocked?"
+		- "Why did optimization recommend reducing stock?"
+		
+		Args:
+			question: Natural language "why" question
+			llm_config: Optional LLM configuration for advanced analysis
+		"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		try:
+			from backend.services.coach.optiguide_agent import OptiGuideInventoryAgent
+			agent = OptiGuideInventoryAgent(backend, llm_config)
+			result = await agent.explain_why(tenant_id, question)
+			return {"success": True, **result}
+		except ImportError as e:
+			return {
+				"success": False,
+				"error": "OptiGuide agent not available",
+				"details": str(e)
+			}
+		except Exception as e:
+			return {
+				"success": False,
+				"error": "Why analysis failed",
+				"details": str(e)
+			}
+	
+	@app.post("/v1/tenants/{tenant_id}/chat")
+	async def chat_with_coach(
+		tenant_id: str,
+		question: str = Body(..., embed=True),
+		llm_config: Optional[Dict[str, Any]] = Body(default=None),
+		stream: bool = Body(default=False)
+	) -> Dict[str, Any]:
+		"""
+		LangGraph-orchestrated conversational interface for inventory optimization.
+		
+		Supports multi-turn conversations with:
+		- Goal planning and intent classification
+		- Parallel agent execution
+		- Stateful conversation history
+		- Optional streaming responses
+		
+		Examples:
+		- "What's the current state of my inventory?"
+		- "Forecast demand for next 4 weeks"
+		- "Optimize inventory to reduce costs"
+		- "What if supplier costs increase 15%?"
+		
+		Args:
+			question: Natural language question
+			llm_config: LLM configuration (required for advanced features)
+			stream: Enable streaming responses
+		"""
+		tenant_id = normalize_tenant_id(tenant_id)
+		backend = get_backend()
+		
+		try:
+			from backend.services.coach.langgraph_coach import LangGraphInventoryCoach
+			coach = LangGraphInventoryCoach(backend, llm_config)
+			
+			if stream:
+				# TODO: Implement SSE streaming
+				return {
+					"success": False,
+					"error": "Streaming not yet implemented",
+					"fallback": "Use stream=false for synchronous response"
+				}
+			else:
+				result = coach.chat(tenant_id, question)
+				return {"success": True, **result}
+		
+		except ImportError as e:
+			return {
+				"success": False,
+				"error": "LangGraph coach not available",
+				"details": str(e)
+			}
+		except Exception as e:
+			return {
+				"success": False,
+				"error": "Chat failed",
+				"details": str(e)
+			}
+	
+	@app.get("/v1/capabilities")
+	def get_capabilities() -> Dict[str, Any]:
+		"""Get available AI/ML capabilities"""
+		# Check for LangGraph and AutoGen
+		langgraph_available = False
+		autogen_available = False
+		try:
+			import langgraph
+			langgraph_available = True
+		except ImportError:
+			pass
+		
+		try:
+			from autogen_agentchat.agents import AssistantAgent
+			autogen_available = True
+		except ImportError:
+			pass
+		
+		return {
+			"success": True,
+			"capabilities": {
+				"forecasting": {
+					"simple_moving_average": True,
+					"prophet": PROPHET_AVAILABLE,
+					"recommended": "prophet" if PROPHET_AVAILABLE else "simple_moving_average"
+				},
+				"optimization": {
+					"eoq_simple": True,
+					"ortools_lp": ORTOOLS_AVAILABLE,
+					"recommended": "ortools_lp" if ORTOOLS_AVAILABLE else "eoq_simple"
+				},
+				"conversational_ai": {
+					"narrative_generation": True,
+					"what_if_analysis": autogen_available,
+					"langgraph_orchestration": langgraph_available,
+					"multi_agent": langgraph_available and autogen_available
+				},
+				"elt_pipeline": True
+			},
+			"advanced_features": {
+				"prophet_installed": PROPHET_AVAILABLE,
+				"ortools_installed": ORTOOLS_AVAILABLE,
+				"langgraph_installed": langgraph_available,
+				"autogen_installed": autogen_available,
+				"optiguide_available": autogen_available and ORTOOLS_AVAILABLE,
+				"causal_inference": False,  # Future: DoWhy
+			},
+			"endpoints": {
+				"basic": ["/v1/tenants/{id}/coach/ask"],
+				"optiguide": ["/v1/tenants/{id}/what-if", "/v1/tenants/{id}/why"],
+				"langgraph": ["/v1/tenants/{id}/chat"]
+			}
+		}
 
 	# --- Auth endpoints (guarded, minimal UX support) ---
 	@app.get("/v1/auth/providers")

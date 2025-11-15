@@ -1,3 +1,4 @@
+// DEPRECATED: Legacy Coach page. The app uses CoachV5 for /coach. Do not import.
 import {
     ActionIcon,
     Avatar,

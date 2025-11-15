@@ -432,3 +432,123 @@ export async function getTasks(tenantId: string, token?: string, horizon?: strin
     const params = horizon ? `?horizon=${horizon}` : '';
     return get(`/v1/tenants/${tenantId}/tasks${params}`, token)
 }
+
+// ===================================
+// OptiGuide API Functions
+// ===================================
+
+export type OptimizationRecommendation = {
+    sku: string
+    action: string
+    current_stock?: number
+    optimal_stock?: number
+    potential_saving?: number
+    change_pct?: number
+}
+
+export type OptimizationResult = {
+    solver_status: string
+    objective_value: number
+    recommendations: OptimizationRecommendation[]
+    total_potential_savings: number
+    _modified?: boolean
+    _modifications?: Record<string, any>
+}
+
+export type WhatIfAnalysisResponse = {
+    success: boolean
+    question: string
+    original_result: OptimizationResult
+    modified_result: OptimizationResult
+    modifications_applied: Record<string, any>
+    analysis: string
+    narrative: string
+    timestamp: string
+}
+
+export type WhyAnalysisResponse = {
+    success: boolean
+    question: string
+    narrative: string
+    supporting_data?: {
+        recommendations?: OptimizationRecommendation[]
+        metrics?: Record<string, any>
+    }
+    timestamp: string
+}
+
+export type OptiGuideChatResponse = {
+    success: boolean
+    question: string
+    intent: 'forecast' | 'optimize' | 'what_if' | 'why' | 'overview'
+    narrative: string
+    supporting_data?: Record<string, any>
+    timestamp: string
+}
+
+export type OptiGuideCapabilities = {
+    conversational_ai: {
+        narrative_generation: boolean
+        what_if_analysis: boolean
+        langgraph_orchestration: boolean
+        multi_agent: boolean
+    }
+    advanced_features: {
+        prophet_installed: boolean
+        ortools_installed: boolean
+        langgraph_installed: boolean
+        autogen_installed: boolean
+        optiguide_available: boolean
+    }
+    endpoints?: {
+        basic?: string[]
+        optiguide?: string[]
+        langgraph?: string[]
+    }
+}
+
+/**
+ * Ask a what-if question about inventory optimization scenarios
+ * Examples: "What if order costs increase 20%?", "What if holding costs double?"
+ */
+export async function askWhatIf(
+    tenantId: string,
+    question: string,
+    llmConfig?: Record<string, any>,
+    token?: string
+): Promise<WhatIfAnalysisResponse> {
+    return post(`/v1/tenants/${tenantId}/what-if`, { question, llm_config: llmConfig }, token)
+}
+
+/**
+ * Ask a "why" question for root cause analysis
+ * Examples: "Why are inventory costs high?", "Why is SKU X overstocked?"
+ */
+export async function askWhy(
+    tenantId: string,
+    question: string,
+    llmConfig?: Record<string, any>,
+    token?: string
+): Promise<WhyAnalysisResponse> {
+    return post(`/v1/tenants/${tenantId}/why`, { question, llm_config: llmConfig }, token)
+}
+
+/**
+ * Chat with OptiGuide using LangGraph orchestration
+ * Supports forecast, optimize, what_if, why, and overview intents
+ */
+export async function chatWithOptiGuide(
+    tenantId: string,
+    question: string,
+    llmConfig?: Record<string, any>,
+    token?: string
+): Promise<OptiGuideChatResponse> {
+    return post(`/v1/tenants/${tenantId}/chat`, { question, llm_config: llmConfig }, token)
+}
+
+/**
+ * Get OptiGuide capabilities (AutoGen, LangGraph, etc.)
+ */
+export async function getOptiGuideCapabilities(): Promise<OptiGuideCapabilities> {
+    return get('/v1/capabilities')
+}

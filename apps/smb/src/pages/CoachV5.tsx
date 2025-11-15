@@ -1,13 +1,14 @@
-import { ActionIcon, Badge, Button, Card, Checkbox, Divider, Group, Menu, Progress, ScrollArea, Select, Stack, Tabs, Text, Textarea, useMantineTheme } from '@mantine/core'
+import { ActionIcon, Badge, Button, Card, Checkbox, Divider, Drawer, Group, Menu, Progress, ScrollArea, Select, Stack, Tabs, Text, Textarea, useMantineTheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconChartBar, IconChevronLeft, IconChevronRight, IconDotsVertical, IconFileText, IconSend, IconSparkles, IconTarget, IconTrendingUp } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AgentModeSwitcher, type AgentMode, type DataSource } from '../components/AgentModeSwitcher'
 import CoachVisualization from '../components/CoachVisualization'
 import CreateTaskModal from '../components/CreateTaskModal'
+import { Markdown } from '../components/Markdown'
+import { OptiGuideQuickActions } from '../components/OptiGuideQuickActions'
 import { ReportDownloadButtons } from '../components/ReportDownloadButtons'
 import { API_BASE, get, post, put } from '../lib/api'
 import { Conversation, Message as ConvMessage, generateConversationTitle, loadConversations, saveConversation } from '../lib/conversations'
@@ -113,11 +114,47 @@ export default function CoachV5() {
 
     // Three-plane layout state (Trip.com style: left=AI+Insights, center=Action Plan, right=Evidence/Reports)
     const [showLeftPlane, setShowLeftPlane] = useState(true)
-    const [showRightPlane, setShowRightPlane] = useState(true)
+    const [showRightPlane, setShowRightPlane] = useState(false)
     const [conversationSearch, setConversationSearch] = useState('')
     const [leftView, setLeftView] = useState<'chat' | 'insights'>('chat') // Left plane tabs
     const [centerView, setCenterView] = useState<'overview' | 'itinerary' | 'tasks'>('overview')
     const [evidenceView, setEvidenceView] = useState<'sources' | 'reports' | 'graphs'>('sources') // Right plane tabs
+    const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
+    const hasInsights = useMemo(() => {
+        try {
+            return Boolean((lastAssistant?.metadata && (lastAssistant.metadata.visual_response || lastAssistant.metadata.intent)) || (typeof healthScore === 'object' && healthScore))
+        } catch { return false }
+    }, [lastAssistant, healthScore])
+
+    // Simple scenario control state
+    const [scenarioMode, setScenarioMode] = useState<'what-if' | 'why'>('what-if')
+    const [scenarioTemplate, setScenarioTemplate] = useState<string | null>(null)
+
+    // Health status in header
+    const [healthStatus, setHealthStatus] = useState<'unknown' | 'ok' | 'down'>('unknown')
+    const [lastHealthCheck, setLastHealthCheck] = useState<Date | null>(null)
+    useEffect(() => {
+        let cancelled = false
+        const check = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/health`)
+                if (cancelled) return
+                setHealthStatus(res.ok ? 'ok' : 'down')
+                setLastHealthCheck(new Date())
+            } catch {
+                if (!cancelled) {
+                    setHealthStatus('down')
+                    setLastHealthCheck(new Date())
+                }
+            }
+        }
+        check()
+        const id = setInterval(check, 60_000)
+        return () => { cancelled = true; clearInterval(id) }
+    }, [])
+
+    // Inline goal picker flow for Save as Task when no goal linked
+    const [showGoalPicker, setShowGoalPicker] = useState(false)
 
     // Task creation
     const createTaskMutation = useMutation({
@@ -385,6 +422,19 @@ export default function CoachV5() {
     const addAssistantMessage = (content: string) =>
         setMessages((prev) => [...prev, { id: `${Date.now()}-a`, role: 'assistant', content, timestamp: new Date() }])
 
+    // Seed a simple sample plan to show the experience without backend calls
+    const addSamplePlan = () => {
+        const sample = `**Your plan for this week**
+
+- Review top 5 SKUs by cost and reduce safety stock where demand is stable
+- Place one consolidated order to cut ordering fees by ~20%
+- Tag overstocked items for discount and bundle offers
+
+Tip: Link a goal to save these as tasks and track progress.`
+        addAssistantMessage(sample)
+        setCenterView('itinerary')
+    }
+
     const handleSend = async () => {
         const value = input.trim()
         if (!value) return
@@ -558,12 +608,18 @@ export default function CoachV5() {
 
     const openSaveAsTask = (title?: string) => {
         if (!selectedGoalId) {
-            addAssistantMessage('Please link this chat to a goal first (top bar).')
+            // Ask user to pick a goal inline
+            setTaskDraftTitle(title)
+            setShowGoalPicker(true)
             return
         }
         setTaskDraftTitle(title)
         setTaskModalOpen(true)
     }
+
+    const [showOptiGuide, setShowOptiGuide] = useState(false)
+    const [optiGuideInitQuestion, setOptiGuideInitQuestion] = useState<string | undefined>()
+    const [optiGuideInitMode, setOptiGuideInitMode] = useState<'what-if' | 'why' | undefined>()
 
     return (
         <div style={{ background: '#f5f5f5', minHeight: '100vh', padding: '12px' }}>
@@ -607,6 +663,35 @@ export default function CoachV5() {
                     >
                         New Goal
                     </Button>
+                    {/* Health status dot */}
+                    <div title={
+                        healthStatus === 'ok'
+                            ? `Connected${lastHealthCheck ? ` • checked ${lastHealthCheck.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+                            : healthStatus === 'down'
+                                ? `Offline${lastHealthCheck ? ` • checked ${lastHealthCheck.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+                                : 'Checking...'
+                    } style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: 999, background: healthStatus === 'ok' ? '#12b886' : healthStatus === 'down' ? '#fa5252' : '#adb5bd' }} />
+                        <Text size="xs" c="dimmed">{healthStatus === 'ok' ? 'Connected' : healthStatus === 'down' ? 'Offline' : 'Checking'}</Text>
+                    </div>
+                    <Button
+                        size="xs"
+                        variant="light"
+                        color="violet"
+                        leftSection={<IconSparkles size={14} />}
+                        onClick={() => setShowOptiGuide(true)}
+                    >
+                        Scenarios
+                    </Button>
+                    <Button
+                        size="xs"
+                        variant={showRightPlane ? 'light' : 'filled'}
+                        color={showRightPlane ? 'gray' : 'dark'}
+                        onClick={() => setShowRightPlane((v) => !v)}
+                        title={showRightPlane ? 'Hide evidence pane' : 'Show evidence pane'}
+                    >
+                        {showRightPlane ? 'Focus mode' : 'Show evidence'}
+                    </Button>
                 </Group>
             </Group>
 
@@ -638,69 +723,71 @@ export default function CoachV5() {
                             </Group>
                         </div>
 
-                        {/* Business Insights - Collapsible Section */}
-                        <div style={{ borderBottom: `1px solid ${theme.colors.gray[2]}`, background: theme.colors.blue[0] }}>
-                            <Button
-                                fullWidth
-                                variant="subtle"
-                                color="blue"
-                                size="xs"
-                                onClick={() => setLeftView(leftView === 'insights' ? 'chat' : 'insights')}
-                                styles={{
-                                    root: {
-                                        borderRadius: 0,
-                                        padding: '6px 10px',
-                                        height: 'auto'
-                                    }
-                                }}
-                            >
-                                <Group justify="space-between" style={{ width: '100%' }}>
-                                    <Group gap={6}>
-                                        <IconChartBar size={12} />
-                                        <Text size="xs" fw={600}>Business Insights</Text>
+                        {/* Business Insights - Collapsible Section (hidden unless insights exist) */}
+                        {hasInsights && (
+                            <div style={{ borderBottom: `1px solid ${theme.colors.gray[2]}`, background: theme.colors.blue[0] }}>
+                                <Button
+                                    fullWidth
+                                    variant="subtle"
+                                    color="blue"
+                                    size="xs"
+                                    onClick={() => setLeftView(leftView === 'insights' ? 'chat' : 'insights')}
+                                    styles={{
+                                        root: {
+                                            borderRadius: 0,
+                                            padding: '6px 10px',
+                                            height: 'auto'
+                                        }
+                                    }}
+                                >
+                                    <Group justify="space-between" style={{ width: '100%' }}>
+                                        <Group gap={6}>
+                                            <IconChartBar size={12} />
+                                            <Text size="xs" fw={600}>Business Insights</Text>
+                                        </Group>
+                                        <Text size="xs">
+                                            {leftView === 'insights' ? '▼' : '▶'}
+                                        </Text>
                                     </Group>
-                                    <Text size="xs">
-                                        {leftView === 'insights' ? '▼' : '▶'}
-                                    </Text>
-                                </Group>
-                            </Button>
+                                </Button>
 
-                            {leftView === 'insights' && (
-                                <ScrollArea style={{ maxHeight: '200px' }} p={6}>
-                                    <Stack gap={6}>
-                                        {/* Compact Health Score */}
-                                        {typeof (healthScore as any)?.score === 'number' && (
-                                            <Card withBorder radius="sm" p="xs">
-                                                <Group justify="space-between" mb={4}>
-                                                    <Text size="xs" fw={600}>Health Score</Text>
-                                                    <Badge size="sm" color={(healthScore as any).score >= 70 ? 'teal' : (healthScore as any).score >= 40 ? 'yellow' : 'red'}>
-                                                        {(healthScore as any).score}/100
-                                                    </Badge>
-                                                </Group>
-                                                <Progress
-                                                    value={(healthScore as any).score}
-                                                    radius="sm"
-                                                    size="xs"
-                                                    color={(healthScore as any).score >= 70 ? 'teal' : (healthScore as any).score >= 40 ? 'yellow' : 'red'}
-                                                />
-                                            </Card>
-                                        )}
-                                        {/* Compact Goal Progress */}
-                                        {linkedGoal && (
-                                            <Card withBorder radius="sm" p="xs">
-                                                <Group justify="space-between" mb={4}>
-                                                    <Text size="xs" fw={600} lineClamp={1} style={{ flex: 1 }}>{linkedGoal.title}</Text>
-                                                    <Badge size="sm" color={goalProgress >= 70 ? 'teal' : 'blue'}>
-                                                        {goalProgress}%
-                                                    </Badge>
-                                                </Group>
-                                                <Progress value={goalProgress} radius="sm" size="xs" color={goalProgress >= 70 ? 'teal' : 'blue'} />
-                                            </Card>
-                                        )}
-                                    </Stack>
-                                </ScrollArea>
-                            )}
-                        </div>
+                                {leftView === 'insights' && (
+                                    <ScrollArea style={{ maxHeight: '200px' }} p={6}>
+                                        <Stack gap={6}>
+                                            {/* Compact Health Score */}
+                                            {typeof (healthScore as any)?.score === 'number' && (
+                                                <Card withBorder radius="sm" p="xs">
+                                                    <Group justify="space-between" mb={4}>
+                                                        <Text size="xs" fw={600}>Health Score</Text>
+                                                        <Badge size="sm" color={(healthScore as any).score >= 70 ? 'teal' : (healthScore as any).score >= 40 ? 'yellow' : 'red'}>
+                                                            {(healthScore as any).score}/100
+                                                        </Badge>
+                                                    </Group>
+                                                    <Progress
+                                                        value={(healthScore as any).score}
+                                                        radius="sm"
+                                                        size="xs"
+                                                        color={(healthScore as any).score >= 70 ? 'teal' : (healthScore as any).score >= 40 ? 'yellow' : 'red'}
+                                                    />
+                                                </Card>
+                                            )}
+                                            {/* Compact Goal Progress */}
+                                            {linkedGoal && (
+                                                <Card withBorder radius="sm" p="xs">
+                                                    <Group justify="space-between" mb={4}>
+                                                        <Text size="xs" fw={600} lineClamp={1} style={{ flex: 1 }}>{linkedGoal.title}</Text>
+                                                        <Badge size="sm" color={goalProgress >= 70 ? 'teal' : 'blue'}>
+                                                            {goalProgress}%
+                                                        </Badge>
+                                                    </Group>
+                                                    <Progress value={goalProgress} radius="sm" size="xs" color={goalProgress >= 70 ? 'teal' : 'blue'} />
+                                                </Card>
+                                            )}
+                                        </Stack>
+                                    </ScrollArea>
+                                )}
+                            </div>
+                        )}
 
                         {/* AI Chat Section */}
                         <ScrollArea style={{ flex: 1 }} p={8}>
@@ -739,77 +826,7 @@ export default function CoachV5() {
                                                         )}
 
                                                         {/* Text content (if any) */}
-                                                        {m.content && (
-                                                            <ReactMarkdown
-                                                                components={{
-                                                                    h2: ({ children }: any) => (
-                                                                        <Text size="md" fw={700} mt="md" mb="xs" c="dark.7">
-                                                                            {children}
-                                                                        </Text>
-                                                                    ),
-                                                                    h3: ({ children }: any) => (
-                                                                        <Text size="sm" fw={600} mt="sm" mb="xs" c="dark.6">
-                                                                            {children}
-                                                                        </Text>
-                                                                    ),
-                                                                    p: ({ children }: any) => (
-                                                                        <Text size="sm" mb="xs" style={{ lineHeight: 1.6 }}>
-                                                                            {children}
-                                                                        </Text>
-                                                                    ),
-                                                                    ul: ({ children }: any) => (
-                                                                        <ul style={{ marginLeft: '16px', marginBottom: '8px' }}>
-                                                                            {children}
-                                                                        </ul>
-                                                                    ),
-                                                                    ol: ({ children }: any) => (
-                                                                        <ol style={{ marginLeft: '16px', marginBottom: '8px' }}>
-                                                                            {children}
-                                                                        </ol>
-                                                                    ),
-                                                                    li: ({ children }: any) => (
-                                                                        <li style={{ marginBottom: '4px', fontSize: '13px' }}>
-                                                                            {children}
-                                                                        </li>
-                                                                    ),
-                                                                    strong: ({ children }: any) => (
-                                                                        <strong style={{ fontWeight: 600, color: theme.colors.dark[8] }}>
-                                                                            {children}
-                                                                        </strong>
-                                                                    ),
-                                                                    hr: () => (
-                                                                        <Divider my="sm" />
-                                                                    ),
-                                                                    code: ({ children, className }: any) => {
-                                                                        const isInline = !className
-                                                                        return isInline ? (
-                                                                            <code style={{
-                                                                                background: theme.colors.gray[1],
-                                                                                padding: '2px 6px',
-                                                                                borderRadius: '4px',
-                                                                                fontSize: '12px',
-                                                                                fontFamily: 'monospace'
-                                                                            }}>
-                                                                                {children}
-                                                                            </code>
-                                                                        ) : (
-                                                                            <pre style={{
-                                                                                background: theme.colors.gray[1],
-                                                                                padding: '8px',
-                                                                                borderRadius: '6px',
-                                                                                overflow: 'auto',
-                                                                                fontSize: '12px',
-                                                                                fontFamily: 'monospace'
-                                                                            }}>
-                                                                                <code>{children}</code>
-                                                                            </pre>
-                                                                        )
-                                                                    }
-                                                                }}
-                                                            >
-                                                                {m.content}
-                                                            </ReactMarkdown>
-                                                        )}
+                                                        {m.content && <Markdown content={m.content} size="sm" />}
                                                     </div>
                                                 ) : (
                                                     <Text size="xs" c="white" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
@@ -894,14 +911,82 @@ export default function CoachV5() {
                                     </Stack>
                                 )}
 
-                                {/* Agent Mode Switcher */}
-                                <AgentModeSwitcher
-                                    mode={agentMode}
-                                    onChange={setAgentMode}
-                                    availableDataSources={availableDataSources}
-                                    selectedDataSources={selectedDataSources}
-                                    onDataSourceChange={setSelectedDataSources}
-                                />
+                                {/* Scenario control (simple) */}
+                                <Stack gap={6}>
+                                    <Text size="xs" c="dimmed" fw={500} px={1}>Try a scenario:</Text>
+                                    <Group gap={6} wrap="wrap" align="center">
+                                        <Button.Group>
+                                            <Button
+                                                size="xs"
+                                                variant={scenarioMode === 'what-if' ? 'filled' : 'light'}
+                                                onClick={() => setScenarioMode('what-if')}
+                                            >
+                                                What‑If
+                                            </Button>
+                                            <Button
+                                                size="xs"
+                                                variant={scenarioMode === 'why' ? 'filled' : 'light'}
+                                                onClick={() => setScenarioMode('why')}
+                                            >
+                                                Why
+                                            </Button>
+                                        </Button.Group>
+                                        <Select
+                                            size="xs"
+                                            placeholder={scenarioMode === 'what-if' ? 'Select template' : 'Select question'}
+                                            value={scenarioTemplate}
+                                            onChange={setScenarioTemplate}
+                                            data={
+                                                scenarioMode === 'what-if'
+                                                    ? [
+                                                        { label: 'Cost shock (+20% ordering)', value: 'cost_shock' },
+                                                        { label: 'Holding costs doubled', value: 'holding_double' },
+                                                    ]
+                                                    : [
+                                                        { label: 'Why are costs high?', value: 'costs_high' },
+                                                    ]
+                                            }
+                                            w={220}
+                                        />
+                                        <Button
+                                            size="xs"
+                                            variant="light"
+                                            color="violet"
+                                            onClick={() => {
+                                                if (!scenarioTemplate) return
+                                                if (scenarioMode === 'what-if') {
+                                                    const q = scenarioTemplate === 'cost_shock'
+                                                        ? 'What if order costs increase by 20%?'
+                                                        : 'What if holding costs double?'
+                                                    setOptiGuideInitMode('what-if')
+                                                    setOptiGuideInitQuestion(q)
+                                                } else {
+                                                    setOptiGuideInitMode('why')
+                                                    setOptiGuideInitQuestion('Why are inventory costs high?')
+                                                }
+                                                setShowOptiGuide(true)
+                                            }}
+                                        >
+                                            Run
+                                        </Button>
+                                    </Group>
+                                </Stack>
+
+                                {/* Advanced options (collapsed by default) */}
+                                <Group gap={6}>
+                                    <Button size="xs" variant="subtle" color="gray" onClick={() => setShowAdvancedOptions((v) => !v)}>
+                                        {showAdvancedOptions ? 'Hide advanced options' : 'Show advanced options'}
+                                    </Button>
+                                </Group>
+                                {showAdvancedOptions && (
+                                    <AgentModeSwitcher
+                                        mode={agentMode}
+                                        onChange={setAgentMode}
+                                        availableDataSources={availableDataSources}
+                                        selectedDataSources={selectedDataSources}
+                                        onDataSourceChange={setSelectedDataSources}
+                                    />
+                                )}
 
                                 <Group gap={6} align="flex-end">
                                     <Textarea
@@ -951,6 +1036,25 @@ export default function CoachV5() {
                         </div>
                     </Card>
                 )}
+
+                {/* Scenarios Drawer */}
+                <Drawer
+                    opened={showOptiGuide}
+                    onClose={() => setShowOptiGuide(false)}
+                    position="right"
+                    size="xl"
+                    title="What‑If & Why Scenarios"
+                >
+                    <OptiGuideQuickActions
+                        onClose={() => setShowOptiGuide(false)}
+                        initialMode={optiGuideInitMode}
+                        initialQuestion={optiGuideInitQuestion}
+                        onSendToChat={(content) => {
+                            addAssistantMessage(content)
+                            setShowOptiGuide(false)
+                        }}
+                    />
+                </Drawer>
 
                 {/* Temporarily hide old insights - will be removed */}
                 {false && (
@@ -1125,22 +1229,21 @@ export default function CoachV5() {
                         {centerView === 'overview' ? (
                             <Stack gap={8}>
                                 {!lastAssistant ? (
-                                    <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                                    <Card withBorder radius="md" p="md" style={{ textAlign: 'center' }}>
                                         <div style={{
-                                            width: '48px',
-                                            height: '48px',
-                                            borderRadius: '12px',
-                                            background: theme.colors.brand[0],
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            margin: '0 auto 10px'
+                                            width: '48px', height: '48px', borderRadius: '12px',
+                                            background: theme.colors.brand[0], display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'
                                         }}>
                                             <IconSparkles size={24} color={theme.colors.brand[6]} />
                                         </div>
-                                        <Text fw={600} size="xs" mb={4}>Start with AI Assistant</Text>
-                                        <Text size="xs" c="dimmed">Ask the AI to analyze your goal and create an action plan</Text>
-                                    </div>
+                                        <Text fw={700} size="sm" mb={4}>Welcome</Text>
+                                        <Text size="xs" c="dimmed" mb="sm">Three quick ways to get started:</Text>
+                                        <Group gap={8} grow>
+                                            <Button size="xs" variant="light" onClick={() => navigate('/goals')}>Select or create a goal</Button>
+                                            <Button size="xs" variant="light" color="violet" onClick={() => { setOptiGuideInitMode('what-if'); setOptiGuideInitQuestion('What if order costs increase by 20%?'); setShowOptiGuide(true) }}>Try a scenario</Button>
+                                            <Button size="xs" variant="light" color="teal" onClick={addSamplePlan}>See sample plan</Button>
+                                        </Group>
+                                    </Card>
                                 ) : (
                                     <>
                                         <Card withBorder radius="sm" p={10} style={{ background: theme.colors.blue[0] }}>
