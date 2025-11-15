@@ -270,7 +270,7 @@ class LangGraphInventoryCoach:
         
         return state
     
-    def _what_if_node(self, state: ConversationState) -> ConversationState:
+    async def _what_if_node(self, state: ConversationState) -> ConversationState:
         """
         What-If Agent: Performs scenario analysis using OptiGuide approach.
         """
@@ -278,8 +278,8 @@ class LangGraphInventoryCoach:
         question = state["user_question"]
         
         try:
-            # Use OptiGuide agent for what-if analysis
-            what_if_result = self.optiguide.ask_what_if(tenant_id, question)
+            # Use OptiGuide agent for what-if analysis (async)
+            what_if_result = await self.optiguide.ask_what_if(tenant_id, question)
             
             state["analysis_results"] = {"what_if": what_if_result}
             state["messages"].append(
@@ -293,7 +293,7 @@ class LangGraphInventoryCoach:
         
         return state
     
-    def _evidence_node(self, state: ConversationState) -> ConversationState:
+    async def _evidence_node(self, state: ConversationState) -> ConversationState:
         """
         Evidence Agent: Performs root cause analysis and causal inference.
         
@@ -307,8 +307,8 @@ class LangGraphInventoryCoach:
         question = state["user_question"]
         
         try:
-            # Use OptiGuide's explain_why method
-            why_result = self.optiguide.explain_why(tenant_id, question)
+            # Use OptiGuide's explain_why method (async)
+            why_result = await self.optiguide.explain_why(tenant_id, question)
             
             state["analysis_results"] = {"evidence": why_result}
             state["messages"].append(
@@ -513,7 +513,7 @@ class LangGraphInventoryCoach:
     
     # ========== Public Interface ==========
     
-    def chat(self, tenant_id: str, question: str) -> Dict[str, Any]:
+    async def chat(self, tenant_id: str, question: str) -> Dict[str, Any]:
         """
         Main chat interface for conversational inventory optimization.
         
@@ -537,8 +537,8 @@ class LangGraphInventoryCoach:
         }
         
         try:
-            # Run workflow
-            final_state = self.workflow.invoke(initial_state)
+            # Run workflow (use ainvoke for async nodes)
+            final_state = await self.workflow.ainvoke(initial_state)
             
             return {
                 "question": question,
@@ -560,7 +560,7 @@ class LangGraphInventoryCoach:
         Streaming version of chat for real-time updates.
         
         Yields:
-            State updates as they occur during workflow execution
+            JSON-serializable state updates as they occur during workflow execution
         """
         initial_state: ConversationState = {
             "messages": [HumanMessage(content=question)],
@@ -574,14 +574,22 @@ class LangGraphInventoryCoach:
         }
         
         try:
-            # Stream workflow execution
-            for state in self.workflow.stream(initial_state):
-                yield {
-                    "step": state,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
+            # Stream workflow execution - yields (node_name, state_update) tuples
+            for chunk in self.workflow.stream(initial_state):
+                # chunk is a dict with node names as keys
+                for node_name, state_update in chunk.items():
+                    # Extract fields from the state update
+                    serializable_state = {
+                        "node": node_name,
+                        "intent": state_update.get("intent"),
+                        "narrative": state_update.get("narrative"),
+                        "next_action": state_update.get("next_action"),
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                    yield serializable_state
         except Exception as e:
             yield {
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+

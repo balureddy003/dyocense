@@ -1933,7 +1933,7 @@ def create_app() -> FastAPI:
 		question: str = Body(..., embed=True),
 		llm_config: Optional[Dict[str, Any]] = Body(default=None),
 		stream: bool = Body(default=False)
-	) -> Dict[str, Any]:
+	):
 		"""
 		LangGraph-orchestrated conversational interface for inventory optimization.
 		
@@ -1941,7 +1941,7 @@ def create_app() -> FastAPI:
 		- Goal planning and intent classification
 		- Parallel agent execution
 		- Stateful conversation history
-		- Optional streaming responses
+		- Optional streaming responses via SSE
 		
 		Examples:
 		- "What's the current state of my inventory?"
@@ -1952,8 +1952,11 @@ def create_app() -> FastAPI:
 		Args:
 			question: Natural language question
 			llm_config: LLM configuration (required for advanced features)
-			stream: Enable streaming responses
+			stream: Enable Server-Sent Events streaming responses
 		"""
+		from fastapi.responses import StreamingResponse
+		import asyncio
+		
 		tenant_id = normalize_tenant_id(tenant_id)
 		backend = get_backend()
 		
@@ -1962,14 +1965,33 @@ def create_app() -> FastAPI:
 			coach = LangGraphInventoryCoach(backend, llm_config)
 			
 			if stream:
-				# TODO: Implement SSE streaming
-				return {
-					"success": False,
-					"error": "Streaming not yet implemented",
-					"fallback": "Use stream=false for synchronous response"
-				}
+				# Implement SSE streaming
+				async def event_generator():
+					try:
+						# Stream workflow execution
+						for state_update in coach.stream_chat(tenant_id, question):
+							# Format as Server-Sent Event
+							event_data = json.dumps(state_update)
+							yield f"data: {event_data}\n\n"
+							await asyncio.sleep(0)  # Allow other tasks to run
+						
+						# Send final done event
+						yield f"data: {json.dumps({'done': True})}\n\n"
+					except Exception as e:
+						error_data = json.dumps({"error": str(e)})
+						yield f"data: {error_data}\n\n"
+				
+				return StreamingResponse(
+					event_generator(),
+					media_type="text/event-stream",
+					headers={
+						"Cache-Control": "no-cache",
+						"Connection": "keep-alive",
+						"X-Accel-Buffering": "no"  # Disable nginx buffering
+					}
+				)
 			else:
-				result = coach.chat(tenant_id, question)
+				result = await coach.chat(tenant_id, question)
 				return {"success": True, **result}
 		
 		except ImportError as e:

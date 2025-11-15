@@ -1,10 +1,10 @@
-import { ActionIcon, Badge, Button, Card, Checkbox, Divider, Drawer, Group, Menu, Progress, ScrollArea, Select, Stack, Tabs, Text, Textarea, useMantineTheme } from '@mantine/core'
+import { ActionIcon, Badge, Button, Card, Checkbox, Collapse, Divider, Drawer, Group, Menu, Progress, ScrollArea, Select, Stack, Tabs, Text, Textarea, useMantineTheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
-import { IconChartBar, IconChevronLeft, IconChevronRight, IconDotsVertical, IconFileText, IconSend, IconSparkles, IconTarget, IconTrendingUp } from '@tabler/icons-react'
+import { IconChartBar, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconDotsVertical, IconFileText, IconSend, IconSparkles, IconTarget } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { AgentModeSwitcher, type AgentMode, type DataSource } from '../components/AgentModeSwitcher'
+import { type AgentMode, type DataSource } from '../components/AgentModeSwitcher'
 import CoachVisualization from '../components/CoachVisualization'
 import CreateTaskModal from '../components/CreateTaskModal'
 import { Markdown } from '../components/Markdown'
@@ -112,23 +112,22 @@ export default function CoachV5() {
         }));
     }, [connectorsData]);
 
-    // Three-plane layout state (Trip.com style: left=AI+Insights, center=Action Plan, right=Evidence/Reports)
+    // Three-plane layout state
     const [showLeftPlane, setShowLeftPlane] = useState(true)
     const [showRightPlane, setShowRightPlane] = useState(false)
     const [conversationSearch, setConversationSearch] = useState('')
-    const [leftView, setLeftView] = useState<'chat' | 'insights'>('chat') // Left plane tabs
-    const [centerView, setCenterView] = useState<'overview' | 'itinerary' | 'tasks'>('overview')
-    const [evidenceView, setEvidenceView] = useState<'sources' | 'reports' | 'graphs'>('sources') // Right plane tabs
-    const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
+    const [leftView, setLeftView] = useState<'chat' | 'insights'>('chat')
+    const [evidenceView, setEvidenceView] = useState<'sources' | 'reports' | 'graphs'>('sources')
+
+    // Trip.com-inspired collapsible sections
+    const [stepsExpanded, setStepsExpanded] = useState(true)
+    const [tasksExpanded, setTasksExpanded] = useState(true)
+
     const hasInsights = useMemo(() => {
         try {
             return Boolean((lastAssistant?.metadata && (lastAssistant.metadata.visual_response || lastAssistant.metadata.intent)) || (typeof healthScore === 'object' && healthScore))
         } catch { return false }
     }, [lastAssistant, healthScore])
-
-    // Simple scenario control state
-    const [scenarioMode, setScenarioMode] = useState<'what-if' | 'why'>('what-if')
-    const [scenarioTemplate, setScenarioTemplate] = useState<string | null>(null)
 
     // Health status in header
     const [healthStatus, setHealthStatus] = useState<'unknown' | 'ok' | 'down'>('unknown')
@@ -432,7 +431,6 @@ export default function CoachV5() {
 
 Tip: Link a goal to save these as tasks and track progress.`
         addAssistantMessage(sample)
-        setCenterView('itinerary')
     }
 
     const handleSend = async () => {
@@ -451,104 +449,96 @@ Tip: Link a goal to save these as tasks and track progress.`
         try {
             const controller = new AbortController()
             abortControllerRef.current = controller
-            const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/coach/chat/stream/v2`, {
+
+            // Use SSE streaming for real-time responses
+            const response = await fetch(`${API_BASE}/v1/tenants/${tenantId}/chat`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
                 },
                 body: JSON.stringify({
-                    message: value,
-                    conversation_history: messages.slice(-10).map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp.toISOString() })),
-                    persona: 'business_analyst',
+                    question: value,
+                    stream: true,
                 }),
                 signal: controller.signal,
             })
 
-            if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`)
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}))
+                throw new Error(errorData.error || `HTTP ${response.status}`)
+            }
 
-            const reader = response.body.getReader()
+            // Handle Server-Sent Events (SSE) stream
+            const reader = response.body?.getReader()
             const decoder = new TextDecoder()
-            let full = ''
-            let collectedMetadata: any = {}
-            let dataSources = new Set<string>()
-            let toolsUsed = new Set<string>()
+            let buffer = ''
+            let fullNarrative = ''
+            let streamDone = false
 
-            while (true) {
-                const { done, value: chunk } = await reader.read()
-                if (done) break
-                const lines = decoder.decode(chunk).split('\n')
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue
-                    try {
-                        const data = JSON.parse(line.slice(6))
-                        if (data.delta) {
-                            full += data.delta
-                        }
-                        // Collect metadata from streaming events
-                        if (data.metadata) {
-                            collectedMetadata = { ...collectedMetadata, ...data.metadata }
+            if (reader) {
+                while (true) {
+                    const { done, value: chunk } = await reader.read()
+                    if (done) break
 
-                            // Update execution phase and progress
-                            if (data.metadata.phase) {
-                                setExecutionPhase(data.metadata.phase)
+                    buffer += decoder.decode(chunk, { stream: true })
+                    const lines = buffer.split('\n')
+                    buffer = lines.pop() || ''
 
-                                // Planning phase
-                                if (data.metadata.phase === 'planning') {
-                                    setExecutionProgress({
-                                        intent: data.metadata.intent,
-                                        total_tasks: data.metadata.total_tasks,
-                                        completed_tasks: 0
-                                    })
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6))
+
+                                if (data.done) {
+                                    streamDone = true
+                                    break
                                 }
 
-                                // Task execution phase
-                                if (data.metadata.phase === 'task_execution' && data.metadata.task_status === 'completed') {
-                                    setExecutionProgress((prev) => ({
-                                        ...prev,
-                                        completed_tasks: (prev.completed_tasks || 0) + 1
-                                    }))
+                                if (data.error) {
+                                    throw new Error(data.error)
                                 }
 
-                                // Analysis/complete phase
-                                if (data.metadata.phase === 'analysis' || data.metadata.phase === 'complete') {
-                                    setExecutionPhase(null)
-                                    setExecutionProgress({})
+                                // Update message with streaming narrative content
+                                if (data.narrative) {
+                                    fullNarrative = data.narrative
+                                    setMessages((prev) =>
+                                        prev.map((m) => (m.id === assistantId ? { ...m, content: fullNarrative } : m))
+                                    )
                                 }
-                            }
-
-                            // Track data sources and tools from task execution
-                            if (data.metadata.phase === 'task_execution' && data.metadata.task_id) {
-                                // Infer data sources from task IDs
-                                const taskId = data.metadata.task_id
-                                if (taskId.includes('inventory')) {
-                                    dataSources.add('inventory')
-                                    toolsUsed.add('Inventory Analysis')
-                                } else if (taskId.includes('revenue') || taskId.includes('order')) {
-                                    dataSources.add('orders')
-                                    toolsUsed.add('Revenue Analysis')
-                                } else if (taskId.includes('customer')) {
-                                    dataSources.add('customers')
-                                    toolsUsed.add('Customer Analysis')
-                                }
+                            } catch (parseErr) {
+                                console.warn('Failed to parse SSE data:', line)
                             }
                         }
+                    }
 
-                        setMessages((prev) => prev.map((m) => (m.id === assistantId ? {
-                            ...m,
-                            content: full,
-                            metadata: {
-                                ...collectedMetadata,
-                                data_sources: Array.from(dataSources),
-                                tools_used: Array.from(toolsUsed)
-                            }
-                        } : m)))
-                    } catch { }
+                    // Exit outer loop if stream is done
+                    if (streamDone) break
                 }
             }
-            trackEvent('assistant_plan_generated', { tenantId, linked_goal: !!selectedGoalId, contains_bullets: /\n-/.test(full) })
-        } catch (e: any) {
-            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: `⚠️ Error: ${e?.message || 'failed to reach coach'}` } : m)))
+
+            // If no narrative was received, show a placeholder
+            if (!fullNarrative) {
+                fullNarrative = 'Response completed with no content'
+                setMessages((prev) =>
+                    prev.map((m) => (m.id === assistantId ? { ...m, content: fullNarrative } : m))
+                )
+            }
+
+            trackEvent('assistant_plan_generated', { tenantId, linked_goal: !!selectedGoalId, contains_bullets: /\n-/.test(fullNarrative) })
+            setExecutionPhase(null)
+            setExecutionProgress({})
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                setMessages((prev) => prev.filter((m) => m.id !== assistantId))
+            } else {
+                const errorMsg = err.message || 'Failed to send message'
+                setMessages((prev) =>
+                    prev.map((m) => (m.id === assistantId ? { ...m, content: `⚠️ Error: ${errorMsg}` } : m))
+                )
+            }
+            setExecutionPhase(null)
+            setExecutionProgress({})
         } finally {
             setIsSending(false)
             abortControllerRef.current = null
@@ -623,7 +613,7 @@ Tip: Link a goal to save these as tasks and track progress.`
 
     return (
         <div style={{ background: '#f5f5f5', minHeight: '100vh', padding: '12px' }}>
-            {/* Simple Trip.com-style header - minimal and clean */}
+            {/* Simplified header */}
             <Group justify="space-between" align="center" mb="sm" px="md" py="xs" style={{
                 background: 'white',
                 borderRadius: '12px',
@@ -635,62 +625,42 @@ Tip: Link a goal to save these as tasks and track progress.`
                         <>
                             <Divider orientation="vertical" />
                             <Group gap={6}>
-                                <Text size="sm" c="dimmed">Goal:</Text>
+                                <Text size="sm" c="dimmed">Working on:</Text>
                                 <Text size="sm" fw={600} lineClamp={1} style={{ maxWidth: '200px' }}>{linkedGoal.title}</Text>
                             </Group>
                         </>
                     )}
                 </Group>
                 <Group gap="xs">
-                    <Select
-                        placeholder="Select goal"
-                        data={goalOptions}
-                        value={selectedGoalId}
-                        onChange={(v) => setSelectedGoalId(v)}
-                        searchable
-                        clearable
-                        size="xs"
-                        w={180}
-                        styles={{
-                            input: { height: '30px', fontSize: '12px' }
-                        }}
-                    />
+                    {!linkedGoal && (
+                        <Select
+                            placeholder="Pick a goal to start"
+                            data={goalOptions}
+                            value={selectedGoalId}
+                            onChange={(v) => setSelectedGoalId(v)}
+                            searchable
+                            clearable
+                            size="xs"
+                            w={200}
+                            styles={{
+                                input: { height: '30px', fontSize: '12px' }
+                            }}
+                        />
+                    )}
                     <Button
                         size="xs"
-                        variant="light"
-                        leftSection={<IconSparkles size={14} />}
+                        variant={linkedGoal ? "light" : "filled"}
                         onClick={() => navigate('/goals')}
                     >
-                        New Goal
+                        {linkedGoal ? 'Change goal' : '+ Create goal'}
                     </Button>
-                    {/* Health status dot */}
-                    <div title={
-                        healthStatus === 'ok'
-                            ? `Connected${lastHealthCheck ? ` • checked ${lastHealthCheck.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
-                            : healthStatus === 'down'
-                                ? `Offline${lastHealthCheck ? ` • checked ${lastHealthCheck.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
-                                : 'Checking...'
-                    } style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: 999, background: healthStatus === 'ok' ? '#12b886' : healthStatus === 'down' ? '#fa5252' : '#adb5bd' }} />
-                        <Text size="xs" c="dimmed">{healthStatus === 'ok' ? 'Connected' : healthStatus === 'down' ? 'Offline' : 'Checking'}</Text>
-                    </div>
                     <Button
                         size="xs"
                         variant="light"
                         color="violet"
-                        leftSection={<IconSparkles size={14} />}
                         onClick={() => setShowOptiGuide(true)}
                     >
-                        Scenarios
-                    </Button>
-                    <Button
-                        size="xs"
-                        variant={showRightPlane ? 'light' : 'filled'}
-                        color={showRightPlane ? 'gray' : 'dark'}
-                        onClick={() => setShowRightPlane((v) => !v)}
-                        title={showRightPlane ? 'Hide evidence pane' : 'Show evidence pane'}
-                    >
-                        {showRightPlane ? 'Focus mode' : 'Show evidence'}
+                        Run scenario
                     </Button>
                 </Group>
             </Group>
@@ -911,86 +881,13 @@ Tip: Link a goal to save these as tasks and track progress.`
                                     </Stack>
                                 )}
 
-                                {/* Scenario control (simple) */}
-                                <Stack gap={6}>
-                                    <Text size="xs" c="dimmed" fw={500} px={1}>Try a scenario:</Text>
-                                    <Group gap={6} wrap="wrap" align="center">
-                                        <Button.Group>
-                                            <Button
-                                                size="xs"
-                                                variant={scenarioMode === 'what-if' ? 'filled' : 'light'}
-                                                onClick={() => setScenarioMode('what-if')}
-                                            >
-                                                What‑If
-                                            </Button>
-                                            <Button
-                                                size="xs"
-                                                variant={scenarioMode === 'why' ? 'filled' : 'light'}
-                                                onClick={() => setScenarioMode('why')}
-                                            >
-                                                Why
-                                            </Button>
-                                        </Button.Group>
-                                        <Select
-                                            size="xs"
-                                            placeholder={scenarioMode === 'what-if' ? 'Select template' : 'Select question'}
-                                            value={scenarioTemplate}
-                                            onChange={setScenarioTemplate}
-                                            data={
-                                                scenarioMode === 'what-if'
-                                                    ? [
-                                                        { label: 'Cost shock (+20% ordering)', value: 'cost_shock' },
-                                                        { label: 'Holding costs doubled', value: 'holding_double' },
-                                                    ]
-                                                    : [
-                                                        { label: 'Why are costs high?', value: 'costs_high' },
-                                                    ]
-                                            }
-                                            w={220}
-                                        />
-                                        <Button
-                                            size="xs"
-                                            variant="light"
-                                            color="violet"
-                                            onClick={() => {
-                                                if (!scenarioTemplate) return
-                                                if (scenarioMode === 'what-if') {
-                                                    const q = scenarioTemplate === 'cost_shock'
-                                                        ? 'What if order costs increase by 20%?'
-                                                        : 'What if holding costs double?'
-                                                    setOptiGuideInitMode('what-if')
-                                                    setOptiGuideInitQuestion(q)
-                                                } else {
-                                                    setOptiGuideInitMode('why')
-                                                    setOptiGuideInitQuestion('Why are inventory costs high?')
-                                                }
-                                                setShowOptiGuide(true)
-                                            }}
-                                        >
-                                            Run
-                                        </Button>
-                                    </Group>
-                                </Stack>
-
-                                {/* Advanced options (collapsed by default) */}
-                                <Group gap={6}>
-                                    <Button size="xs" variant="subtle" color="gray" onClick={() => setShowAdvancedOptions((v) => !v)}>
-                                        {showAdvancedOptions ? 'Hide advanced options' : 'Show advanced options'}
-                                    </Button>
-                                </Group>
-                                {showAdvancedOptions && (
-                                    <AgentModeSwitcher
-                                        mode={agentMode}
-                                        onChange={setAgentMode}
-                                        availableDataSources={availableDataSources}
-                                        selectedDataSources={selectedDataSources}
-                                        onDataSourceChange={setSelectedDataSources}
-                                    />
-                                )}
-
                                 <Group gap={6} align="flex-end">
                                     <Textarea
-                                        placeholder="Ask anything about your business..."
+                                        placeholder={
+                                            linkedGoal
+                                                ? `Ask about ${linkedGoal.title.toLowerCase()}...`
+                                                : "Ask anything about your business..."
+                                        }
                                         minRows={1}
                                         maxRows={3}
                                         autosize
@@ -1050,10 +947,53 @@ Tip: Link a goal to save these as tasks and track progress.`
                         initialMode={optiGuideInitMode}
                         initialQuestion={optiGuideInitQuestion}
                         onSendToChat={(content) => {
+                            // Add the scenario result as an assistant message
                             addAssistantMessage(content)
                             setShowOptiGuide(false)
+
+                            // Optionally auto-populate a follow-up prompt
+                            // This helps users understand they can continue the conversation
+                            setTimeout(() => {
+                                setInput('Tell me more about this analysis')
+                            }, 100)
                         }}
                     />
+                </Drawer>
+
+                {/* Inline Goal Picker for Save as Task */}
+                <Drawer
+                    opened={showGoalPicker}
+                    onClose={() => setShowGoalPicker(false)}
+                    position="top"
+                    size="sm"
+                    title="Pick a goal to save tasks"
+                >
+                    <Stack gap="md">
+                        <Text size="sm" c="dimmed">Select which goal these tasks should be linked to:</Text>
+                        <Select
+                            placeholder="Select goal"
+                            data={goalOptions}
+                            value={selectedGoalId}
+                            onChange={(v) => setSelectedGoalId(v)}
+                            searchable
+                            clearable
+                            size="sm"
+                        />
+                        <Group justify="flex-end" gap="xs">
+                            <Button variant="default" size="xs" onClick={() => setShowGoalPicker(false)}>Cancel</Button>
+                            <Button
+                                size="xs"
+                                color="brand"
+                                disabled={!selectedGoalId}
+                                onClick={() => {
+                                    setShowGoalPicker(false)
+                                    setTaskModalOpen(true)
+                                }}
+                            >
+                                Continue
+                            </Button>
+                        </Group>
+                    </Stack>
                 </Drawer>
 
                 {/* Temporarily hide old insights - will be removed */}
@@ -1188,11 +1128,10 @@ Tip: Link a goal to save these as tasks and track progress.`
                     </ScrollArea>
                 )}
 
-                {/* CENTER PLANE: Trip.com-style Itinerary / Plan Builder */}
+                {/* CENTER PLANE: Single unified plan view */}
                 <Card withBorder={false} radius="md" p={0} shadow="xs" style={{ flex: 1, minWidth: 0, background: 'white', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    {/* Trip.com-style header with tabs */}
                     <div style={{ padding: '8px 12px', borderBottom: `1px solid ${theme.colors.gray[2]}` }}>
-                        <Group justify="space-between" mb={6}>
+                        <Group justify="space-between">
                             <Group gap={6}>
                                 {!showLeftPlane && (
                                     <ActionIcon variant="subtle" color="gray" onClick={() => setShowLeftPlane(true)} size="xs">
@@ -1200,7 +1139,7 @@ Tip: Link a goal to save these as tasks and track progress.`
                                     </ActionIcon>
                                 )}
                                 <IconFileText size={16} color={theme.colors.brand[6]} />
-                                <Text fw={700} size="xs">Action Plan</Text>
+                                <Text fw={700} size="xs">This week</Text>
                             </Group>
                             {linkedGoal && (
                                 <Badge size="xs" variant="light" color="teal" radius="sm">
@@ -1208,261 +1147,265 @@ Tip: Link a goal to save these as tasks and track progress.`
                                 </Badge>
                             )}
                         </Group>
-
-                        {/* Trip.com-style tabs */}
-                        <Tabs value={centerView} onChange={(v) => setCenterView((v as any) || 'overview')}>
-                            <Tabs.List style={{ border: 'none', gap: '2px' }}>
-                                <Tabs.Tab value="overview" leftSection={<IconChartBar size={12} />} style={{ padding: '6px 10px', fontSize: '11px' }}>
-                                    Overview
-                                </Tabs.Tab>
-                                <Tabs.Tab value="itinerary" leftSection={<IconTarget size={12} />} style={{ padding: '6px 10px', fontSize: '11px' }}>
-                                    Action Steps
-                                </Tabs.Tab>
-                                <Tabs.Tab value="tasks" leftSection={<IconTrendingUp size={12} />} style={{ padding: '6px 10px', fontSize: '11px' }}>
-                                    Active Tasks
-                                </Tabs.Tab>
-                            </Tabs.List>
-                        </Tabs>
                     </div>
 
                     <ScrollArea style={{ flex: 1 }} p={10}>
-                        {centerView === 'overview' ? (
-                            <Stack gap={8}>
-                                {!lastAssistant ? (
-                                    <Card withBorder radius="md" p="md" style={{ textAlign: 'center' }}>
-                                        <div style={{
-                                            width: '48px', height: '48px', borderRadius: '12px',
-                                            background: theme.colors.brand[0], display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'
-                                        }}>
-                                            <IconSparkles size={24} color={theme.colors.brand[6]} />
-                                        </div>
-                                        <Text fw={700} size="sm" mb={4}>Welcome</Text>
-                                        <Text size="xs" c="dimmed" mb="sm">Three quick ways to get started:</Text>
-                                        <Group gap={8} grow>
-                                            <Button size="xs" variant="light" onClick={() => navigate('/goals')}>Select or create a goal</Button>
-                                            <Button size="xs" variant="light" color="violet" onClick={() => { setOptiGuideInitMode('what-if'); setOptiGuideInitQuestion('What if order costs increase by 20%?'); setShowOptiGuide(true) }}>Try a scenario</Button>
-                                            <Button size="xs" variant="light" color="teal" onClick={addSamplePlan}>See sample plan</Button>
-                                        </Group>
-                                    </Card>
-                                ) : (
-                                    <>
-                                        <Card withBorder radius="sm" p={10} style={{ background: theme.colors.blue[0] }}>
-                                            <Group gap={8}>
-                                                <div style={{
-                                                    width: '36px',
-                                                    height: '36px',
-                                                    borderRadius: '8px',
-                                                    background: theme.colors.blue[6],
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    fontSize: '18px'
-                                                }}>
-                                                    💡
-                                                </div>
-                                                <div style={{ flex: 1 }}>
-                                                    <Text fw={600} size="xs" mb={2}>Latest Insight</Text>
-                                                    <Text size="xs" c="dimmed" lineClamp={2}>{lastAssistant.content.slice(0, 120)}...</Text>
-                                                </div>
-                                            </Group>
-                                        </Card>
-
-                                        {isActionPlan && (
-                                            <Card withBorder radius="md" p="sm">
-                                                <Group justify="space-between" mb="xs">
-                                                    <div>
-                                                        <Text fw={600} size="sm" mb={2}>Action Steps Ready</Text>
-                                                        <Text size="xs" c="dimmed">{planBullets.length} steps identified</Text>
-                                                    </div>
-                                                    <Button
-                                                        size="xs"
-                                                        variant="light"
-                                                        color="brand"
-                                                        leftSection={<IconSparkles size={14} />}
-                                                        onClick={createTasksFromLastAssistant}
-                                                    >
-                                                        Save all
-                                                    </Button>
-                                                </Group>
-                                                <Progress value={(planBullets.length / 5) * 100} size="sm" radius="xl" color="brand" />
-                                            </Card>
-                                        )}
-
-                                        <Stack gap="6px">
-                                            <Text size="xs" c="dimmed" fw={600} tt="uppercase" style={{ letterSpacing: '0.5px' }}>
-                                                Quick Actions
-                                            </Text>
-                                            <Group gap="xs">
-                                                <Button
-                                                    size="xs"
-                                                    variant="light"
-                                                    color="violet"
-                                                    radius="xl"
-                                                    onClick={() => setCenterView('itinerary')}
-                                                >
-                                                    View Action Steps
-                                                </Button>
-                                                <Button
-                                                    size="xs"
-                                                    variant="light"
-                                                    color="teal"
-                                                    radius="xl"
-                                                    onClick={() => setCenterView('tasks')}
-                                                >
-                                                    View Active Tasks
-                                                </Button>
-                                            </Group>
-                                        </Stack>
-                                    </>
-                                )}
-                            </Stack>
-                        ) : centerView === 'itinerary' ? (
-                            <Stack gap="sm">
-                                {!lastAssistant ? (
-                                    <div style={{ textAlign: 'center', padding: '50px 20px' }}>
-                                        <Text size="xl" mb="sm">📋</Text>
-                                        <Text size="sm" c="dimmed" mb="xs">No action plan yet</Text>
-                                        <Text size="xs" c="dimmed">Ask the AI assistant to create a plan for your goal</Text>
+                        <Stack gap={12}>
+                            {!lastAssistant ? (
+                                <Card withBorder radius="md" p="md" style={{ textAlign: 'center' }}>
+                                    <div style={{
+                                        width: '48px', height: '48px', borderRadius: '12px',
+                                        background: theme.colors.brand[0], display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'
+                                    }}>
+                                        <IconSparkles size={24} color={theme.colors.brand[6]} />
                                     </div>
-                                ) : !isActionPlan ? (
-                                    <div style={{ textAlign: 'center', padding: '50px 20px' }}>
-                                        <Text size="xl" mb="sm">💡</Text>
-                                        <Text size="sm" c="dimmed" mb="xs">Need a detailed plan?</Text>
-                                        <Text size="xs" c="dimmed">Try: "Create a step-by-step action plan"</Text>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <Group justify="space-between" align="center" mb="xs">
-                                            <div>
-                                                <Text fw={700} size="sm">{linkedGoal?.title || 'Proposed Action Plan'}</Text>
-                                                <Text size="xs" c="dimmed">{planBullets.length} steps identified</Text>
-                                            </div>
-                                            {isActionPlan && (
-                                                <Button
-                                                    size="xs"
-                                                    variant="light"
-                                                    color="brand"
-                                                    leftSection={<IconSparkles size={14} />}
-                                                    onClick={createTasksFromLastAssistant}
-                                                >
-                                                    Save all
-                                                </Button>
-                                            )}
-                                        </Group>
-                                        <Stack gap="xs">
-                                            {planBullets.map((b, idx) => (
-                                                <Card key={`plan-${idx}`} withBorder radius="md" p="sm" style={{ transition: 'all 0.2s' }}>
-                                                    <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
-                                                        <Group gap="sm" align="flex-start" style={{ flex: 1 }}>
-                                                            <div style={{
-                                                                width: '24px',
-                                                                height: '24px',
-                                                                borderRadius: '6px',
-                                                                background: theme.colors.brand[0],
-                                                                border: `2px solid ${theme.colors.brand[3]}`,
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center',
-                                                                flexShrink: 0
-                                                            }}>
-                                                                <Text size="xs" fw={700} c="brand">{idx + 1}</Text>
-                                                            </div>
-                                                            <div style={{ flex: 1 }}>
-                                                                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b}</Text>
-                                                            </div>
-                                                        </Group>
-                                                        <Button
-                                                            size="xs"
-                                                            variant="light"
-                                                            color="teal"
-                                                            onClick={() => openSaveAsTask(b)}
-                                                            style={{ flexShrink: 0, height: '24px', padding: '0 8px', fontSize: '11px' }}
-                                                        >
-                                                            + Task
-                                                        </Button>
+                                    <Text fw={700} size="sm" mb={4}>Welcome!</Text>
+                                    <Text size="xs" c="dimmed" mb="sm">Choose how to get started:</Text>
+                                    <Group gap={8} grow>
+                                        <Button size="xs" variant="light" onClick={() => navigate('/goals')}>Pick a goal</Button>
+                                        <Button size="xs" variant="light" color="violet" onClick={() => { setOptiGuideInitMode('what-if'); setOptiGuideInitQuestion('What if order costs increase by 20%?'); setShowOptiGuide(true) }}>Run scenario</Button>
+                                        <Button size="xs" variant="light" color="teal" onClick={addSamplePlan}>See example</Button>
+                                    </Group>
+                                </Card>
+                            ) : (
+                                <>
+                                    {/* Trip.com-style: Action steps section with collapse */}
+                                    {isActionPlan && planBullets.length > 0 && (
+                                        <Card withBorder radius="md" p={0} style={{ overflow: 'hidden' }}>
+                                            <div
+                                                onClick={() => setStepsExpanded(v => !v)}
+                                                style={{
+                                                    padding: '10px 12px',
+                                                    cursor: 'pointer',
+                                                    background: theme.colors.gray[0],
+                                                    borderBottom: stepsExpanded ? `1px solid ${theme.colors.gray[2]}` : 'none',
+                                                    transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.gray[1]}
+                                                onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.gray[0]}
+                                            >
+                                                <Group justify="space-between">
+                                                    <Group gap="xs">
+                                                        <div style={{
+                                                            width: '24px',
+                                                            height: '24px',
+                                                            borderRadius: '6px',
+                                                            background: theme.colors.brand[6],
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}>
+                                                            <IconTarget size={14} color="white" />
+                                                        </div>
+                                                        <div>
+                                                            <Text fw={600} size="sm" c="dark">Recommended Steps</Text>
+                                                            <Text size="xs" c="dimmed">{planBullets.length} action items</Text>
+                                                        </div>
                                                     </Group>
-                                                </Card>
-                                            ))}
-                                        </Stack>
-                                    </>
-                                )}
-                            </Stack>
-                        ) : (
-                            <Stack gap={8}>
-                                {selectedGoalId ? (
-                                    goalTasks.length === 0 ? (
-                                        <div style={{ textAlign: 'center', padding: '40px 16px' }}>
-                                            <Text size="lg" mb={8}>✅</Text>
-                                            <Text size="xs" c="dimmed" mb={4}>No tasks yet</Text>
-                                            <Text size="xs" c="dimmed">Create tasks from your action plan</Text>
-                                        </div>
-                                    ) : (
-                                        goalTasks.map((t: any) => {
-                                            const checked = t.status === 'completed'
-                                            return (
-                                                <Card key={t.id} withBorder radius="sm" p={10} style={{
-                                                    background: checked ? theme.colors.gray[0] : 'white',
-                                                    borderColor: checked ? theme.colors.gray[2] : theme.colors.teal[2],
-                                                    transition: 'all 0.2s'
-                                                }}>
-                                                    <Group justify="space-between" align="flex-start" wrap="nowrap" gap={6}>
-                                                        <Group gap="xs" align="flex-start" style={{ flex: 1 }}>
-                                                            <Checkbox
-                                                                checked={checked}
-                                                                size="sm"
-                                                                color="teal"
-                                                                onChange={async () => {
-                                                                    const next = checked ? 'in_progress' : 'completed'
-                                                                    await updateTaskMutation.mutateAsync({ taskId: t.id, data: { status: next } })
+                                                    <Group gap="xs">
+                                                        {stepsExpanded && (
+                                                            <Button
+                                                                size="xs"
+                                                                variant="light"
+                                                                color="brand"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    createTasksFromLastAssistant()
                                                                 }}
-                                                                style={{ marginTop: '1px' }}
-                                                            />
-                                                            <div style={{ flex: 1 }}>
-                                                                <Text
-                                                                    size="sm"
-                                                                    fw={checked ? 400 : 600}
-                                                                    c={checked ? 'dimmed' : 'dark'}
-                                                                    style={{ textDecoration: checked ? 'line-through' : 'none', lineHeight: 1.5 }}
-                                                                >
-                                                                    {t.title}
-                                                                </Text>
-                                                            </div>
-                                                        </Group>
-                                                        <Menu shadow="md" width={160} position="bottom-end">
-                                                            <Menu.Target>
-                                                                <ActionIcon size="sm" variant="subtle" color="gray">
-                                                                    <IconDotsVertical size={14} />
-                                                                </ActionIcon>
-                                                            </Menu.Target>
-                                                            <Menu.Dropdown>
-                                                                {(['low', 'medium', 'high', 'urgent'] as const).map(p => (
-                                                                    <Menu.Item
-                                                                        key={p}
-                                                                        onClick={async () => updateTaskMutation.mutateAsync({ taskId: t.id, data: { priority: p } })}
-                                                                    >
-                                                                        {p.charAt(0).toUpperCase() + p.slice(1)} Priority
-                                                                    </Menu.Item>
-                                                                ))}
-                                                            </Menu.Dropdown>
-                                                        </Menu>
+                                                            >
+                                                                Save all
+                                                            </Button>
+                                                        )}
+                                                        <ActionIcon
+                                                            size="sm"
+                                                            variant="subtle"
+                                                            color="gray"
+                                                            style={{
+                                                                transform: stepsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                                transition: 'transform 0.2s'
+                                                            }}
+                                                        >
+                                                            <IconChevronDown size={16} />
+                                                        </ActionIcon>
                                                     </Group>
-                                                </Card>
-                                            )
-                                        })
-                                    )
-                                ) : (
-                                    <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-                                        <Text size="xl" mb="md">🎯</Text>
-                                        <Text size="sm" c="dimmed" mb="xs">Link a goal first</Text>
-                                        <Text size="xs" c="dimmed">Select a goal from the header to see tasks</Text>
-                                    </div>
-                                )}
-                            </Stack>
-                        )}
-                    </ScrollArea>
-                </Card>
+                                                </Group>
+                                            </div>
+                                            <Collapse in={stepsExpanded}>
+                                                <Stack gap="xs" p="sm">
+                                                    {planBullets.slice(0, 3).map((b, idx) => (
+                                                        <Card key={`plan-${idx}`} withBorder radius="md" p="sm" style={{ transition: 'all 0.2s', background: 'white' }}>
+                                                            <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+                                                                <Group gap="sm" align="flex-start" style={{ flex: 1 }}>
+                                                                    <div style={{
+                                                                        width: '24px',
+                                                                        height: '24px',
+                                                                        borderRadius: '6px',
+                                                                        background: theme.colors.brand[0],
+                                                                        border: `2px solid ${theme.colors.brand[3]}`,
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        justifyContent: 'center',
+                                                                        flexShrink: 0
+                                                                    }}>
+                                                                        <Text size="xs" fw={700} c="brand">{idx + 1}</Text>
+                                                                    </div>
+                                                                    <div style={{ flex: 1 }}>
+                                                                        <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b}</Text>
+                                                                    </div>
+                                                                </Group>
+                                                                <Button
+                                                                    size="xs"
+                                                                    variant="light"
+                                                                    color="teal"
+                                                                    onClick={() => openSaveAsTask(b)}
+                                                                    style={{ flexShrink: 0, height: '24px', padding: '0 8px', fontSize: '11px' }}
+                                                                >
+                                                                    + Task
+                                                                </Button>
+                                                            </Group>
+                                                        </Card>
+                                                    ))}
+                                                </Stack>
+                                            </Collapse>
+                                        </Card>
+                                    )}
 
-                {/* RIGHT PLANE: Evidence, Reports & Data (Trip.com-style) */}
+                                    {/* Trip.com-style: Tasks section with collapse */}
+                                    {selectedGoalId && (
+                                        <Card withBorder radius="md" p={0} style={{ overflow: 'hidden' }}>
+                                            <div
+                                                onClick={() => setTasksExpanded(v => !v)}
+                                                style={{
+                                                    padding: '10px 12px',
+                                                    cursor: 'pointer',
+                                                    background: theme.colors.gray[0],
+                                                    borderBottom: tasksExpanded ? `1px solid ${theme.colors.gray[2]}` : 'none',
+                                                    transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.gray[1]}
+                                                onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.gray[0]}
+                                            >
+                                                <Group justify="space-between">
+                                                    <Group gap="xs">
+                                                        <div style={{
+                                                            width: '24px',
+                                                            height: '24px',
+                                                            borderRadius: '6px',
+                                                            background: theme.colors.teal[6],
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}>
+                                                            <IconCheck size={14} color="white" />
+                                                        </div>
+                                                        <div>
+                                                            <Text fw={600} size="sm" c="dark">Your Tasks</Text>
+                                                            <Text size="xs" c="dimmed">
+                                                                {goalTasks.length === 0
+                                                                    ? 'No tasks yet'
+                                                                    : `${goalTasks.filter((t: any) => t.status !== 'completed').length} active`
+                                                                }
+                                                            </Text>
+                                                        </div>
+                                                    </Group>
+                                                    <Group gap="xs">
+                                                        {tasksExpanded && goalTasks.length > 3 && (
+                                                            <Button
+                                                                size="xs"
+                                                                variant="subtle"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    navigate('/tasks')
+                                                                }}
+                                                            >
+                                                                View all
+                                                            </Button>
+                                                        )}
+                                                        <ActionIcon
+                                                            size="sm"
+                                                            variant="subtle"
+                                                            color="gray"
+                                                            style={{
+                                                                transform: tasksExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                                transition: 'transform 0.2s'
+                                                            }}
+                                                        >
+                                                            <IconChevronDown size={16} />
+                                                        </ActionIcon>
+                                                    </Group>
+                                                </Group>
+                                            </div>
+                                            <Collapse in={tasksExpanded}>
+                                                {goalTasks.length === 0 ? (
+                                                    <div style={{ textAlign: 'center', padding: '32px 16px', background: 'white' }}>
+                                                        <Text size="lg" mb={8}>✅</Text>
+                                                        <Text size="xs" c="dimmed" mb={4}>No tasks yet</Text>
+                                                        <Text size="xs" c="dimmed">Create tasks from the steps above</Text>
+                                                    </div>
+                                                ) : (
+                                                    <Stack gap={8} p="sm">
+                                                        {goalTasks.slice(0, 5).map((t: any) => {
+                                                            const checked = t.status === 'completed'
+                                                            return (
+                                                                <Card key={t.id} withBorder radius="sm" p={10} style={{
+                                                                    background: checked ? theme.colors.gray[0] : 'white',
+                                                                    borderColor: checked ? theme.colors.gray[2] : theme.colors.teal[2],
+                                                                    transition: 'all 0.2s'
+                                                                }}>
+                                                                    <Group justify="space-between" align="flex-start" wrap="nowrap" gap={6}>
+                                                                        <Group gap="xs" align="flex-start" style={{ flex: 1 }}>
+                                                                            <Checkbox
+                                                                                checked={checked}
+                                                                                size="sm"
+                                                                                color="teal"
+                                                                                onChange={async () => {
+                                                                                    const next = checked ? 'in_progress' : 'completed'
+                                                                                    await updateTaskMutation.mutateAsync({ taskId: t.id, data: { status: next } })
+                                                                                }}
+                                                                                style={{ marginTop: '1px' }}
+                                                                            />
+                                                                            <div style={{ flex: 1 }}>
+                                                                                <Text
+                                                                                    size="sm"
+                                                                                    fw={checked ? 400 : 600}
+                                                                                    c={checked ? 'dimmed' : 'dark'}
+                                                                                    style={{ textDecoration: checked ? 'line-through' : 'none', lineHeight: 1.5 }}
+                                                                                >
+                                                                                    {t.title}
+                                                                                </Text>
+                                                                            </div>
+                                                                        </Group>
+                                                                        <Menu shadow="md" width={160} position="bottom-end">
+                                                                            <Menu.Target>
+                                                                                <ActionIcon size="sm" variant="subtle" color="gray">
+                                                                                    <IconDotsVertical size={14} />
+                                                                                </ActionIcon>
+                                                                            </Menu.Target>
+                                                                            <Menu.Dropdown>
+                                                                                {(['low', 'medium', 'high', 'urgent'] as const).map(p => (
+                                                                                    <Menu.Item
+                                                                                        key={p}
+                                                                                        onClick={async () => updateTaskMutation.mutateAsync({ taskId: t.id, data: { priority: p } })}
+                                                                                    >
+                                                                                        {p.charAt(0).toUpperCase() + p.slice(1)} Priority
+                                                                                    </Menu.Item>
+                                                                                ))}
+                                                                            </Menu.Dropdown>
+                                                                        </Menu>
+                                                                    </Group>
+                                                                </Card>
+                                                            )
+                                                        })}
+                                                    </Stack>
+                                                )}
+                                            </Collapse>
+                                        </Card>
+                                    )}
+                                </>
+                            )}
+                        </Stack>
+                    </ScrollArea>
+                </Card>                {/* RIGHT PLANE: Evidence, Reports & Data (Trip.com-style) */}
                 {showRightPlane && (
                     <Card withBorder={false} radius="md" p={0} shadow="xs" style={{ width: '360px', flexShrink: 0, background: 'white', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         <div style={{ padding: '8px 12px', borderBottom: `1px solid ${theme.colors.gray[2]}` }}>

@@ -252,16 +252,26 @@ export function useWebSocket(
             ws.onmessage = handleMessage;
 
             ws.onerror = (event) => {
-                console.error('[WebSocket] Error:', event);
-                setError('WebSocket connection error');
+                // Silently handle WebSocket errors when backend endpoint doesn't exist
+                // This prevents console spam when WebSocket is not implemented on backend
+                console.warn('[WebSocket] Connection error - backend may not support WebSocket');
+                setError(null); // Don't set error state for missing endpoints
                 handlersRef.current.onError?.(event);
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
                 console.log('[WebSocket] Connection closed');
                 setIsConnected(false);
                 wsRef.current = null;
                 handlersRef.current.onDisconnect?.();
+
+                // Don't attempt reconnect if close was due to 404 (endpoint not found)
+                // HTTP 404 typically results in close code 1006
+                if (event.code === 1006 && reconnectCountRef.current === 0) {
+                    console.warn('[WebSocket] Backend endpoint not found - WebSocket disabled');
+                    reconnectCountRef.current = reconnectAttempts; // Prevent further reconnection attempts
+                    return;
+                }
 
                 // Attempt reconnect if not at max attempts
                 if (reconnectCountRef.current < reconnectAttempts) {
@@ -274,12 +284,13 @@ export function useWebSocket(
                         connect();
                     }, reconnectDelay);
                 } else {
-                    setError(`Failed to connect after ${reconnectAttempts} attempts`);
+                    console.warn('[WebSocket] Max reconnection attempts reached');
+                    setError(null); // Clear error to avoid UI issues
                 }
             };
         } catch (err) {
-            console.error('[WebSocket] Failed to create connection:', err);
-            setError(err instanceof Error ? err.message : 'Failed to connect');
+            console.warn('[WebSocket] Failed to create connection:', err);
+            setError(null); // Don't propagate errors when WebSocket isn't available
         }
     }, [enabled, tenantId, token, baseUrl, reconnectAttempts, reconnectDelay, handleMessage]);
 
