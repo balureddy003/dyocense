@@ -612,10 +612,16 @@ def create_app() -> FastAPI:
 		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
 			try:
 				source_id = str(uuid.uuid4())
+				# Build datasets from data_types and initialize counts
+				datasets = [dt.lower().replace(" ", "_") for dt in data_types]
+				last_record_count = {ds: 0 for ds in datasets}
 				extra = {
 					"category": category,
 					"icon": icon,
 					"data_types": data_types,
+					"datasets": datasets,
+					"last_record_count": last_record_count,
+					"total_records": 0,
 					"mcp_enabled": enable_mcp,
 				}
 				with backend.get_connection() as conn:  # type: ignore
@@ -645,6 +651,7 @@ def create_app() -> FastAPI:
 					"category": category,
 					"icon": icon,
 					"data_types": data_types,
+					"datasets": datasets,
 					"status": "inactive",
 					"sync_frequency": sync_frequency,
 					"last_sync": None,
@@ -685,19 +692,19 @@ def create_app() -> FastAPI:
 					connector_repo.update_metadata_flag(connector_id, mcp_enabled=bool(payload.get("enable_mcp")))  # type: ignore
 				except Exception:
 					pass
-			# Update simple fields via direct SQL
+			# Update simple fields via direct SQL against data_sources
 			try:
 				backend = get_backend()
 				with backend.get_connection() as conn:  # type: ignore
 					with conn.cursor() as cur:
 						cur.execute(
 							"""
-							UPDATE connectors.connectors
-							   SET display_name = COALESCE(%s, display_name),
+							UPDATE data_sources
+							   SET name = COALESCE(%s, name),
 							       sync_frequency = COALESCE(%s, sync_frequency),
 							       status = COALESCE(%s, status),
 							       updated_at = NOW()
-							 WHERE connector_id = %s AND tenant_id = %s
+							 WHERE source_id = %s AND tenant_id = %s
 							""",
 							[
 								payload.get("display_name"),
@@ -952,6 +959,59 @@ def create_app() -> FastAPI:
 		items = connectors_store.get(tenant_id, [])
 		return {"connectors": items, "total": len(items)}
 
+	@app.get("/v1/tenants/{tenant_id}/connectors/readiness")
+	def connector_readiness(tenant_id: str) -> Dict[str, Any]:
+		"""Return connector data readiness for dashboards and narratives."""
+		# Try DB first
+		backend = get_backend()
+		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
+			try:
+				with backend.get_connection() as conn:  # type: ignore
+					with conn.cursor() as cur:
+						cur.execute(
+							"""
+							SELECT source_id, name, last_sync, extra_data
+							  FROM data_sources
+							 WHERE tenant_id = %s
+							""",
+							[tenant_id],
+						)
+						rows = cur.fetchall()
+						connectors: List[Dict[str, Any]] = []
+						for r in rows:
+							(src_id, name, last_sync, extra) = r
+							meta = extra or {}
+							if isinstance(meta, str):
+								try:
+									meta = json.loads(meta)
+								except Exception:
+									meta = {}
+							connectors.append({
+								"connector_id": str(src_id),
+								"display_name": name,
+								"datasets": meta.get("datasets", []),
+								"last_refreshed": last_sync.isoformat() if last_sync else None,
+								"counts": meta.get("last_record_count", {}),
+								"total_records": meta.get("total_records", 0),
+							})
+					return {"connectors": connectors, "total": len(connectors)}
+			except Exception:
+				pass
+		# Fallback to in-memory
+		items = connectors_store.get(tenant_id, [])
+		connectors = []
+		for it in items:
+			meta = it.get("metadata", {})
+			connectors.append({
+				"connector_id": it.get("connector_id"),
+				"display_name": it.get("display_name"),
+				"datasets": meta.get("datasets", []),
+				"last_refreshed": it.get("last_sync"),
+				"counts": meta.get("last_record_count", {}),
+				"total_records": meta.get("total_records", 0),
+			})
+		return {"connectors": connectors, "total": len(connectors)}
+
 	# Upload endpoint used by CSV quickstart
 	@app.post("/api/connectors/upload_csv")
 	async def upload_csv(
@@ -959,53 +1019,114 @@ def create_app() -> FastAPI:
 		connector_id: str = Form(...),
 		tenant_id: str = Form(...),
 	) -> Dict[str, Any]:
-		# For demo: read file to count bytes and fake record count
-		_size = 0
+		import csv
+		import io
+		
+		# Read file content
+		content_bytes = b""
+		record_count = 0
+		headers: list[str] = []
+		sample_rows: list[dict[str, Any]] = []
+		
 		try:
-			content = await file.read()
-			_size = len(content or b"")
-		except Exception:
-			pass
-		fake_count = max(1, _size // 200)  # rough proxy
+			content_bytes = await file.read()
+			content_str = content_bytes.decode("utf-8")
+			reader = csv.DictReader(io.StringIO(content_str))
+			headers = list(reader.fieldnames or [])
+			
+			# Count rows and collect samples
+			for i, row in enumerate(reader):
+				record_count += 1
+				if i < 3:  # Keep first 3 rows as samples
+					sample_rows.append(dict(row))
+		except Exception as e:
+			# Fallback to simple byte-based estimate if CSV parsing fails
+			record_count = max(1, len(content_bytes) // 200)
+		
+		file_size = len(content_bytes)
+		datasets = [h.lower().replace(" ", "_") for h in headers] if headers else ["data"]
+		
 		# Update via repository when available
 		if connector_repo is not None:
 			try:
-				connector_repo.update_sync_info(connector_id, total_records=fake_count, duration=0.0)  # type: ignore
-				return {"success": True, "bytes": _size, "records": fake_count}
+				connector_repo.update_sync_info(connector_id, total_records=record_count, duration=0.0)  # type: ignore
 			except Exception:
 				pass
-		# Direct SQL: update data_sources.extra_data and last_sync
+		
+		# Direct SQL: update data_sources.extra_data and insert raw ingestion record
 		backend = get_backend()
 		if PostgresBackend is not None and backend is not None and isinstance(backend, PostgresBackend):  # type: ignore
 			try:
 				with backend.get_connection() as conn:  # type: ignore
 					with conn.cursor() as cur:
-						# increment total_records and set last_sync
+						# Update extra_data with datasets, counts, and timestamp
 						cur.execute(
 							"""
 							UPDATE data_sources
 							   SET last_sync = NOW(),
+							       status = 'active',
 							       extra_data = jsonb_set(
-							           COALESCE(extra_data, '{}'::jsonb),
-							           '{total_records}',
-							           to_jsonb(COALESCE((extra_data->>'total_records')::int, 0) + %s),
+							           jsonb_set(
+							               jsonb_set(
+							                   COALESCE(extra_data, '{}'::jsonb),
+							                   '{datasets}',
+							                   %s::jsonb,
+							                   true
+							               ),
+							               '{total_records}',
+							               to_jsonb(COALESCE((extra_data->>'total_records')::int, 0) + %s),
+							               true
+							           ),
+							           '{last_record_count}',
+							           %s::jsonb,
 							           true
 							       )
 							 WHERE source_id = %s AND tenant_id = %s
 							""",
-							[fake_count, connector_id, tenant_id],
+							[
+								json.dumps(datasets),
+								record_count,
+								json.dumps({ds: record_count for ds in datasets}),
+								connector_id,
+								tenant_id,
+							],
+						)
+						
+						# Insert raw ingestion record
+						raw_id = str(uuid.uuid4())
+						event_payload = {
+							"filename": file.filename or "upload.csv",
+							"bytes": file_size,
+							"record_count": record_count,
+							"headers": headers,
+							"sample_rows": sample_rows,
+						}
+						cur.execute(
+							"""
+							INSERT INTO raw_connector_data (raw_id, tenant_id, source_id, source_type, source_record_id, data, ingested_at, processed)
+							VALUES (%s, %s, %s, 'csv_upload', %s, %s, NOW(), false)
+							""",
+							[
+								raw_id,
+								tenant_id,
+								connector_id,
+								f"upload_{py_dt.datetime.now(py_dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+								json.dumps(event_payload),
+							],
 						)
 					conn.commit()
-				return {"success": True, "bytes": _size, "records": fake_count}
-			except Exception:
-				pass
+				return {"success": True, "bytes": file_size, "records": record_count, "datasets": datasets}
+			except Exception as e:
+				return {"success": False, "error": str(e)}
+		
 		# Fallback: update in-memory if present
 		for it in connectors_store.get(tenant_id, []):
 			if it.get("connector_id") == connector_id:
 				it["last_sync"] = datetime.now(timezone.utc).isoformat()
-				it.setdefault("metadata", {})["total_records"] = (it.get("metadata", {}).get("total_records") or 0) + fake_count
+				it.setdefault("metadata", {})["total_records"] = (it.get("metadata", {}).get("total_records") or 0) + record_count
 				break
-		return {"success": True, "bytes": _size, "records": fake_count}
+		return {"success": True, "bytes": file_size, "records": record_count, "datasets": datasets}
+
 
 	# --- Analytics events sink (no-op) ---
 	@app.get("/v1/marketplace/connectors")
